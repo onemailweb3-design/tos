@@ -26,13 +26,14 @@
 // What this is NOT: a signature verifier, a post-quantum implementation, or
 // evidence that any of TIP-0002 is implemented. `ed_valid`/`pq_valid` in the
 // corpus are supplied outcomes, not signatures. None of the phases beyond the
-// classical one exists in this codebase; see doc/tip-0002-p0-readiness.md.
+// classical one is enabled in production; see doc/tip-0002-p0-readiness.md.
 //
 // The quorum, weight-cap and zero-weight decisions below are delegated to
 // tos/quorum.h rather than restated, so that changing the real predicate
 // changes this test's verdicts. The Python model in test/validator-auth-policy
 // evaluates the same corpus independently; the two must agree.
 
+#include <iostream>
 #include <map>
 #include <set>
 #include <string>
@@ -262,10 +263,13 @@ TEST(ValidatorAuthPolicy, ArithmeticComesFromTheProductionQuorumHelpers) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 2) {
-    LOG(FATAL) << "usage: " << argv[0] << " <policy-cases.json>";
+  if (argc != 2) {
+    std::cerr << "usage: " << argv[0] << " <policy-cases.json>\n";
+    return 2;
   }
   corpus_path = argv[1];
   td::TestsRunner::get_default().run_all();
+  std::cout << "PASS: " << load_cases(corpus_path).size()
+            << " policy-model cases using production quorum helpers (no cryptographic verification)\n";
   return 0;
 }

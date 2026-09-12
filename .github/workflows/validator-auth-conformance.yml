@@ -4,45 +4,135 @@ on:
   pull_request:
     paths:
       - '.github/workflows/validator-auth-conformance.yml'
+      - 'test/validator-auth/**'
       - 'test/validator-auth-policy/**'
       - 'test/test-validator-auth-policy.cpp'
-      - 'validator/consensus/**'
-      - 'crypto/block/signature-set*'
+      - 'test/test-quorum.cpp'
+      - 'validator/**'
+      - 'crypto/**'
       - 'keys/**'
+      - 'keyring/**'
       - 'tos/quorum.h'
+      - 'tl/**'
+      - 'tdutils/**'
+      - 'tdactor/**'
+      - 'third-party/mldsa-native/**'
+      - 'CMakeLists.txt'
+      - 'test/CMakeLists.txt'
+      - 'CMake/**'
   workflow_dispatch:
 
 permissions:
   contents: read
-
 concurrency:
-  group: validator-signature-conformance-${{ github.event.pull_request.number || github.ref }}
+  group: validator-auth-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  source-evidence:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            flavor: x86_64-release
+            sanitize: 'OFF'
+          - runner: ubuntu-24.04-arm
+            flavor: aarch64-release
+            sanitize: 'OFF'
+          - runner: ubuntu-24.04
+            flavor: x86_64-sanitized
+            sanitize: 'ON'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Capture source provenance for reproducible offline verification
-        env:
-          BASE: 758aa29ff21fbdd8d6f15fb9f4e47da60e2c449d
+      - name: Install focused native test dependencies
         run: |
-          set -euo pipefail
-          mkdir -p evidence
-          git rev-parse HEAD > evidence/head.txt
-          git fetch --depth=1 origin "$BASE"
-          git archive --format=tar.gz "$BASE" > evidence/main-source.tar.gz
-          git archive --format=tar.gz HEAD CMakeLists.txt .github/workflows/source-hygiene.yml doc/tip-0002-p0-readiness.md test/test-validator-auth-policy.cpp test/validator-auth-policy > evidence/policy-source.tar.gz
-          printf '%s\n' "$BASE" > evidence/base.txt
-          sha256sum evidence/* > evidence/SHA256SUMS
+          sudo apt-get update
+          sudo apt-get install -y clang lld cmake ninja-build pkg-config libssl-dev libsodium-dev liblz4-dev zlib1g-dev gperf
+      - name: Configure isolated verification targets, not a network node
+        run: |
+          cmake -S . -B build-auth -G Ninja -DCMAKE_BUILD_TYPE=Release -DTOS_ARCH= \
+            -DTOS_BUILD_VALIDATOR_AUTH_TESTS=ON -DUSE_QUIC=OFF \
+            -DTOS_USE_ROCKSDB=OFF -DTOS_USE_ABSEIL=OFF -DTOS_USE_LLD=ON \
+            -DCMAKE_SKIP_INSTALL_RULES=ON \
+            -DTOS_USE_ASAN=${{ matrix.sanitize }} -DTOS_USE_UBSAN=${{ matrix.sanitize }} \
+            -DOPENSSL_CRYPTO_LIBRARY="$(pkg-config --variable=libdir openssl)/libcrypto.so" \
+            -DOPENSSL_SSL_LIBRARY="$(pkg-config --variable=libdir openssl)/libssl.so" \
+            -DOPENSSL_INCLUDE_DIR="$(pkg-config --variable=includedir openssl)"
+          cmake --build build-auth --target test-validator-auth-production \
+            test-validator-auth-experimental test-validator-auth-policy test-quorum -j2
+      - name: Execute actual verifiers, candidate providers and the separate policy model
+        run: |
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/commit.txt
+          python3 test/validator-auth/check_isolation.py --out artifacts/isolation.json
+          python3 test/validator-auth-policy/check_policy.py test/validator-auth-policy/policy-cases.json > artifacts/policy-python.txt
+          build-auth/test-validator-auth-policy test/validator-auth-policy/policy-cases.json > artifacts/policy-cpp.txt
+          build-auth/test/validator-auth/test-validator-auth-production > artifacts/production.tsv
+          build-auth/test/validator-auth/test-validator-auth-experimental > artifacts/experimental.tsv
+          python3 test/validator-auth/check_transcripts.py artifacts/production.tsv \
+            artifacts/experimental.tsv --out artifacts/independent.json
+          ctest --test-dir build-auth --output-on-failure \
+            -R '^(validator-auth-(production|experimental)|test-validator-auth-policy|test-quorum(-static-grep)?)$'
+          if build-auth/test/validator-auth/test-validator-auth-production --unknown; then exit 1; fi
+          if build-auth/test/validator-auth/test-validator-auth-experimental --unknown; then exit 1; fi
+      - name: Record existing entrypoint timings, not validator throughput
+        if: matrix.sanitize == 'OFF'
+        run: build-auth/test/validator-auth/test-validator-auth-production --benchmark > artifacts/benchmark.tsv
+      - name: Kill compiling production and candidate guard mutations
+        if: matrix.flavor == 'x86_64-release'
+        run: |
+          python3 test/validator-auth/mutations.py --build build-auth --out artifacts/mutations.json
+          git diff --exit-code
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          name: validator-auth-source-evidence
-          path: evidence/
-          retention-days: 3
+          name: validator-auth-${{ matrix.flavor }}
+          path: artifacts/
+          retention-days: 14
           if-no-files-found: error
+  conformance:
+    needs: native
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every architecture and the sanitizer build
+        env:
+          RESULT: ${{ needs.native.result }}
+        run: test "$RESULT" = success
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: validator-auth-*
+          path: results
+      - name: Compare final-head deterministic evidence and require every mutation
+        run: |
+          X=results/validator-auth-x86_64-release
+          for other in results/validator-auth-aarch64-release results/validator-auth-x86_64-sanitized; do
+            for name in commit.txt production.tsv experimental.tsv independent.json isolation.json policy-python.txt policy-cpp.txt; do
+              cmp "$X/$name" "$other/$name"
+            done
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('results/validator-auth-x86_64-release')
+          report=json.loads((root/'mutations.json').read_text())
+          expected={'live-peer-verification','live-duplicate-signer','live-quorum-boundary','legacy-proof-preimage',
+                    'candidate-required-crypto','candidate-network-binding','candidate-roster-binding','candidate-aggregate-budget'}
+          assert len(report)==len(expected)
+          assert {row['guard'] for row in report if row['killed'] and row['compile_succeeded']}==expected
+          assert json.loads((root/'independent.json').read_text())['success'] is True
+          assert json.loads((root/'isolation.json').read_text())['success'] is True
+          PY

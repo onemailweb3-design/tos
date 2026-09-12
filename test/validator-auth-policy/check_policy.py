@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: CC0-1.0
 """Independent model of the TIP-0002 validator authentication phases.
 
-Vendored from tosnetwork/TIP assets/tip-0002/check-policy.py at the revision
-recorded in policy-cases.json. test/test-validator-auth-policy.cpp evaluates
-the same corpus through the production helpers in tos/quorum.h; the two
-implementations must agree, which is what makes either of them evidence.
+The C++ evaluator uses the same corpus and the production quorum helpers;
+agreement is model-level conformance only, not evidence of signature validity.
 
 `ed_valid` and `pq_valid` are supplied verification outcomes, not signatures.
 This has no cryptographic implementation, does not run TOS consensus, and is
-not evidence that any phase beyond the classical one exists in this codebase.
+not evidence that any phase beyond the classical one is enabled in production.
 See doc/tip-0002-p0-readiness.md for what is and is not implemented.
 """
 from __future__ import annotations
