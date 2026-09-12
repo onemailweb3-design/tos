@@ -203,7 +203,11 @@ void hybrid(Fixture& f) {
   for (unsigned component=0;component<2;++component) {
     auto cert=f.certificate(registry,policy,f.context);cert.signatures[0][component][0]^=1;
     check_result(registry,policy,f.context,cert,a::Error::signature,"hybrid-component-"+std::to_string(component)+"-required");
-    cert=f.certificate(registry,policy,f.context);cert.records[0].components=std::span(cert.components[0]).first(1);
+    cert=f.certificate(registry,policy,f.context);
+    // Drop the component this iteration names: keep the other one, so the two
+    // cases differ. Both previously kept the first and dropped the second.
+    cert.records[0].components=component==0?std::span(cert.components[0]).last(1)
+                                           :std::span(cert.components[0]).first(1);
     check_result(registry,policy,f.context,cert,a::Error::components,"hybrid-omitted-component-"+std::to_string(component),true);
   }
   auto independent=f.certificate(registry,policy,f.context,{0,1,2});

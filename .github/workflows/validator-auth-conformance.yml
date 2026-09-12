@@ -12,7 +12,10 @@ on:
       - 'crypto/**'
       - 'keys/**'
       - 'keyring/**'
-      - 'tos/quorum.h'
+      # quorum.h includes tos/tos-types.h, which defines ValidatorWeight and
+      # has been changed before ("was td::uint32 before"). Naming only quorum.h
+      # meant a change to the type its arithmetic runs on ran none of this.
+      - 'tos/**'
       - 'tl/**'
       - 'tdutils/**'
       - 'tdactor/**'
@@ -85,6 +88,7 @@ jobs:
         run: |
           mkdir -p artifacts
           git rev-parse HEAD > artifacts/commit.txt
+          python3 test/validator-auth/test_isolation_guard.py
           python3 test/validator-auth/check_isolation.py --out artifacts/isolation.json
           python3 test/validator-auth-policy/check_policy.py test/validator-auth-policy/policy-cases.json > artifacts/policy-python.txt
           build-auth/test-validator-auth-policy test/validator-auth-policy/policy-cases.json > artifacts/policy-cpp.txt

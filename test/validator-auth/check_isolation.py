@@ -32,13 +32,21 @@ PRODUCTION = [
 
 def check(root):
     violations = []
+    experimental = (root/'validator/auth/experimental.h').resolve()
     for directory in ('validator','crypto','keys','keyring','adnl','overlay','validator-engine'):
         for path in (root/directory).rglob('*'):
             if not path.is_file() or path.suffix not in ('.cpp','.c','.h','.hpp'):
                 continue
             text = path.read_text(errors='strict')
-            if re.search(r'#\s*include\s*[<"][^>"\n]*auth/experimental\.h[>"]', text):
-                violations.append(str(path.relative_to(root)))
+            # Match on where an include resolves, not on how it is spelled.
+            # This tree writes the repository-relative form, but a production
+            # .cpp added beside the header would use the ordinary same-directory
+            # form, #include "experimental.h", and a pattern searching the text
+            # for auth/experimental.h would let it through. Both roots are tried
+            # because both are legitimate and either one reaches the header.
+            for spelled in re.findall(r'#\s*include\s*[<"]([^>"\n]+)[>"]', text):
+                if any((base/spelled).resolve() == experimental for base in (path.parent, root)):
+                    violations.append(str(path.relative_to(root)))
             if 'tos_validator_auth_test_' in text:
                 violations.append(str(path.relative_to(root))+': test signer')
     cmake = (root/'test/CMakeLists.txt').read_text()
