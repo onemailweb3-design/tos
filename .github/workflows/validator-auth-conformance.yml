@@ -49,9 +49,6 @@ jobs:
             sanitize: 'ON'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    env:
-      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -62,6 +59,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang lld cmake ninja-build pkg-config libssl-dev libsodium-dev liblz4-dev zlib1g-dev gperf
       - name: Configure isolated verification targets, not a network node
+        # The build runs tlbc, a build-time generator that emits block-auto.cpp
+        # and then exits. It leaks, harmlessly, and LeakSanitizer would abort it
+        # before any test is built. Leak detection belongs on the code under
+        # test, not on a code generator. This is invisible on a developer
+        # machine, where block-auto.cpp already exists from an earlier ordinary
+        # build and is gitignored, so the generation step never runs at all.
+        env:
+          ASAN_OPTIONS: detect_leaks=0
         run: |
           cmake -S . -B build-auth -G Ninja -DCMAKE_BUILD_TYPE=Release -DTOS_ARCH= \
             -DTOS_BUILD_VALIDATOR_AUTH_TESTS=ON -DUSE_QUIC=OFF \
@@ -74,6 +79,9 @@ jobs:
           cmake --build build-auth --target test-validator-auth-production \
             test-validator-auth-experimental test-validator-auth-policy test-quorum -j2
       - name: Execute actual verifiers, candidate providers and the separate policy model
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           mkdir -p artifacts
           git rev-parse HEAD > artifacts/commit.txt
