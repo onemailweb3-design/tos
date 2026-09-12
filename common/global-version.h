@@ -19,6 +19,10 @@
 namespace tos {
 
 // See https://github.com/tosnetwork/doc/blob/main/tos-blockchain/GlobalVersions.md
-constexpr int SUPPORTED_VERSION = 15;
+// The ceiling this binary is capable of executing, not a switch that enables
+// anything. What a network runs comes from ConfigParam 8; a configured version
+// above this one is logged and then executed anyway, so raising this does not
+// activate v16 and leaving it low would not have prevented it.
+constexpr int SUPPORTED_VERSION = 16;
 
 }  // namespace tos
