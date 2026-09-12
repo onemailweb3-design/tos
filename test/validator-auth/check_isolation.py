@@ -30,22 +30,35 @@ PRODUCTION = [
 ]
 
 
+# Scanned trees whose own directory goes on the include path, so a file inside
+# one of them can name a header relative to that directory rather than the root.
+SCANNED = ('validator', 'crypto', 'keys', 'keyring', 'adnl', 'overlay', 'validator-engine')
+
+
+def roots(root, path):
+    """Every base an include in `path` could be resolved against."""
+    return (path.parent, root) + tuple(root/name for name in SCANNED)
+
+
 def check(root):
     violations = []
     experimental = (root/'validator/auth/experimental.h').resolve()
-    for directory in ('validator','crypto','keys','keyring','adnl','overlay','validator-engine'):
+    for directory in SCANNED:
         for path in (root/directory).rglob('*'):
             if not path.is_file() or path.suffix not in ('.cpp','.c','.h','.hpp'):
                 continue
             text = path.read_text(errors='strict')
-            # Match on where an include resolves, not on how it is spelled.
-            # This tree writes the repository-relative form, but a production
-            # .cpp added beside the header would use the ordinary same-directory
-            # form, #include "experimental.h", and a pattern searching the text
-            # for auth/experimental.h would let it through. Both roots are tried
-            # because both are legitimate and either one reaches the header.
+            # Match on where an include resolves, not on how it is spelled, and
+            # resolve it the way the compiler would. Three kinds of root reach
+            # this header: the including file's own directory (#include
+            # "experimental.h" from a sibling), the repository root (the
+            # qualified form this tree writes), and each library directory that
+            # puts itself on the include path -- validator/CMakeLists.txt adds
+            # validator/ as a PUBLIC include directory, so #include
+            # "auth/experimental.h" from validator/consensus/ compiles. Missing
+            # any of the three leaves a spelling that builds and passes.
             for spelled in re.findall(r'#\s*include\s*[<"]([^>"\n]+)[>"]', text):
-                if any((base/spelled).resolve() == experimental for base in (path.parent, root)):
+                if any((base/spelled).resolve() == experimental for base in roots(root, path)):
                     violations.append(str(path.relative_to(root)))
             if 'tos_validator_auth_test_' in text:
                 violations.append(str(path.relative_to(root))+': test signer')

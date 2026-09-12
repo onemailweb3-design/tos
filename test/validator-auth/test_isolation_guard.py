@@ -70,16 +70,24 @@ def main() -> int:
 
     expect_clean('clean-tree-accepted')
 
-    # Every spelling that reaches the header from a production file. The
-    # same-directory form is the one the original pattern missed.
-    for label, spelled in (('qualified', 'validator/auth/experimental.h'),
-                           ('same-directory', 'experimental.h'),
-                           ('dot-relative', './experimental.h'),
-                           ('parent-relative', '../auth/experimental.h'),
-                           ('angled', '<validator/auth/experimental.h>')):
+    # Every spelling that reaches the header from a production file, and from
+    # more than one directory. Fixtures that all sit beside the header cannot
+    # see a root being missed: the same-directory form is what the original
+    # pattern let through, and the library-relative form from a subdirectory is
+    # what the first attempt at fixing it let through, because
+    # validator/CMakeLists.txt puts validator/ on the include path.
+    for label, where, spelled in (
+            ('qualified', 'validator/auth', 'validator/auth/experimental.h'),
+            ('same-directory', 'validator/auth', 'experimental.h'),
+            ('dot-relative', 'validator/auth', './experimental.h'),
+            ('parent-relative', 'validator/consensus', '../auth/experimental.h'),
+            ('library-relative', 'validator/consensus', 'auth/experimental.h'),
+            ('library-relative-angled', 'validator/consensus', '<auth/experimental.h>'),
+            ('qualified-from-subdirectory', 'validator/consensus', 'validator/auth/experimental.h'),
+            ('angled', 'validator/auth', '<validator/auth/experimental.h>')):
         include = spelled if spelled.startswith('<') else f'"{spelled}"'
         expect_refused(f'include-{label}-refused',
-                       {'validator/auth/probe.cpp': f'#include {include}\n'})
+                       {f'{where}/probe.cpp': f'#include {include}\n'})
 
     # A header of the same name elsewhere is a different file and must not trip
     # the guard, or the guard becomes a name filter rather than a path check.
@@ -95,7 +103,7 @@ def main() -> int:
 
     for failure in failures:
         print(f'FAIL\t{failure}')
-    print(f'SUMMARY\t{9 - len(failures)}\tisolation guard self-checks')
+    print(f'SUMMARY\t{12 - len(failures)}\tisolation guard self-checks')
     return 1 if failures else 0
 
 
