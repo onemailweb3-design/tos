@@ -1,14 +1,17 @@
 {
   "profile": "TOS validator authentication P0 wire/API v1",
-  "revision": 1,
+  "revision": 2,
   "status": "review-candidate-not-activated",
   "source_base": "73fdaf5746e6b84cb0f71f11d67a0bf0e579e80a",
   "proposal_revision": "231570f4ae4511b5e42c6b8ce0fdb5576b2663d9",
   "version": 1,
   "flags": 0,
   "byte_order": "big-endian-except-native-TL",
-  "grammar": "WIRE.md section 1",
-  "c0_suite": [1, 1],
+  "grammar": "canonical-schema.json ordered field arrays; WIRE.md generated view",
+  "c0_suite": [
+    1,
+    1
+  ],
   "c0_verification": "Pure Ed25519; canonical A/R; prime-order nonidentity A; S<L; noncofactored equation",
   "proposed_config_param": 46,
   "proposed_capability": 1024,
@@ -27,11 +30,34 @@
     "tree_depth": 9,
     "tree_occurrences": 100000,
     "boc_bytes": 12582912,
-    "admin_freshness_mc_blocks": 128
+    "admin_freshness_mc_blocks": 128,
+    "pending_per_identity": 10,
+    "pending_per_role_profile": 1,
+    "schedule_delay_mc_blocks": 65536,
+    "api_binary_bytes": 2000000,
+    "api_transport_bytes": 4194304
   },
-  "roles": {"proposal": 1, "notarize": 2, "finalize": 3, "skip": 4, "administration": 5},
-  "operations": {"register": 1, "rotate": 2, "retire": 3, "policy": 4, "election": 5, "configuration": 6},
-  "authority_phases": [0, 2, 3],
+  "roles": {
+    "proposal": 1,
+    "notarize": 2,
+    "finalize": 3,
+    "skip": 4,
+    "administration": 5
+  },
+  "operations": {
+    "register": 1,
+    "rotate": 2,
+    "retire": 3,
+    "policy": 4,
+    "election": 5,
+    "configuration": 6,
+    "cancel": 7
+  },
+  "authority_phases": [
+    0,
+    2,
+    3
+  ],
   "shadow": "Separate diagnostic state; no authoritative phase 1",
   "tl_constructors": {
     "envelope": "4b92bbf6",
@@ -40,5 +66,20 @@
     "policy": "08468ead",
     "committee": "12ee6eba",
     "update": "baa501af"
+  },
+  "artifact_sha256": {
+    "ACTIVATION.md": "57304827df1e63e11a93bbb93339030a6d12a68eb75de468f33e54ad080d1eee",
+    "API-CONTRACT.md": "795e99d0eba282cc28b177796b311a607bbb6a37583aa0290934063df421d301",
+    "CLIENTS.md": "bfd9a8b583b5fb6dc8dc8869768933db161af5a38a6ca663b27bbc0865acc669",
+    "LIFECYCLE.md": "ee63cff78a0288e1101aac562e311c265303f93485ade476d219089b61e8de95",
+    "OPEN-DECISIONS.md": "b3f8c351f0f2105a886ccc82cdb54128ed72609228be455a831669faa9ee4882",
+    "README.md": "f236d36aa10cf5209dbc040a11dc2d436a8897ed69c045d656eac4107a110a69",
+    "SIGNER.md": "9f69feb74d9018573461a27ea8040779351e28a1d9eca1100e512e672e70bd7d",
+    "WIRE.md": "83a83712fbed0e00ae258e3b869333a8edc7dbed79d6337c8d01e8f583fd13a8",
+    "canonical-schema.json": "904cc9f3ddea702d78b838b0fbbc2ea88f3cea100026ac4a1e1b577e7477761f",
+    "signer-store.sql": "f89318b1d3334ae9c844cbe933425f765688613bf4181e7b312bfd0c7caa7e85",
+    "transport.schema.json": "ddd45d7d3eb672559efde020af95a0e215146775ec82f8c6847b0f3ab8127584",
+    "wire.tl": "a5e10c8e25887cb30440a26a0d8cbcef1473878aeb87438cca1a0f0bc6875c15",
+    "wire.tlb": "923650bd74bbbf677a070d1d13d7c12d46944e8bffbfc3a72641093d20d3ce9d"
   }
 }

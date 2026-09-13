@@ -2,7 +2,9 @@
 
 ## Typed API
 
-These method/request/result semantics are stable; actor/future scheduling adapters
+The exact types and method allocations are [canonical-schema.json](canonical-schema.json);
+[API-CONTRACT.md](API-CONTRACT.md) supplies mandatory semantic checks. These are
+review-candidate semantics; actor/future scheduling adapters
 may differ. All buffers are bounded/owned. No method accepts peer-supplied code or
 raw secret bytes.
 
@@ -12,7 +14,7 @@ get_public_key(KeyId) -> KeyDescriptor | SignerError
 prepare_key(KeyPreparationRequest) -> KeyDescriptorAndHandle | SignerError
 stage_key(StageKeyRequest) -> KeyDescriptorAndPossessionProof | SignerError
 sign(SignRequest) -> SignResult | SignerError
-get_result(RequestId) -> RequestState | SignerError
+get_result(SignRequestId) -> RequestState | SignerError
 retire_key(RetireRequest) -> RetirementReceipt | SignerError
 ```
 
@@ -29,22 +31,22 @@ opaque 32-byte handle. Reusing the ID for different parameters is a conflict.
 Preparation has no chain authority. It precedes constructing VAU1, so generating
 a new key never requires a request to already know that key's public bytes.
 
-StageKeyRequest = proposed VAK1, handle, canonical VAU1, ownership/current-authority
-proof, context receipt and fence. It verifies and journals PoP for that already
-prepared key. RetireRequest = key_id, canonical VAU1, authority proof, context
-receipt and fence. Neither bypasses admin nonce/CAS or exposes private material.
+StageKeyRequest = proposed VAK1, handle, canonical VAU1, separately typed owner/current-administration
+authorizations, context permit and fence. Input PoP is absent; the result supplies it. It verifies and journals PoP for that already
+prepared key. RetireRequest = key_id, canonical VAU1, typed current-administration proof, context
+permit and fence. Cancel refers to the exact pending transition. Neither bypasses admin nonce/CAS or exposes private material.
 
-SignRequest fields are api_version:u16=1, request_id:h, key_handles:list(u8,2,h),
-envelope_template:blob, context_receipt:blob and fence:u64. The template is VAE1
+SignRequest has its tagged version/flags header, request_id:h,
+key_handles:list(u8,2,h), envelope_template:blob(262144), permit:VAPt and fence:u64. The template is VAE1
 with empty signature fields in canonical required-component order; it is not
 admissible network authentication until filled. Handles resolve to those exact
 key references. The trusted local consensus adapter authenticates a bounded
-context receipt/permit tying the template to network, registry, policy, session
+context permit tying the template to network, registry, policy, session
 and allowed duty. A peer's asserted context is not such a permit. Receipt validation
 against trusted state is a mandatory native integration gate.
 
 The service derives request_id=H(sign-request,complete VAS1) and rejects a mismatch.
-SignResult includes request_id, statement_id, encoded_record, fence and a durable
+SignResult includes request_id, statement_id, record, fence and a durable
 receipt binding journal sequence/result hash. A receipt carries no extra quorum
 weight. RequestState is ABSENT, RESERVED, COMPLETE or BURNED. ABSENT is not proof
 that an external primitive never exposed a signature during an uncertain failure.
@@ -56,16 +58,17 @@ method ACLs. Local deployment may use a mode-0600 Unix socket and OS peer creden
 This is not a claim of PQ transport authentication. Application media type:
 `application/vnd.tos.validator-auth.v1+json`. JSON is transport only, never signed.
 Reject duplicate/unknown fields, invalid UTF-8, floats/NaN and noncanonical hex.
-Integers are decimal strings without leading zeros; signed values use canonical
-signed decimal. Binary fields are lowercase even-length hex of exact-width or
+Only api_version="1" is a transport integer string; all other integers
+are inside the canonical binary payload, never nested JSON fields. Binary fields are lowercase even-length hex of exact-width or
 bounded canonical bytes. No compression or redirects. Whole request/response cap
-is 4 MiB; template cap 262144 bytes; context receipt/proof attachment cap 1 MiB.
+is 4 MiB; binary payload cap 2000000 bytes; template cap 262144 bytes;
+proof attachment cap 1 MiB. Permits and receipts have exact bounded schema types.
 
 Paths: /v1/capabilities (GET), /v1/keys/public, /v1/keys/prepare, /v1/keys/stage,
 /v1/sign, /v1/requests/result, /v1/keys/retire (POST). Responses have exactly
 api_version, request_id, result, error; exactly one of result/error is non-null.
 Capabilities request_id is zero. Errors have code, retryable, request_state and
-message; message is diagnostic, not control flow. Result object/receipt bytes are
+message; message is diagnostic, not control flow. Canonical result/error objects (including typed receipts) are
 hex and do not replace canonical binary objects with nested JSON equivalents.
 
 | code | Meaning | Action |
@@ -134,3 +137,8 @@ fence. Stateful/automatic-failover deployment must specify a non-rollbackable wi
 or HSM generation that fences the primitive, not only its RPC handler. P0 reserves
 these API/capability obligations; C0 enables no stateful suite. Reference SQL/tests
 do not establish this distributed/hardware safety property.
+
+Exact request/result/error/receipt, request-state variant, issuer trust, size and
+correlation rules are in [API-CONTRACT.md](API-CONTRACT.md). A retirement receipt
+is neither proof of chain inclusion nor permission to destroy a key used by an
+old session; lifecycle selection and signer safety retention remain distinct.

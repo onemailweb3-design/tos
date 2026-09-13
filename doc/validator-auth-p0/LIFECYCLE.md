@@ -11,8 +11,10 @@ do not contain their own enclosing state's hash. Actual zerostate root/file hash
 enter signed duties after genesis construction, avoiding a circular commitment.
 
 VAI1 holds the owner account, next allowed admin nonce, predecessor view hash and
-active/pending RoleRefs sorted by `(role,suite,parameters)`. Each list has at most
-ten entries, one active and one pending version per role/profile. Immutable VAK1
+active RoleRefs and explicit pending VATr records sorted by `(role,suite,parameters)`.
+Each list has at most ten entries, one active and one pending transition per
+role/profile, at most two profiles per role across their union. Absence of a
+pending record means no scheduled operation; there is no time sentinel. Immutable VAK1
 versions remain retrievable by key ID in an authenticated public archive.
 Registration creates no stake, membership or weight; election logic still does that.
 
@@ -34,19 +36,114 @@ Unused fixed fields are zero and unused byte fields empty:
 | 4 policy | zero target identity, new_policy=VAP1; old_key zero |
 | 5 election | existing identity; operation_data = stake_id:h || beneficiary_workchain:i32 || beneficiary_address:h || election_id:h |
 | 6 configuration | zero target identity; operation_data = parameter_index:i32 || previous_cell_hash:h || proposed_cell_hash:h |
+| 7 cancel | existing identity; operation_data = exact H(transition,VATr); old_key zero; new_key/new_policy empty; effective_from zero |
 
-Fields not listed in a row must be empty/zero. A newly allocated identity has
-previous=zero and proven elector allocation plus stake-owner approval. Later
-operations use the actual current identity view. The zero-ID identity record
+Fields not listed in a row must be empty/zero. A newly allocated VAI1 has
+previous=zero and proven elector allocation; requests reference its actual VAI1
+hash as specified below. Later operations also use the actual current identity view. The zero-ID identity record
 holds the global admin nonce but is never a committee member. Configuration values
 and state proofs are separate bounded attachments whose hashes must match before
 apply. Election intents associate identity with an independently authorized stake
 operation; existing value/ownership/timelock/selection checks remain mandatory.
 
-Effective_from cannot precede inclusion. Register/rotate stage a new version for
-sessions anchored at/after this coordinate. Existing sessions retain selected
-immutable versions. Retire prevents new selection, not historical verification.
-Cancelling a pending key is retirement, never editing the immutable descriptor.
+## Deterministic pending transition state machine
+
+VATr is defined by the canonical schema (WIRE.md shows a generated view). It stores
+operation 1/2/3, role/profile, old/new key IDs, effective coordinate, acceptance
+coordinate, nonce, exact admission predecessor, update ID and authorization ID.
+The latter is H(authorizations,VAA1) of the fully verified four-type evidence.
+VAI1.pending replaces the old pending RoleRef list; there are not two sources of
+pending state. Accepted VAU1/VAA1 bytes and key descriptors remain retrievable by
+hash in the public archive. The authenticated VAI1 proves that their authorization
+was accepted; replay does not consult a private scheduler or re-submit the proof.
+
+Real masterchain coordinates are 0..0xfffffffe. 0xffffffff is an exclusive key
+validity upper bound only, never an effective coordinate. Register/rotate require
+inclusion <= effective_from < 0xffffffff and a delay <=65536 masterchain blocks.
+The new VAK1.valid_from equals effective_from and valid_until is strictly greater;
+all arithmetic is checked. For retire only, effective_from=0 means **at inclusion**,
+not the literal genesis height. Cancel always has effective_from=0 and executes
+at inclusion. Thus neither immediate retirement nor cancellation asks the caller
+to predict its inclusion height. Delayed retirement uses a nonzero absolute height.
+Same-height registration/rotation is allowed if actually included at that height;
+a request included later is rejected, never silently rescheduled.
+
+Apply each masterchain block in this order:
+
+1. Starting from its authenticated parent state, materialize all accepted due
+   transitions with E <= block coordinate. Per identity, order by (E,role,profile),
+   update active refs atomically, remove due records, and set VAI1.previous to the
+   pre-batch VAI1 hash. Keep next_nonce unchanged. No operation is reauthorized at
+   its deadline. Validate old refs and archived new descriptor bindings; corrupt
+   authenticated state fails rather than skipping an operation.
+2. Process validated administrative requests in the native deterministic execution
+   order. Each request checks current VAI1 hash, nonce, current inclusion-time
+   policy/administration keys and freshness. Increment nonce only on acceptance;
+   set previous to that pre-request VAI1 hash. Immediate effects belong to the same
+   atomic transaction. Rejecting a request commits none of its staged changes.
+3. Commit the resulting registry root, then construct new committee snapshots
+   from that state and the session's authenticated anchor. Registry revision
+   increments once per block with any identity/key change (including due effects),
+   checked for overflow; transaction order never depends on map iteration.
+
+A snapshot compiled from an older authenticated checkpoint uses the same deterministic
+advance to its anchor. This is derived state, not a write from a verifier. A chain
+replay must traverse authenticated coordinates monotonically; selecting a historical
+anchor needs its historical root, never moving a current state backwards. Applying
+the same due batch twice is idempotent. Checkpoint/archive inputs and their roots
+are authenticated externally; canonical decoding alone does not establish that.
+
+Register requires no active key in that role/profile; rotate requires the exact
+currently active old key and a new key in the **same** role/profile; retire requires
+that exact active key and no new key. New epochs strictly exceed every archived
+epoch for (identity,role,profile), including canceled keys; no wrap, and epoch
+0 or UINT64_MAX is rejected. The authenticated archive can maintain a proved
+maximum-epoch index; the reference model scans its supplied archive. A suite
+migration stages independent per-profile operations under the same current-policy
+authority, then activates only with complete required keys. It is not a cross-profile
+rotate that ambiguously chooses a slot.
+
+There is at most one pending transition per role/profile and ten per identity.
+The active-plus-planned union has <=2 profiles per role and <=10 slots. A second
+operation for an occupied pending slot is CONFLICT, including an immediate one.
+There is no replacement-by-overwrite. Cancel identifies the exact VATr hash,
+requires a new nonce, current predecessor/current admin authorization and an
+inclusion coordinate **strictly before** E. At E due effects run first, so cancel
+cannot undo an effective transition. Explicit cancel then a separately authorized
+new schedule is the only replacement procedure; the second uses the post-cancel
+predecessor. Cancel is never encoded as retirement of the pending key.
+
+Admission-time nonce/predecessor checks are not deadline checks. A role-1 rotation
+accepted at 100 for 200 still executes if a role-2 operation changes the identity
+hash at 150. The immutable VATr commitments and exact slot old/new keys suffice.
+No new authorization is required at E even if the admin keys have since rotated.
+
+At a new session's anchor B < E the old active key remains selected; B >= E uses
+the new key or sees the retired slot absent. Eligibility also requires the key's
+own [valid_from,valid_until) interval. No schedule can extend an expired key.
+A missing required slot causes snapshot construction to fail; never remove that
+validator's weight to make a committee pass. Existing sessions keep owned key bytes,
+policy and full denominator until their native termination, even past retirement.
+There is no added schedule lookup on each signature verification.
+
+Cancel/retire never remove public key history, consumed PoP/signature capacity or
+signer safety tombstones. Reorg replay can reconstruct chain selection from an
+ancestor; it cannot rewind the signer's irreversible capacity/duty ledger.
+The local retire endpoint acknowledges durable retirement intent and reconciliation;
+it does not destroy secrets or prematurely disable still-authorized old sessions.
+
+The initial allocated identity is an authenticated nonzero VAI1 with empty refs,
+next_nonce=0 and previous=zero. Its first request uses the **hash of that allocated
+VAI1** as VAU1.previous (not zero), registers an administration-role key, and uses
+owner+PoP without existing admin signatures. Once any public key for that identity
+has been archived, this bootstrap exception is permanently unavailable. A scheduled
+first admin key must become active before subsequent requests can use it. Genesis
+may instead install a complete independently approved offline allocation/key manifest.
+
+The executable reference is `test/validator-auth-p0/lifecycle.py`. Trusted owner,
+PoP and current-admin verifier callbacks are separate integration boundaries;
+tests exercise their refusal and type binding. They are not production elector,
+quorum, native inclusion or Merkle-proof implementations.
 
 ## Authorization and proof of possession
 

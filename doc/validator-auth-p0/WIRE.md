@@ -9,44 +9,82 @@ All integers are big-endian; i32 uses two's complement. h is exactly 32 bytes.
 is a count in unsigned width w, at most N, followed by inline T objects.
 Every tagged object starts with its four ASCII tag bytes, u16 version=1, and
 u16 flags=0. Untagged records have only their listed fields. Nested tagged objects
-are inline, without an additional implicit length. Field order is normative:
+are inline, without an additional implicit length. The sole field-order authority
+is canonical-schema.json; the following view is generated and checked by
+contract_artifacts.py. bN denotes blob(N); lW/N/T denotes list(uW,N,T).
+Zero-or-one lists explicitly encode absence/presence; there are no implicit
+optional bytes. Method and authorization semantics are API-CONTRACT.md.
 
+<!-- canonical-schema:begin -->
 ```text
-Suite       = suite:u16 parameters:u16
-KeyRef      = suite:u16 parameters:u16 epoch:u64 key_id:h
-Component   = KeyRef signature:blob(65536)
-Record      = identity:h components:list(u8,2,Component)
-RoleRef     = role:u8 key:KeyRef
-Key VAK1    = identity:h role:u8 suite:u16 parameters:u16 epoch:u64
-              valid_from:u32 valid_until:u32 public_key:blob(16384)
-              capacity_domain:h capacity_limit:u64
-Policy VAP1 = revision:u64 previous:h interface_digest:h effective_from:u32
-              phase:u8 suites:list(u8,2,Suite) max_envelope:u32 max_certificate:u32
-Member      = identity:h stake_id:h weight:u64 adnl_id:h keys:list(u8,10,Key)
-Committee VAM1 = policy:h election:h workchain:i32 shard:u64 catchain:u32
-                anchor_mc:u32 members:list(u16,1024,Member)
-Duty VAD1   = network:i32 genesis_root:h genesis_file:h policy:h committee:h
-              session:h workchain:i32 shard:u64 anchor_mc:u32 catchain:u32
-              position:u64 role:u8 payload_hash:h
-Statement VAS1 = duty:Duty identity:h keys:list(u8,2,KeyRef)
-Envelope VAE1  = duty:Duty payload:blob(4096) record:Record
-Certificate VAC1 = duty:Duty payload:blob(4096) records:list(u16,1024,Record)
-Update VAU1 = operation:u8 identity:h nonce:u64 previous:h effective_from:u32
-              old_key:h new_key:blob(32768) new_policy:blob(4096)
-              operation_data:blob(4096)
-Identity VAI1 = identity:h stake_id:h owner_workchain:i32 owner_address:h
-                next_nonce:u64 previous:h active:list(u8,10,RoleRef)
-                pending:list(u8,10,RoleRef)
-Activation VAT1 = revision:u64 previous:h next_policy:h effective_from:u32
-                  checkpoint_seqno:u32 checkpoint_root:h checkpoint_file:h
-                  checkpoint_state:h
-Observation VAO1 = suite:u16 parameters:u16 registry_root:h valid_from:u32
-                   valid_until:u32 enabled:u8
+suite = suite:u16 parameters:u16
+keyref = suite:u16 parameters:u16 epoch:u64 key_id:h
+component = suite:u16 parameters:u16 epoch:u64 key_id:h signature:b65536
+record = identity:h components:l8/2/component
+roleref = role:u8 key:keyref
+key VAK1 = identity:h role:u8 suite:u16 parameters:u16 epoch:u64 valid_from:u32 valid_until:u32 public_key:b16384 capacity_domain:h capacity_limit:u64
+policy VAP1 = revision:u64 previous:h interface_digest:h effective_from:u32 phase:u8 suites:l8/2/suite max_envelope:u32 max_certificate:u32
+member = identity:h stake_id:h weight:u64 adnl_id:h keys:l8/10/key
+committee VAM1 = policy:h election:h workchain:i32 shard:u64 catchain:u32 anchor_mc:u32 members:l16/1024/member
+duty VAD1 = network:i32 genesis_root:h genesis_file:h policy:h committee:h session:h workchain:i32 shard:u64 anchor_mc:u32 catchain:u32 position:u64 role:u8 payload_hash:h
+statement VAS1 = duty:duty identity:h keys:l8/2/keyref
+envelope VAE1 = duty:duty payload:b4096 record:record
+certificate VAC1 = duty:duty payload:b4096 records:l16/1024/record
+update VAU1 = operation:u8 identity:h nonce:u64 previous:h effective_from:u32 old_key:h new_key:b32768 new_policy:b4096 operation_data:b4096
+identity VAI1 = identity:h stake_id:h owner_workchain:i32 owner_address:h next_nonce:u64 previous:h active:l8/10/roleref pending:l8/10/transition
+activation VAT1 = revision:u64 previous:h next_policy:h effective_from:u32 checkpoint_seqno:u32 checkpoint_root:h checkpoint_file:h checkpoint_state:h
+observation VAO1 = suite:u16 parameters:u16 registry_root:h valid_from:u32 valid_until:u32 enabled:u8
+transition VATr = operation:u8 role:u8 suite:u16 parameters:u16 old_key:h new_key:h effective_from:u32 accepted_at:u32 nonce:u64 predecessor:h update_id:h authorization_id:h
+anchor VAB1 = seqno:u32 root:h file:h state:h
+proofref VAF1 = anchor:anchor kind:u8 object_id:h proof_hash:h proof:b1048576
+owner_auth VAOw = update_id:h stake_id:h owner_workchain:i32 owner_address:h proof:proofref
+possession_auth VAPo = update_id:h key:keyref signature:b65536
+identity_auth VAAd = update_id:h identity:h certificate:b524288
+governance_auth VAGo = update_id:h committee:h certificate:b524288
+authorizations VAA1 = owner:l8/1/owner_auth possession:l8/1/possession_auth administration:l8/1/identity_auth governance:l8/1/governance_auth
+permit_body VAPb = issuer:h audience:h network:i32 genesis_root:h genesis_file:h anchor:anchor registry_root:h policy:h committee:h session:h identity:h method:u8 subject:h expires_mc:u32 fence:u64
+permit VAPt = body:permit_body signature:b64
+receipt_body VARb = issuer:h audience:h request_id:h method:u8 subject:h result_hash:h journal_sequence:u64 fence:u64 state:u8 context_id:h
+receipt VARt = body:receipt_body signature:b64
+capabilities VAc1 = interface_digest:h installed:l8/2/suite admitted:l8/2/suite max_request:u32 max_result:u32 persistent_journal:u8 fencing:u8 stateful:u8
+error VAEr = request_id:h method:u8 code:u16 retryable:u8 request_state:u8 message:b256
+cursor VACu = anchor:anchor query_id:h last_identity:h
+key_handle VAKh = key:key handle:h
+sign_result VASr = request_id:h statement_id:h record:record fence:u64 receipt:receipt
+request_state VAQs = request_id:h state:u8 statement_id:h fence:u64 result:l8/1/sign_result receipt:l8/1/receipt
+profile_result VAPr = anchor:anchor interface_digest:h policy:h installed:l8/2/suite active:l8/2/suite can_parse:u8 can_verify:u8 proof:proofref
+policy_result VAPl = anchor:anchor policy:policy proof:proofref
+registry_result VARg = anchor:anchor query_id:h identities:l8/128/identity cursor:l8/1/cursor proof:proofref
+key_result VAKr = anchor:anchor key:key proof:proofref
+certificate_result VACr = anchor:anchor era:u8 interface_digest:h certificate:b524288 committee:proofref policy:proofref
+verify_result VAVr = anchor:anchor certificate_id:h policy:h committee:h duty:h signers:l16/1024/h weight:u64
+capabilities_request VAq1 =
+public_request VAq2 = key_id:h
+prepare_request VAq3 = preparation_id:h identity:h role:u8 suite:u16 parameters:u16 epoch:u64 valid_from:u32 valid_until:u32 mode:u8 provider_handle:h fence:u64
+stage_request VAq4 = key:key handle:h update:update authorizations:authorizations permit:permit fence:u64
+sign_request VAq5 = request_id:h key_handles:l8/2/h envelope_template:b262144 permit:permit fence:u64
+result_request VAq6 = request_id:h
+retire_request VAq7 = key_id:h update:update authorizations:authorizations permit:permit fence:u64
+prepare_result VAk3 = prepared:key_handle receipt:receipt
+stage_result VAk4 = key:key possession:possession_auth receipt:receipt
+retire_result VAk7 = key_id:h update_id:h receipt:receipt
+get_profile_request VAq8 = anchor:anchor
+get_policy_request VAq9 = anchor:anchor policy_id:h
+get_registry_request VAqa = anchor:anchor limit:u8 cursor:l8/1/cursor
+get_key_request VAqb = anchor:anchor key_id:h
+get_certificate_request VAqc = anchor:anchor certificate_id:h
+verify_certificate_request VAqd = anchor:anchor certificate:b524288 committee:proofref policy:proofref
+sign_result_body VASb = request_id:h statement_id:h record:record fence:u64
+prepare_result_body VAkb = prepared:key_handle
+stage_result_body VAsb = key:key possession:possession_auth
+retire_result_body VArb = key_id:h update_id:h
+profile_state VAPs = interface_digest:h policy:h active:l8/2/suite
 ```
+<!-- canonical-schema:end -->
 
 Unknown versions, nonzero flags, overflow, unknown tags, wrong counts/lengths,
 trailing bytes and duplicate/unknown authoritative components MUST be rejected.
-There are no ignored extension TLVs, varints or optional fields. Empty signature
+There are no ignored extension TLVs, varints or implicit optional fields. Empty signature
 and public-key payloads are invalid. Empty lists require explicit semantic permission.
 Parsing is not authentication; a structurally representable future suite is not
 an admitted C0 suite.
@@ -55,8 +93,10 @@ Suite/profile `(1,1)` is the only C0 allocation. Zero is invalid; IDs 2..32767 n
 reviewed production allocation; 32768..65535 are private/test IDs forbidden in
 production authority. More than two components requires a versioned upgrade.
 `H(label,bytes)` is SHA-256(ASCII(`TOS/P0/`+label+`/v1`) || 00 || bytes).
-Object IDs use lowercase grammar names: key, policy, committee, statement,
-identity, update, activation, observation. No truncation is permitted.
+Object IDs use exact schema type names: key, policy, committee, statement,
+identity, update, activation, observation, transition, authorizations, permit and
+certificate. The separate lifecycle identity-allocation preimage also uses
+H(identity,...) as specified in LIFECYCLE.md; it is not a VAI1 state hash. No truncation is permitted.
 The interface artifact digest is instead the unprefixed SHA-256 in README.md.
 Future PQ review MUST assess these 256-bit hashes and inherited candidate/chain
 hashes together; this is not a blanket 128-bit PQ collision-security claim.

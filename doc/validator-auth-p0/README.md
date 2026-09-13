@@ -30,11 +30,12 @@ regression evidence, not the production implementation of this profile.
 
 Read [WIRE.md](WIRE.md), [LIFECYCLE.md](LIFECYCLE.md), [SIGNER.md](SIGNER.md),
 [ACTIVATION.md](ACTIVATION.md), and [CLIENTS.md](CLIENTS.md).
-[OPEN-DECISIONS.md](OPEN-DECISIONS.md) records the two boundaries this profile
-does **not** fix, with the prior art for each. They are open, and a freeze that
-leaves them open ships a contract two implementations can satisfy differently.
-`profile.json` and the ordered grammar in WIRE.md fix the proposed numbers and
-encodings. `wire.tl` and `wire.tlb` deliberately remain outside production schemas.
+[OPEN-DECISIONS.md](OPEN-DECISIONS.md) records the two P1 choices now resolved
+as review candidates. [API-CONTRACT.md](API-CONTRACT.md) fixes all signer/client
+semantics. [canonical-schema.json](canonical-schema.json) is the sole ordered
+binary encoding authority; WIRE.md carries a mechanically checked generated view.
+[transport.schema.json](transport.schema.json) only validates the outer JSON shape.
+`profile.json` fingerprints these schema and normative document artifacts. `wire.tl` and `wire.tlb` deliberately remain outside production schemas.
 
 ## Evidence and limits
 
@@ -50,6 +51,9 @@ are container fixtures, not PQ cryptographic evidence.
 
 The interface digest is SHA-256 of the exact committed `profile.json` bytes.
 It is a release-artifact fingerprint, not JSON used as a signing statement.
+Its artifact_sha256 map binds all normative documents and schemas except itself;
+`contract_artifacts.py` checks exact bytes. Vectors bind the resulting profile digest,
+so vectors are checked separately to avoid a fingerprint commitment cycle.
 A freeze record MUST also bind document/schema blobs, vector digest, source commit
 and protocol/security/client approvals. A draft digest has no network authority.
 Before marking the profile frozen, confirm allocations against then-current
@@ -73,7 +77,7 @@ wrapper. Neither historical preimage is normalized into the new format.
 The current session ID already indirectly commits to the full committee.
 The new explicit commitment additionally binds policy and key lifecycle.
 Current support-advertisement checks can log and continue; this is not the
-fail-closed profile admission required below. Existing workflows are not changed.
+fail-closed profile admission required below. Only the dedicated profile workflow is extended; the full Ubuntu build remains manual.
 
 ## Primary references
 

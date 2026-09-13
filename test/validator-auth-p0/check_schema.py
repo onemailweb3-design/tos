@@ -7,6 +7,7 @@ import re
 import subprocess
 import tempfile
 import zlib
+import contract_artifacts
 
 ROOT=Path(__file__).resolve().parents[2]
 DOC=ROOT/'doc/validator-auth-p0'
@@ -16,6 +17,7 @@ def main():
     p.add_argument('--tl-parser',type=Path,required=True)
     p.add_argument('--out',type=Path,required=True)
     args=p.parse_args();parser=args.tl_parser.resolve()
+    contract_artifacts.main()
     profile=json.loads((DOC/'profile.json').read_text());schema=(DOC/'wire.tl').read_text()
     declarations=re.findall(r'^(validatorAuth\.\w+)#([0-9a-f]{8}) (.*?) = (.*?);$',schema,re.MULTILINE)
     if len(declarations)!=6:raise ValueError('six constructors required')

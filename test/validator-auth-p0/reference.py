@@ -6,26 +6,13 @@ import zlib
 MAX_OBJECT = 8 * 1024 * 1024
 MAX_WEIGHT = ((1 << 64) - 1) // 3
 FORMATS = {'u8': '>B', 'u16': '>H', 'u32': '>I', 'u64': '>Q', 'i32': '>i'}
-# Bounded inline records, in the normative field order.
-SCHEMAS = {
- 'suite': (None, 'suite:u16 parameters:u16'),
- 'keyref': (None, 'suite:u16 parameters:u16 epoch:u64 key_id:h'),
- 'component': (None, 'suite:u16 parameters:u16 epoch:u64 key_id:h signature:b65536'),
- 'record': (None, 'identity:h components:l8/2/component'),
- 'roleref': (None, 'role:u8 key:keyref'),
- 'key': ('VAK1', 'identity:h role:u8 suite:u16 parameters:u16 epoch:u64 valid_from:u32 valid_until:u32 public_key:b16384 capacity_domain:h capacity_limit:u64'),
- 'policy': ('VAP1', 'revision:u64 previous:h interface_digest:h effective_from:u32 phase:u8 suites:l8/2/suite max_envelope:u32 max_certificate:u32'),
- 'member': (None, 'identity:h stake_id:h weight:u64 adnl_id:h keys:l8/10/key'),
- 'committee': ('VAM1', 'policy:h election:h workchain:i32 shard:u64 catchain:u32 anchor_mc:u32 members:l16/1024/member'),
- 'duty': ('VAD1', 'network:i32 genesis_root:h genesis_file:h policy:h committee:h session:h workchain:i32 shard:u64 anchor_mc:u32 catchain:u32 position:u64 role:u8 payload_hash:h'),
- 'statement': ('VAS1', 'duty:duty identity:h keys:l8/2/keyref'),
- 'envelope': ('VAE1', 'duty:duty payload:b4096 record:record'),
- 'certificate': ('VAC1', 'duty:duty payload:b4096 records:l16/1024/record'),
- 'update': ('VAU1', 'operation:u8 identity:h nonce:u64 previous:h effective_from:u32 old_key:h new_key:b32768 new_policy:b4096 operation_data:b4096'),
- 'identity': ('VAI1', 'identity:h stake_id:h owner_workchain:i32 owner_address:h next_nonce:u64 previous:h active:l8/10/roleref pending:l8/10/roleref'),
- 'activation': ('VAT1', 'revision:u64 previous:h next_policy:h effective_from:u32 checkpoint_seqno:u32 checkpoint_root:h checkpoint_file:h checkpoint_state:h'),
- 'observation': ('VAO1', 'suite:u16 parameters:u16 registry_root:h valid_from:u32 valid_until:u32 enabled:u8'),
-}
+# The machine-readable schema is the only source of field order and bounds.
+import json
+from pathlib import Path
+SCHEMA = json.loads((Path(__file__).resolve().parents[2] /
+                    'doc/validator-auth-p0/canonical-schema.json').read_text())
+SCHEMAS = {name: (definition['tag'], ' '.join(n+':'+t for n,t in definition['fields']))
+           for name, definition in SCHEMA['types'].items()}
 
 class Refusal(ValueError):
     pass
@@ -135,7 +122,7 @@ def validate_payload(duty, payload):
     require(duty['payload_hash'] == digest('payload', bytes([role])+payload), 'payload-hash')
     if role == 5:
         intent = decode('update', payload)
-        require(1 <= intent['operation'] <= 6 and intent['nonce'] == position, 'admin-payload')
+        require(1 <= intent['operation'] <= 7 and intent['nonce'] == position, 'admin-payload')
         return  # Ownership, CAS and inclusion-time authorization are apply gates.
     require(role in (1, 2, 3, 4) and position < 1 << 32, 'role-position')
     expected = {1: (40, CANDIDATE, 4), 2: (44, VOTE[2]+CANDIDATE, 8),

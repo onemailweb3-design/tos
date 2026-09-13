@@ -19,11 +19,44 @@ MUTANTS = [
  ('crypto-result','reference.py',"require(verifier.verify(key, message, signature), 'signature')","require(True, 'signature')"),
  ('tree-canonical','reference.py',"require(node == byte_tree(raw), 'tree-canonical')","require(True, 'tree-canonical')"),
  ('terminal-journal','signer-store.sql',"WHEN OLD.state!='RESERVED' OR NEW.state NOT IN ('COMPLETE','BURNED')","WHEN 0"),
+ ('due-boundary','lifecycle.py',"p['effective_from'] <= coordinate", "p['effective_from'] < coordinate"),
+ ('pending-conflict','lifecycle.py',"r.require(target_slot not in pending, 'pending-conflict')", "r.require(True, 'pending-conflict')"),
+ ('accepted-nonce','lifecycle.py',"current['next_nonce'] <= update['nonce'] < MAX_NONCE", "update['nonce'] < MAX_NONCE"),
+ ('accepted-predecessor','lifecycle.py',"update['previous'] == r.object_id('identity', current)", "True"),
+ ('cancel-target','lifecycle.py',"if r.object_id('transition', p) == update['operation_data']", "if True"),
+ ('old-session-copy','lifecycle.py',"selected.append(deepcopy(key))", "selected.append(key)"),
+ ('authority-verified','lifecycle.py',"kind in verifiers and verifiers[kind](proof, update, state)", "True"),
+ ('json-duplicate','api.py',"r.require(k not in result, 'duplicate-json-key')", "r.require(True, 'duplicate-json-key')"),
+ ('response-id','api.py',"r.require(rid == expected_id, 'response-correlation')", "r.require(True, 'response-correlation')"),
+ ('cursor-snapshot','api.py',"cursor['anchor'] == req['anchor'] and cursor['query_id']", "cursor['query_id']"),
+ ('receipt-result','api.py',"all(body[n] == value for n, value in expected.items()), 'receipt-binding'", "True, 'receipt-binding'"),
+ ('proof-authentication','api.py',"r.require(verifier(proof), 'proof-authentication')", "r.require(True, 'proof-authentication')"),
+ ('permit-expiry','api.py',"current_mc is not None and body['anchor']['seqno'] <= current_mc <= body['expires_mc']", "True"),
+ ('absent-state','api.py',"state['statement_id'] == ZERO and state['fence'] == 0 and not state['result'] and not state['receipt']", "True"),
+
 ]
 
-def execute(root):
-    return subprocess.run([sys.executable,'-B',str(root/'test/validator-auth-p0/test_profile.py'),'-v'],
-                          capture_output=True,text=True,timeout=90)
+TARGETS = {
+ 'due-boundary': 'LifecycleTests.test_before_exact_after_replay_and_old_session',
+ 'pending-conflict': 'LifecycleTests.test_explicit_cancel_and_conflict_no_silent_replace',
+ 'accepted-nonce': 'LifecycleTests.test_nonce_predecessor_boundaries_and_atomic_refusal',
+ 'accepted-predecessor': 'LifecycleTests.test_nonce_predecessor_boundaries_and_atomic_refusal',
+ 'cancel-target': 'LifecycleTests.test_explicit_cancel_and_conflict_no_silent_replace',
+ 'old-session-copy': 'LifecycleTests.test_before_exact_after_replay_and_old_session',
+ 'authority-verified': 'LifecycleTests.test_four_authorities_cannot_substitute',
+ 'json-duplicate': 'ApiTests.test_strict_json_duplicate_keys_before_mapping',
+ 'response-id': 'ApiTests.test_endpoint_inventory_and_transport_responses',
+ 'cursor-snapshot': 'ApiTests.test_cursor_snapshot_and_page_correlation',
+ 'receipt-result': 'ApiTests.test_complete_receipt_binds_exact_result_and_permit_expiry',
+ 'proof-authentication': 'ApiTests.test_proof_reference_needs_authenticated_source',
+ 'permit-expiry': 'ApiTests.test_complete_receipt_binds_exact_result_and_permit_expiry',
+ 'absent-state': 'ApiTests.test_request_state_variants',
+}
+
+def execute(root, target=None):
+    arguments = ['test_lifecycle_api.'+target, '-v'] if target else ['discover', '-p', 'test_*.py', '-v']
+    return subprocess.run([sys.executable,'-B','-m','unittest',*arguments],
+                          cwd=root/'test/validator-auth-p0',capture_output=True,text=True,timeout=90)
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -46,7 +79,7 @@ def main():
                 changed=original.replace(before,after)
                 if path.suffix=='.py':compile(changed,str(path),'exec')
                 path.write_text(changed)
-                result=execute(root)
+                result=execute(root, TARGETS.get(name))
                 if result.returncode!=1 or 'FAIL:' not in result.stderr or 'ERROR:' in result.stderr:
                     raise RuntimeError('survived, errored or crashed: '+name+'\n'+result.stderr)
                 report.append(dict(guard=name,killed=True,parsed=True,returncode=result.returncode,

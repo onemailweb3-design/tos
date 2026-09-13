@@ -36,13 +36,16 @@ committee, key and exact statement. Old signatures_checked flags cannot cross er
 ## RPC/SDK
 
 New methods are validatorAuth.v1.getProfile/getPolicy/getRegistry/getKey/
-getCertificate/verifyCertificate. Requests pin a masterchain block root/file ID,
+getCertificate/verifyCertificate. The method table and every request/result/error field are fixed by
+[canonical-schema.json](canonical-schema.json) and [API-CONTRACT.md](API-CONTRACT.md).
+Requests pin a masterchain block seqno/root/file/resulting-state ID,
 not floating latest state for historical verification. Binary objects are canonical
-lowercase hex; integer strings and strict JSON field rules follow SIGNER.md.
+lowercase hex; the thin envelope and strict JSON field rules follow API-CONTRACT.md.
 Profile exposes installed and active suites separately. Key/registry responses
 include state-root/Merkle proofs anchored to that pinned block; the client verifies
-the anchor independently. Registry pages contain 1..128 identities in increasing
-order and a cursor bound to the same state root; pages cannot mix snapshots.
+the anchor independently. Registry pages contain 1..limit identities (limit <=128) in increasing
+order, or an explicitly proved empty terminal page. Cursors bind the entire
+anchor and query; range proofs establish completeness, and pages cannot mix snapshots.
 Certificate responses include era/profile, canonical bytes and committee/policy
 proof references. can_parse is not can_verify, and can_verify is not active.
 Unsupported clients return UNSUPPORTED_PROFILE, not a legacy weaker-proof retry.

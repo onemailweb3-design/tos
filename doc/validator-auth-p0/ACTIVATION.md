@@ -8,8 +8,8 @@ live state by this PR; freeze requires collision review. TVM v16 wallet verifica
 is not an implicit validator-authority switch.
 
 wire.tlb fixes the root and four references. Version is 1; chain_domain and interface
-digest are immutable for this profile. registry_revision advances on applied
-identity/key changes. current_policy names an immutable VAP1 in the policy map.
+digest are immutable for this profile. registry_revision advances once per block with applied
+identity/key changes, including due transitions, with checked overflow. current_policy names an immutable VAP1 in the policy map.
 
 | Dictionary | Key | AuthBytes value |
 | --- | --- | --- |
@@ -44,7 +44,9 @@ Two policies at one height are invalid. Replacing pending activation requires a
 new currently authorized admin operation before the boundary, never a local flag.
 
 At committee-session creation, use authenticated masterchain anchor B and select
-the policy with greatest effective_from <= B. Admit all required keys for every
+the policy with greatest effective_from <= B. Materialize accepted pending
+transitions using LIFECYCLE.md before selecting keys, including exact-boundary
+effects before cancellation requests. Admit all required keys for every
 selected member/role, freeze the full snapshot, then derive session ID. Key validity
 must cover expected session lifetime. Missing/offline members cannot be dropped
 to change the denominator. An unsupported active profile must fail before signing
@@ -86,3 +88,9 @@ Long-offline clients require independently trusted checkpoints; one supplied by 
 same untrusted historical peer is not a new trust anchor. PQ signatures do not
 repair forged classical history or make transport PQ-safe. No activation broadcaster
 or claimed completed operational approval/rehearsal is included here.
+
+The candidate fingerprint binds the canonical binary schema, thin transport
+schema and lifecycle/API semantics through profile.json artifact hashes. A green
+reference CI run is a candidate-design gate only: native state updates, independently
+verified proof ranges, receipt frontier/fencing, and old-session integration remain
+required before activation. Full Ubuntu build stays manually triggered.
