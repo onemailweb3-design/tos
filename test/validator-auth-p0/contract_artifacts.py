@@ -56,14 +56,14 @@ def inspect_schema():
                 raise ValueError('duplicate or invalid tag')
             tags.add(tag)
         check_type(name, set())
-    if set(schema['methods']) != {str(i) for i in range(1, 14)}:
+    if set(schema['methods']) != {str(i) for i in range(1, 16)}:
         raise ValueError('method inventory')
     paths = []
     for method in schema['methods'].values():
         if method['request'] not in types or method['result'] not in types:
             raise ValueError('method type')
         paths.append(method['path'])
-    if len(set(paths)) != 13:
+    if len(set(paths)) != 15:
         raise ValueError('duplicate method path')
     return schema
 
@@ -93,7 +93,7 @@ def main(write=False):
                  if p.is_file() and p.name != 'profile.json'}
     profile_path = DOC/'profile.json'; profile = json.loads(profile_path.read_text())
     if write:
-        profile['revision'] = 2
+        profile['revision'] = 3
         profile['grammar'] = 'canonical-schema.json ordered field arrays; WIRE.md generated view'
         profile['operations']['cancel'] = 7
         profile['limits'].update(pending_per_identity=10, pending_per_role_profile=1, schedule_delay_mc_blocks=65536,

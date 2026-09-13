@@ -91,3 +91,13 @@ Profile review finishes after grammar/semantics/allocations/service/client owner
 agree and candidate tests pass. Production P0 finishes only after every mapped
 boundary runs on testnet with Ed25519 alone. Later PQ approval chooses a reviewed
 suite and completes its separate security/resource/operational activation gates.
+
+## Frozen capacity and carriers
+
+Clients implement all 15 schema methods, VAOv/VAOr chunk resolution and the strict
+JSON parser in API-CONTRACT.md. Check 400-member bounds without limiting historical
+archive size. Resolve and authenticate a pinned object before reporting success;
+partial upload/download is never a proof or receipt. The C++/Rust structural
+codec differential harness covers every tagged and untagged type and malformed
+framing. Native TL-B/BOC maximum-size tests cover storage, not chain inclusion
+or authenticated range-proof production integration.

@@ -2,6 +2,7 @@
 import json
 import re
 import reference as r
+import transfer as tr
 
 ZERO = bytes(32)
 METHODS = r.SCHEMA['methods']
@@ -43,7 +44,7 @@ def request_id(method, request):
     return r.digest('api-request', bytes([method]) + r.encode(METHODS[str(method)]['request'], request))
 
 
-def decode_transport(raw, method, response=False, expected_id=None):
+def decode_transport(raw, method, response=False, expected_id=None, fetch=None):
     r.require(str(method) in METHODS, 'method')
     obj = strict_json(raw)
     required = {'api_version', 'request_id', 'result', 'error'} if response else {'api_version', 'request_id', 'request'}
@@ -61,7 +62,7 @@ def decode_transport(raw, method, response=False, expected_id=None):
         return rid, kind, value
     value = r.decode(METHODS[str(method)]['request'], unhex(obj['request'], MAX_BINARY))
     r.require(rid == request_id(method, value), 'request-correlation')
-    validate_request(method, value)
+    validate_request(method, value, fetch)
     return rid, value
 
 
@@ -86,7 +87,7 @@ def validate_error(error, method, rid):
     r.require(error['request_id'] == rid and error['method'] == method, 'error-correlation')
     r.require(1 <= error['code'] <= 14 and error['request_state'] in (0, 1, 2, 3, 4), 'error-code')
     # UNKNOWN=4 is error-only; never invent ABSENT after an unparseable request.
-    retry = int(method in (1, 2, 6, 8, 9, 10, 11, 12, 13) and error['code'] in (10, 11, 12))
+    retry = int(method in (1, 2, 6, 8, 9, 10, 11, 12, 13, 14, 15) and error['code'] in (10, 11, 12))
     r.require(error['retryable'] == retry, 'error-retry')
     try:
         error['message'].decode('utf-8')
@@ -103,7 +104,7 @@ def query_id(anchor, limit):
     return r.digest('registry-query', r.encode('anchor', anchor) + bytes([limit]))
 
 
-def validate_request(method, req):
+def validate_request(method, req, fetch=None):
     if 'anchor' in req:
         validate_anchor(req['anchor'])
     if method == 3:
@@ -136,19 +137,25 @@ def validate_request(method, req):
             r.require(req['key_id'] == req['update']['old_key'], 'retire-key')
         r.require(not req['authorizations']['governance'], 'identity-not-governance')
     if method == 13:
-        cert = r.decode('certificate', req['certificate'])
+        cert = r.decode('certificate', tr.resolve(req['certificate'], 4, fetch))
         for name, kind in (('committee', 5), ('policy', 2)):
             proof = req[name]
             r.require(proof['anchor'] == req['anchor'] and proof['kind'] == kind
                       and proof['object_id'] == cert['duty'][name], 'verify-request-context')
+    if method in (14, 15):
+        tr.validate_manifest(req['manifest'])
+        r.require(0 <= req['index'] < len(req['manifest']['chunk_hashes']), 'chunk-index')
+        if method == 15:
+            tr.chunk(req['manifest'], req['index'], req['data'])
     if 'fence' in req:
         r.require(req['fence'] > 0, 'fence')
 
 
-def verify_proof(proof, anchor, kind, object_id, verifier):
+def verify_proof(proof, anchor, kind, object_id, verifier, fetch=None):
     r.encode('proofref', proof)
     r.require(proof['anchor'] == anchor and proof['kind'] == kind and proof['object_id'] == object_id, 'proof-binding')
-    r.require(bool(proof['proof']) and proof['proof_hash'] == r.digest('proof', proof['proof']), 'proof-hash')
+    raw = tr.resolve(proof['proof'], 5, fetch)
+    r.require(proof['proof_hash'] == r.digest('proof', raw), 'proof-hash')
     r.require(verifier(proof), 'proof-authentication')
 
 
@@ -160,9 +167,7 @@ def verify_permit(permit, expected, public_keys, verifier, current_mc=None):
     r.require(body['anchor']['seqno'] <= body['expires_mc'] < (1 << 32)-1
               and body['expires_mc'] - body['anchor']['seqno'] <= 128, 'permit-expiry')
     r.require(current_mc is not None and body['anchor']['seqno'] <= current_mc <= body['expires_mc'], 'permit-current-coordinate')
-    r.require(body['issuer'] in public_keys and len(permit['signature']) == 64, 'permit-issuer')
-    r.require(body['issuer'] == r.digest('service-key', public_keys[body['issuer']]), 'permit-issuer-id')
-    r.require(verifier.verify(public_keys[body['issuer']], r.encode('permit_body', body), permit['signature']), 'permit-signature')
+    verify_service('permit', permit, public_keys, verifier)
 
 
 def verify_receipt(receipt, expected, public_keys, verifier):
@@ -171,9 +176,7 @@ def verify_receipt(receipt, expected, public_keys, verifier):
     r.require(set(expected) == set(body) - {'issuer'}, 'receipt-expectations')
     r.require(all(body[n] == value for n, value in expected.items()), 'receipt-binding')
     r.require(body['journal_sequence'] > 0 and body['fence'] > 0 and body['state'] in (1, 2, 3), 'receipt-state')
-    r.require(body['issuer'] in public_keys and len(receipt['signature']) == 64, 'receipt-issuer')
-    r.require(body['issuer'] == r.digest('service-key', public_keys[body['issuer']]), 'receipt-issuer-id')
-    r.require(verifier.verify(public_keys[body['issuer']], r.encode('receipt_body', body), receipt['signature']), 'receipt-signature')
+    verify_service('receipt', receipt, public_keys, verifier)
 
 
 def validate_request_state(state, rid):
@@ -199,7 +202,7 @@ def validate_request_state(state, rid):
         r.require(state['statement_id'] != ZERO and state['fence'] > 0, 'known-state')
 
 
-def validate_response(method, req, result):
+def validate_response(method, req, result, fetch=None):
     """Structural correlation before trusted proof/receipt verification."""
     r.encode(METHODS[str(method)]['result'], result)
     rid = request_id(method, req)
@@ -234,6 +237,10 @@ def validate_response(method, req, result):
         r.require(result['key_id'] == req['key_id'] and result['update_id'] == r.object_id('update', req['update']), 'retirement-binding')
     if method >= 8:
         r.require(result['anchor'] == req['anchor'], 'response-anchor')
+    if method in (14, 15):
+        r.require(result['manifest_id'] == r.object_id('object_ref', req['manifest']) and result['index'] == req['index'], 'chunk-correlation')
+        if method == 14:
+            tr.chunk(req['manifest'], result['index'], result['data'])
     if method == 8:
         r.require(result['can_parse'] in (0, 1) and result['can_verify'] in (0, 1)
                   and result['can_verify'] <= result['can_parse'], 'profile-flags')
@@ -252,14 +259,14 @@ def validate_response(method, req, result):
             r.require(bool(ids) and c['last_identity'] == ids[-1] and c['anchor'] == req['anchor']
                       and c['query_id'] == result['query_id'], 'page-cursor')
     if method == 12:
-        r.require(result['era'] == 1 and r.digest('certificate', result['certificate']) == req['certificate_id'], 'certificate-era')
-        cert = r.decode('certificate', result['certificate'])
+        r.require(result['era'] == 1 and tr.object_id(result['certificate'], 4) == req['certificate_id'], 'certificate-era')
+        cert = r.decode('certificate', tr.resolve(result['certificate'], 4, fetch))
         r.require(result['committee']['object_id'] == cert['duty']['committee']
                   and result['policy']['object_id'] == cert['duty']['policy']
                   and result['committee']['anchor'] == req['anchor'] and result['policy']['anchor'] == req['anchor'], 'certificate-proof-binding')
     if method == 13:
-        cert = r.decode('certificate', req['certificate'])
-        r.require(result['certificate_id'] == r.digest('certificate', req['certificate'])
+        cert = r.decode('certificate', tr.resolve(req['certificate'], 4, fetch))
+        r.require(result['certificate_id'] == tr.object_id(req['certificate'], 4)
                   and result['policy'] == cert['duty']['policy'] and result['committee'] == cert['duty']['committee']
                   and result['duty'] == r.object_id('duty', cert['duty']), 'verified-binding')
         signers = [x['identity'] for x in cert['records']]
@@ -279,7 +286,7 @@ def verify_result_receipt(method, req, result, audience, issuer_keys, verifier):
     body = result['receipt']['body']
     subject = result['statement_id'] if method == 5 else r.digest('api-subject', r.encode(METHODS[str(method)]['request'], req))
     context_id = r.object_id('permit', req['permit']) if 'permit' in req else ZERO
-    expected = dict(audience=audience, request_id=request_id(method, req), method=method,
+    expected = dict(service_policy=body['service_policy'], audience=audience, request_id=request_id(method, req), method=method,
                     subject=subject, result_hash=result_hash(method, result), journal_sequence=body['journal_sequence'],
                     fence=req['fence'], state=2, context_id=context_id)
     verify_receipt(result['receipt'], expected, issuer_keys, verifier)
@@ -291,18 +298,18 @@ def registry_page_id(req, result):
                     + r.encode('l8/128/identity', result['identities']) + r.encode('l8/1/cursor', result['cursor']))
 
 
-def verify_client_proofs(method, req, result, verifier):
+def verify_client_proofs(method, req, result, verifier, fetch=None):
     """Binding plus a required native state/range proof callback, never hash-only."""
-    validate_response(method, req, result)
+    validate_response(method, req, result, fetch)
     if method in (8, 9, 10, 11):
         kind = {8: 6, 9: 2, 10: 3, 11: 4}[method]
         target = {8: r.object_id('profile_state', {k:result[k] for k in ('interface_digest','policy','active')}) if method == 8 else None, 9: req.get('policy_id'),
                   10: registry_page_id(req, result) if method == 10 else None, 11: req.get('key_id')}[method]
-        verify_proof(result['proof'], req['anchor'], kind, target, verifier)
+        verify_proof(result['proof'], req['anchor'], kind, target, verifier, fetch)
     elif method == 12:
-        cert = r.decode('certificate', result['certificate'])
-        verify_proof(result['committee'], req['anchor'], 5, cert['duty']['committee'], verifier)
-        verify_proof(result['policy'], req['anchor'], 2, cert['duty']['policy'], verifier)
+        cert = r.decode('certificate', tr.resolve(result['certificate'], 4, fetch))
+        verify_proof(result['committee'], req['anchor'], 5, cert['duty']['committee'], verifier, fetch)
+        verify_proof(result['policy'], req['anchor'], 2, cert['duty']['policy'], verifier, fetch)
     else:
         raise r.Refusal('client-proof-method')
 
@@ -324,3 +331,20 @@ def observe_request_state(previous, current, rid):
         r.require(current['state'] != 0, 'reserved-state-regression')
         r.require(current['statement_id'] == previous['statement_id']
                   and current['fence'] == previous['fence'], 'reserved-state-binding')
+
+
+def verify_service(kind, evidence, trust, verifier):
+    body = evidence['body']; issuer = body['issuer']
+    r.require(issuer in trust, kind+'-issuer')
+    policy = trust[issuer]
+    r.require(body['service_policy'] == policy['policy_id'], 'service-policy')
+    components = evidence['components']
+    refs = [(c['suite'], c['parameters'], c['key_id']) for c in components]
+    r.require(refs == policy['required'] and 1 <= len(refs) <= 2
+              and refs == sorted(set(refs)), 'service-components')
+    for c, ref in zip(components, refs):
+        r.require(ref in policy['keys'], 'service-key')
+        public = policy['keys'][ref]
+        r.require(ref[:2] == (1, 1), 'service-suite')  # C0 oracle; no unallocated PQ provider.
+        r.require(len(c['signature']) == 64 and verifier.admit(public), kind+'-signature')
+        r.require(verifier.verify(public, r.encode(kind+'_body', body), c['signature']), kind+'-signature')

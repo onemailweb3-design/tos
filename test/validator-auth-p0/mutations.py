@@ -39,9 +39,18 @@ MUTANTS = [
  ('verify-request-context','api.py',"proof['anchor'] == req['anchor'] and proof['kind'] == kind\n                      and proof['object_id'] == cert['duty'][name]", "True"),
  ('terminal-polling','api.py',"r.require(previous == current, 'terminal-state-regression')", "r.require(True, 'terminal-state-regression')"),
 
+ ('block-gap','lifecycle.py',"r.require(coordinate == parent['coordinate'] + 1 and coordinate < MAX_COORDINATE, 'block-gap')", "r.require(True, 'block-gap')"),
+ ('chunk-hash','transfer.py',"r.require(r.digest('object-chunk', ref['object_id']+bytes([index])+raw) == ref['chunk_hashes'][index], 'chunk-hash')", "r.require(True, 'chunk-hash')"),
+ ('transfer-budget','transfer.py',"r.require(len(self.pending) < 4 and ref['byte_length'] <= self.budget-self.reserved, 'transfer-budget')", "r.require(True, 'transfer-budget')"),
+ ('service-policy','api.py',"r.require(body['service_policy'] == policy['policy_id'], 'service-policy')", "r.require(True, 'service-policy')"),
 ]
 
 TARGETS = {
+ 'block-gap': 'test_freeze.FreezeTests.test_replay_requires_every_block_and_snapshot_is_read_only',
+ 'chunk-hash': 'test_freeze.FreezeTests.test_chunk_rejections_and_bounded_upload',
+ 'transfer-budget': 'test_freeze.FreezeTests.test_chunk_rejections_and_bounded_upload',
+ 'service-policy': 'test_freeze.FreezeTests.test_service_policy_and_component_separation',
+
  'c0-result-size': 'test_api_guards.ApiGuardTests.test_c0_sign_result_requires_exact_signature_size',
  'verified-signer-order': 'test_api_guards.ApiGuardTests.test_verified_summary_rejects_noncanonical_signers',
  'verify-request-context': 'test_api_guards.ApiGuardTests.test_verification_request_pins_both_context_proofs',
@@ -64,7 +73,7 @@ TARGETS = {
 }
 
 def execute(root, target=None):
-    qualified = target if target and target.startswith('test_api_guards.') else 'test_lifecycle_api.' + (target or '')
+    qualified = target if target and target.startswith(('test_api_guards.', 'test_freeze.')) else 'test_lifecycle_api.' + (target or '')
     arguments = [qualified, '-v'] if target else ['discover', '-p', 'test_*.py', '-v']
     return subprocess.run([sys.executable,'-B','-m','unittest',*arguments],
                           cwd=root/'test/validator-auth-p0',capture_output=True,text=True,timeout=90)

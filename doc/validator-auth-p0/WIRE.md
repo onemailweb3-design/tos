@@ -25,27 +25,27 @@ roleref = role:u8 key:keyref
 key VAK1 = identity:h role:u8 suite:u16 parameters:u16 epoch:u64 valid_from:u32 valid_until:u32 public_key:b16384 capacity_domain:h capacity_limit:u64
 policy VAP1 = revision:u64 previous:h interface_digest:h effective_from:u32 phase:u8 suites:l8/2/suite max_envelope:u32 max_certificate:u32
 member = identity:h stake_id:h weight:u64 adnl_id:h keys:l8/10/key
-committee VAM1 = policy:h election:h workchain:i32 shard:u64 catchain:u32 anchor_mc:u32 members:l16/1024/member
+committee VAM1 = policy:h election:h workchain:i32 shard:u64 catchain:u32 anchor_mc:u32 members:l16/400/member
 duty VAD1 = network:i32 genesis_root:h genesis_file:h policy:h committee:h session:h workchain:i32 shard:u64 anchor_mc:u32 catchain:u32 position:u64 role:u8 payload_hash:h
 statement VAS1 = duty:duty identity:h keys:l8/2/keyref
 envelope VAE1 = duty:duty payload:b4096 record:record
-certificate VAC1 = duty:duty payload:b4096 records:l16/1024/record
+certificate VAC1 = duty:duty payload:b4096 records:l16/400/record
 update VAU1 = operation:u8 identity:h nonce:u64 previous:h effective_from:u32 old_key:h new_key:b32768 new_policy:b4096 operation_data:b4096
 identity VAI1 = identity:h stake_id:h owner_workchain:i32 owner_address:h next_nonce:u64 previous:h active:l8/10/roleref pending:l8/10/transition
 activation VAT1 = revision:u64 previous:h next_policy:h effective_from:u32 checkpoint_seqno:u32 checkpoint_root:h checkpoint_file:h checkpoint_state:h
 observation VAO1 = suite:u16 parameters:u16 registry_root:h valid_from:u32 valid_until:u32 enabled:u8
 transition VATr = operation:u8 role:u8 suite:u16 parameters:u16 old_key:h new_key:h effective_from:u32 accepted_at:u32 nonce:u64 predecessor:h update_id:h authorization_id:h
 anchor VAB1 = seqno:u32 root:h file:h state:h
-proofref VAF1 = anchor:anchor kind:u8 object_id:h proof_hash:h proof:b1048576
+proofref VAF1 = anchor:anchor kind:u8 object_id:h proof_hash:h proof:object_value
 owner_auth VAOw = update_id:h stake_id:h owner_workchain:i32 owner_address:h proof:proofref
 possession_auth VAPo = update_id:h key:keyref signature:b65536
-identity_auth VAAd = update_id:h identity:h certificate:b524288
-governance_auth VAGo = update_id:h committee:h certificate:b524288
+identity_auth VAAd = update_id:h identity:h certificate:object_value
+governance_auth VAGo = update_id:h committee:h certificate:object_value
 authorizations VAA1 = owner:l8/1/owner_auth possession:l8/1/possession_auth administration:l8/1/identity_auth governance:l8/1/governance_auth
-permit_body VAPb = issuer:h audience:h network:i32 genesis_root:h genesis_file:h anchor:anchor registry_root:h policy:h committee:h session:h identity:h method:u8 subject:h expires_mc:u32 fence:u64
-permit VAPt = body:permit_body signature:b64
-receipt_body VARb = issuer:h audience:h request_id:h method:u8 subject:h result_hash:h journal_sequence:u64 fence:u64 state:u8 context_id:h
-receipt VARt = body:receipt_body signature:b64
+permit_body VAPb = issuer:h service_policy:h audience:h network:i32 genesis_root:h genesis_file:h anchor:anchor registry_root:h policy:h committee:h session:h identity:h method:u8 subject:h expires_mc:u32 fence:u64
+permit VAPt = body:permit_body components:l8/2/service_component
+receipt_body VARb = issuer:h service_policy:h audience:h request_id:h method:u8 subject:h result_hash:h journal_sequence:u64 fence:u64 state:u8 context_id:h
+receipt VARt = body:receipt_body components:l8/2/service_component
 capabilities VAc1 = interface_digest:h installed:l8/2/suite admitted:l8/2/suite max_request:u32 max_result:u32 persistent_journal:u8 fencing:u8 stateful:u8
 error VAEr = request_id:h method:u8 code:u16 retryable:u8 request_state:u8 message:b256
 cursor VACu = anchor:anchor query_id:h last_identity:h
@@ -56,8 +56,8 @@ profile_result VAPr = anchor:anchor interface_digest:h policy:h installed:l8/2/s
 policy_result VAPl = anchor:anchor policy:policy proof:proofref
 registry_result VARg = anchor:anchor query_id:h identities:l8/128/identity cursor:l8/1/cursor proof:proofref
 key_result VAKr = anchor:anchor key:key proof:proofref
-certificate_result VACr = anchor:anchor era:u8 interface_digest:h certificate:b524288 committee:proofref policy:proofref
-verify_result VAVr = anchor:anchor certificate_id:h policy:h committee:h duty:h signers:l16/1024/h weight:u64
+certificate_result VACr = anchor:anchor era:u8 interface_digest:h certificate:object_value committee:proofref policy:proofref
+verify_result VAVr = anchor:anchor certificate_id:h policy:h committee:h duty:h signers:l16/400/h weight:u64
 capabilities_request VAq1 =
 public_request VAq2 = key_id:h
 prepare_request VAq3 = preparation_id:h identity:h role:u8 suite:u16 parameters:u16 epoch:u64 valid_from:u32 valid_until:u32 mode:u8 provider_handle:h fence:u64
@@ -73,12 +73,20 @@ get_policy_request VAq9 = anchor:anchor policy_id:h
 get_registry_request VAqa = anchor:anchor limit:u8 cursor:l8/1/cursor
 get_key_request VAqb = anchor:anchor key_id:h
 get_certificate_request VAqc = anchor:anchor certificate_id:h
-verify_certificate_request VAqd = anchor:anchor certificate:b524288 committee:proofref policy:proofref
+verify_certificate_request VAqd = anchor:anchor certificate:object_value committee:proofref policy:proofref
 sign_result_body VASb = request_id:h statement_id:h record:record fence:u64
 prepare_result_body VAkb = prepared:key_handle
 stage_result_body VAsb = key:key possession:possession_auth
 retire_result_body VArb = key_id:h update_id:h
 profile_state VAPs = interface_digest:h policy:h active:l8/2/suite
+object_ref VAOr = kind:u8 byte_length:u32 object_id:h chunk_hashes:l8/64/h
+object_value VAOv = kind:u8 inline:b65536 reference:l8/1/object_ref
+chunk_request VAqe = anchor:anchor manifest:object_ref index:u8
+chunk_result VARe = anchor:anchor manifest_id:h index:u8 data:b1048576
+put_chunk_request VAqf = anchor:anchor manifest:object_ref index:u8 data:b1048576
+put_chunk_result VARf = anchor:anchor manifest_id:h index:u8
+service_component = suite:u16 parameters:u16 key_id:h signature:b65536
+service_policy VASp = issuer:h revision:u64 previous:h suites:l8/2/suite
 ```
 <!-- canonical-schema:end -->
 
@@ -159,7 +167,7 @@ complete VAS1 bytes**. Signature bytes are not in VAS1. Ed25519 signs neither JS
 a supplied prehash, a BOC file hash nor the old dataToSign wrapper. A future suite's
 internal preprocessing must be explicit and authenticate the same VAS1.
 
-VAE1 has one record. VAC1 has 1..1024 strictly identity-sorted records. Reject
+VAE1 has one record. VAC1 has 1..400 strictly identity-sorted records. Reject
 unknown/duplicate signers and nonmatching component profiles, key IDs or epochs.
 Complete structural/resource admission before expensive verification. Verify every
 included required signature, even surplus signatures after quorum. Return authorized
@@ -183,11 +191,17 @@ the new suite only; historical signatures retain their historical rules.
 ## 5. Bounds and canonical cells
 
 Hard caps: public key 16384 bytes; component 65536; components 2; keys/member 10;
-members/signers 1024; payload 4096; canonical object 8388608; envelope 262144.
+members/signers 400; payload 4096; canonical object 33554432; envelope 262144.
 C0 has the tighter policy caps above. A future activation must prove that the
 entire selected committee fits its active budgets; do not trim weight/signers to
-fit. The outer contract fits ML-DSA-44-sized material, not every future algorithm
-at maximum committee size. Larger requirements need a reviewed profile version.
+fit. TOS fixes max_validators=400; profile admission rejects Config16 values
+above 400. Archives may retain more than 400 historical identities. C2 has exactly
+one classical and one approved PQ component per role; C3 has one approved PQ
+component. At 400 members, a C2 certificate with 65536-byte PQ signatures is
+26295943 bytes and a five-role C2 committee with 16384-byte PQ public keys is
+33294094 bytes. Both fit 32 MiB. These are container bounds, not an algorithm
+approval or an active network budget. Larger keys/signatures or a third component
+require version 2; supporting every possible future algorithm is not promised.
 
 AuthBytes has version=1, byte_length, SHA-256(raw canonical payload) and one root
 reference. Only ordinary level-0 cells occur inside it. A leaf is tag 0, seven-bit
@@ -197,21 +211,27 @@ For a nonleaf size n choose the smallest capacity `120*4^k` with `n <= 4*capacit
 split into full capacity chunks and one possibly shorter last chunk, recursively.
 No empty leaves, single-child branches, alternate balancing or trailing content.
 
-Limit depth to nine edges below the byte-node root (ten including AuthBytes),
-100000 logical node occurrences and 12582912 serialized BOC bytes. Shared equal
+Limit depth to ten edges below the byte-node root (eleven including AuthBytes),
+400000 logical node occurrences and 67108864 serialized BOC bytes. Shared equal
 cells are allowed but every occurrence counts; deduplication cannot evade budgets.
 Reject cycles/exotic cells. Authenticated Merkle-proof wrappers may exist outside
 AuthBytes. Hash reconstructed bytes for object IDs, not BOC index/CRC packaging.
-The logical-tree oracle does not substitute for native BOC acceptance tests.
+At 32 MiB the canonical tree has 279621 leaves and 93210 branches (372831
+occurrences). Native generated TL-B validation and BOC round trips, including
+the maximum and malformed cells, are exercised by native-boc.cpp.
 
 ## 6. Native TL and legacy formats
 
-The six explicit IDs in wire.tl wrap VAE1/VAC1/VAK1/VAP1/VAM1/VAU1 in `data:bytes`.
+The six explicit IDs in wire.tl carry canonical VAOv in `data:bytes`, resolving
+to VAE1/VAC1/VAK1/VAP1/VAM1/VAU1 respectively (kind 6/4/1/2/3/7).
+API-CONTRACT.md specifies the unique inline/manifest form and chunk resolution.
 TL encodes constructor IDs little-endian. Its bytes length must be minimal: one
 byte for <254, otherwise 254 plus three little-endian length bytes; zero padding;
-no trailing bytes. The 8 MiB bound fits this representation.
+no trailing bytes. A TL bytes field is at most 0xffffff bytes; the bounded VAOv
+carrier fits it even when the resolved object exceeds that limit. No raw large
+canonical object may be placed directly in this field.
 Import constructors alongside, never instead of, historical ones. A native TL
 parser must accept the combined schema before implementation. The generic bytes
 field is not itself a validator: typed decoding and trusted policy verification
-remain mandatory. Native TL-B/BOC and C++/Rust differential execution remain
-explicit production implementation gates.
+remain mandatory. The focused native harness and independent C++/Rust structural codecs test this
+contract. Production node, state/proof and service integration remain separate gates.

@@ -1,13 +1,14 @@
 # Canonical signer and client contract
 
-Status: normative review candidate; no service or network is activated.
+Status: frozen design v1, revision 3; no service or network is activated.
 [canonical-schema.json](canonical-schema.json) is the sole binary encoding authority.
 [transport.schema.json](transport.schema.json) defines the thin JSON shape only.
 The reference decoder reads the ordered field arrays directly. Integers, tag/version/
 flags, lists and blobs use WIRE.md primitives. Each method has exactly one request
 and one success type plus VAEr. There is no peer-selected type name or loose JSON
-payload. All 13 method numbers and paths are assigned in the schema. Numbers 1..7
-are signer methods, 8..13 are the six client RPCs. Unknown numbers/versions fail.
+payload. All 15 method numbers and paths are assigned in the schema. Numbers 1..7
+are signer methods, 8..13 are client RPCs, and 14/15 are bounded object download/
+upload methods shared by clients and signers. Unknown numbers/versions fail.
 
 ## Framing and correlation
 
@@ -98,13 +99,21 @@ validated native apply path; this profile adds no unauthenticated submit endpoin
 ## Context permits and durable receipts
 
 VAPt and VARt are service evidence, **not any of the four chain authorizations**.
-Version 1 authenticates their respective canonical VAPb/VARb bytes with Pure
-Ed25519 using the WIRE.md exact acceptance rules. The local installation provisions
-separate trusted issuer-ID/public-key maps for consensus-adapter permits and signer
-journal receipts. IDs are H(service-key, public_key). Audience is the configured
-service/client principal ID. Unknown issuer or version is rejected; a supplied key
-or an on-chain validator key cannot bootstrap trust. This C0 service mechanism
-makes no PQ claim; a future service-auth upgrade requires a versioned contract.
+Their canonical bodies bind H(service_policy,VASp). Each carries an ordered
+list of 1..2 service_component values (suite, parameters, key_id, signature).
+Separate locally trusted permit and receipt policies map the stable issuer
+principal to its policy ID, exact required component list and public keys.
+The received list must equal that required list, sorted and unique; every
+component verifies the complete canonical body. Issuer identity and signing key
+identity are separate. C0 admits only Pure Ed25519 (1,1), exactly 64 signature
+bytes, under WIRE rules; the reference supports no unallocated PQ suite.
+A future approved suite can use the existing bounded slots without a wire upgrade.
+Service policy revisions start at 1 with zero predecessor and advance by one
+with the previous policy hash; installation/rotation is authenticated by the
+independent service trust mechanism, never by a peer-supplied policy. Retained
+receipts use their explicitly retained trusted historical policy and frontier.
+Audience is the configured service/client principal. Unknown issuer, policy or
+version fails. An on-chain validator key cannot bootstrap service trust.
 
 Permit binds independently established network/genesis, full masterchain anchor,
 registry root, policy, committee, session, identity, method, subject, audience and
@@ -143,7 +152,7 @@ verify retained original request/permit context to validate its embedded receipt
 VAEr codes are the 14 fixed schema allocations. request_state additionally allows
 UNKNOWN=4 **only in errors**; unknown state must not be reported as ABSENT. Message
 is <=256 UTF-8 bytes, diagnostic only. retryable=1 exactly for codes 10/11/12 on
-reads (1/2/6/8..13), otherwise 0. Automatic retry never creates a new sign/preparation/
+reads (1/2/6/8..14) and identical idempotent chunk uploads (15), otherwise 0. Automatic retry never creates a new sign/preparation/
 stage/retirement invocation. Backend failure cannot select weaker crypto.
 
 ## Snapshot, cursor and proof references
@@ -153,8 +162,8 @@ establish that block's validity/finality and its state commitment. All nonzero
 hashes and all proofs/results/cursors must match this **entire** anchor, not just
 height. Local/floating latest state is forbidden for verification.
 
-VAF1 includes this anchor, kind, exact object ID, H(proof,proof bytes) and <=1 MiB
-native proof BOC. Kind assignments: 1 owner approval execution; 2 policy dictionary
+VAF1 includes this anchor, kind, exact object ID, H(proof,proof bytes) and a
+VAOv of transfer kind 5 resolving to at most 64 MiB of native proof BOC. Kind assignments: 1 owner approval execution; 2 policy dictionary
 entry; 3 identity dictionary range; 4 key dictionary entry; 5 committee snapshot;
 6 Config46 profile. For kind 6, object ID is H(profile_state,VAPs), binding
 interface digest, selected policy ID and ordered active suites proved from
@@ -182,7 +191,48 @@ reordered identities, skipped entries, and false terminal pages fail. Accumulate
 only pages whose native range proof verifies. The empty final page is explicit,
 not an absent/malformed response disguised as completion.
 
-C0 certificate transport cap is 524288 bytes, not the 8 MiB generic object cap.
-Returning larger future certificates needs a reviewed API/profile change; there
-is no private fragmentation scheme in v1. Native C++/Rust, remote service, journal
-witness, BOC proof and full multi-node execution remain production gates.
+C0 retains a 524288-byte active certificate budget. The generic carrier supports
+32 MiB canonical objects without changing that policy. Remote service, journal
+witness, authenticated BOC proofs and full multi-node execution remain production gates.
+
+
+## Canonical bounded object transfer
+
+VAOv is the only carrier for certificate and native-proof attachments and new TL
+wrappers. Transfer kinds are 1 key, 2 policy, 3 committee, 4 certificate, 5 proof
+BOC, 6 envelope, 7 update; these are distinct from proofref semantic kinds.
+A nonempty object of <=65536 bytes MUST be inline with no reference. A larger
+object MUST have empty inline and exactly one VAOr. Carrier and manifest kinds
+must match the expected field. Canonical objects are <=33554432 bytes; proof BOCs
+are <=67108864 bytes. These limits never relax active policy or native proof limits.
+
+VAOr binds kind, exact byte length, H(kind-domain, complete object) and ordered
+chunk hashes. The kind domains are key/policy/committee/certificate/proof/envelope/
+update. Chunk size is 1048576; count is exactly ceil(length/chunk_size), at most
+32 for canonical objects or 64 for proof BOCs. All chunks except the last are full.
+Chunk i hashes H(object-chunk, object_id:h || i:u8 || chunk_bytes). No alternate
+partition, missing/repeated index, extra tail or compression is accepted. Verify
+each chunk, then full object hash, then canonical decode and semantic authentication.
+Hash consistency supplies integrity only, never authority or proof validity.
+
+Method 14 getObjectChunk and method 15 putObjectChunk use the paths and types in
+the machine schema. Both bind the exact request anchor, manifest and zero-based
+index. Results echo the entire anchor, H(object_ref,VAOr) and index; download
+returns the exact chunk; upload acknowledges only its bounded storage. Neither
+acknowledges chain inclusion or signing. A missing object gives HISTORY_UNAVAILABLE;
+object-storage quota exhaustion gives STORAGE_UNAVAILABLE (10). An identical upload is idempotent.
+After upload, the ordinary typed request uses the same VAOv manifest; the service
+resolves it before request validation or any authorized stateful primitive.
+
+Authenticate the transport principal and apply admission quotas before allocation
+or fetching. A principal may reserve at most four partial objects and 64 MiB total;
+reserve the full advertised length at first chunk. Aggregate resolved attachments
+per request are also <=64 MiB, with bounded streaming or one bounded buffer.
+Implementations enforce a finite global quota and timeout and may return a bounded
+error on exhaustion. Completion, explicit local eviction or timeout releases
+storage only, never signer capacity or duty reservations. Retained completed objects
+remain subject to the same total storage budget; moving a buffer is not a refund.
+Chunk lookup is restricted to the admitted object and principal/anchor context;
+it is not a URL fetch or arbitrary storage API. ACLs protect service-specific data.
+The Receiver oracle models partial storage and integrity; production implements
+transport authentication, aggregate quotas, expiry and completed-object retention.

@@ -1,4 +1,4 @@
-"""Archive exact committed inputs needed to reproduce every profile CI check."""
+"""Archive exact committed inputs needed to reproduce the profile reference CI checks (native dependencies are pinned by source commit)."""
 import argparse
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ def main():
     args = parser.parse_args()
     baseline = json.loads((ROOT/'test/validator-auth-p0/production-baseline.json').read_text())
     paths = set(baseline['source_sha256']) | {
-        'doc/validator-auth-p0', 'test/validator-auth-p0', 'third-party/tl-parser',
+        'doc/validator-auth-p0', 'doc/validator-auth-p0-freeze.json', 'test/validator-auth-p0', 'third-party/tl-parser',
         'tl/generate/scheme', 'validator/consensus', 'AGENTS.md',
         '.github/workflows/validator-auth-p0-profile.yml'}
     args.out.parent.mkdir(parents=True, exist_ok=True)

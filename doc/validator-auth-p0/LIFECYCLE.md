@@ -86,12 +86,18 @@ Apply each masterchain block in this order:
    increments once per block with any identity/key change (including due effects),
    checked for overflow; transaction order never depends on map iteration.
 
-A snapshot compiled from an older authenticated checkpoint uses the same deterministic
-advance to its anchor. This is derived state, not a write from a verifier. A chain
-replay must traverse authenticated coordinates monotonically; selecting a historical
-anchor needs its historical root, never moving a current state backwards. Applying
-the same due batch twice is idempotent. Checkpoint/archive inputs and their roots
-are authenticated externally; canonical decoding alone does not establish that.
+The public reference transition is apply_block(parent, parent.coordinate+1,
+ordered_successful_updates). Every intervening block, including empty blocks,
+must be replayed. A jump from checkpoint 150 to 210 is forbidden: effects at 200
+and 210 must create their separate predecessor links and registry revisions.
+Replaying the same blocks with checkpoints at different places produces identical
+bytes. A snapshot is a read-only selection from the authenticated resulting state
+at its exact anchor; it never advances a registry or rewrites previous. An overdue
+pending transition proves that the supplied snapshot state is not current. The
+private per-block due helper is not a checkpoint advancement API. Native integration
+supplies the authenticated complete ordered list of accepted operations; invalid
+inputs fail atomically. Checkpoint/archive roots are authenticated externally;
+canonical decoding alone does not establish them. Old snapshots remain immutable.
 
 Register requires no active key in that role/profile; rotate requires the exact
 currently active old key and a new key in the **same** role/profile; retire requires

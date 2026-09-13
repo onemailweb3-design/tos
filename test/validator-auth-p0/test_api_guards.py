@@ -3,6 +3,7 @@ import copy
 import unittest
 
 import api
+import transfer as tr
 import reference as r
 import vectors
 from test_lifecycle_api import ZERO, h, shape, anchor, proof
@@ -38,7 +39,7 @@ class ApiGuardTests(unittest.TestCase):
             if mode == 'empty': changed['records'] = []
             if mode == 'zero': changed['records'][0]['identity'] = ZERO
             raw = r.encode('certificate', changed); duty = changed['duty']
-            req = dict(anchor=anchor(), certificate=raw,
+            req = dict(anchor=anchor(), certificate=tr.value(raw, 4),
                        committee=proof(5, duty['committee']), policy=proof(2, duty['policy']))
             result = dict(anchor=anchor(), certificate_id=r.digest('certificate', raw),
                           policy=duty['policy'], committee=duty['committee'], duty=r.object_id('duty', duty),
@@ -52,7 +53,7 @@ class ApiGuardTests(unittest.TestCase):
     def test_verification_request_pins_both_context_proofs(self):
         fixtures = vectors.build(); raw = bytes.fromhex(fixtures['cases'][0]['certificate'])
         duty = r.decode('certificate', raw)['duty']
-        req = dict(anchor=anchor(), certificate=raw,
+        req = dict(anchor=anchor(), certificate=tr.value(raw, 4),
                    committee=proof(5, duty['committee']), policy=proof(2, duty['policy']))
         api.validate_request(13, req)
         for name in ('committee', 'policy'):

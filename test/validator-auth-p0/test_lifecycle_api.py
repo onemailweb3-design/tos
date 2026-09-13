@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import unittest
 import api
+import transfer as tr
 import lifecycle as lc
 import reference as r
 import vectors
@@ -13,6 +14,21 @@ from ed25519_oracle import Verifier
 h = vectors.h
 ZERO = bytes(32)
 HERE = Path(__file__).resolve().parent
+
+
+def service_trust(public):
+    issuer = r.digest('service-key', public)
+    policy = r.object_id('service_policy', dict(issuer=issuer, revision=1, previous=ZERO, suites=[dict(suite=1,parameters=1)]))
+    ref = (1, 1, issuer)
+    return {issuer: dict(policy_id=policy, required=[ref], keys={ref:public})}
+
+
+def service_sign(kind, body):
+    public, _ = vectors.sign(h(1), b'fixture')
+    trust = service_trust(public)
+    body['service_policy'] = trust[body['issuer']]['policy_id']
+    _, signature = vectors.sign(h(1), r.encode(kind+'_body', body))
+    return dict(body=body, components=[dict(suite=1,parameters=1,key_id=body['issuer'],signature=signature)])
 
 
 def key(role=1, epoch=1, start=0):
@@ -39,7 +55,7 @@ def update(state, archive, op=2, effective=200, role=1, nonce=None):
 def proof(kind=1, object_id=None):
     raw = b'authenticated-proof-fixture'
     return dict(anchor=anchor(), kind=kind, object_id=h(5) if object_id is None else object_id,
-                proof_hash=r.digest('proof', raw), proof=raw)
+                proof_hash=r.digest('proof', raw), proof=tr.value(raw, 5))
 
 
 def anchor():
@@ -52,15 +68,21 @@ def evidence(u, state):
                  owner_address=state['owner_address'], proof=proof())
     possession = dict(update_id=uid, key=r.keyref(r.decode('key', u['new_key'])), signature=h(8)*2) if u['new_key'] else None
     return dict(owner=[owner] if u['operation'] in (1, 2) else [], possession=[possession] if possession else [],
-                administration=[dict(update_id=uid, identity=state['identity'], certificate=b'authenticated-admin-fixture')], governance=[])
+                administration=[dict(update_id=uid, identity=state['identity'], certificate=tr.value(b'authenticated-admin-fixture', 4))], governance=[])
 
 
 VERIFIERS = {n: lambda *args: True for n in ('owner', 'possession', 'administration', 'governance')}
 
 
 def apply(state, archive, u, at=100, auth=None, verifiers=None):
-    return lc.apply(state, archive, u, evidence(u, state) if auth is None else auth, at,
+    return lc.apply(lc._apply_due(state, archive, at), archive, u, evidence(u, state) if auth is None else auth, at,
                     VERIFIERS if verifiers is None else verifiers, lambda k: Verifier().admit(k['public_key']) and (k['suite'], k['parameters']) == (1, 1))
+
+
+def snapshot(state, archive, at, required):
+    # Isolated phase tests supply a state after due effects. Production snapshots
+    # require a proved state at the exact anchor, tested by apply_block separately.
+    return lc.snapshot(lc._apply_due(state, archive, at), archive, at, required)
 
 
 def shape(t):
@@ -94,7 +116,7 @@ def golden():
     # admission/authorization scenarios are executed separately below.
     objects = {n: r.encode(n, wire_shape(n, n)).hex() for n in r.SCHEMAS}
     s, a = initial(); u = update(s, a); staged, a = apply(s, a, u)
-    history = {str(n): r.encode('identity', lc.advance(staged, a, n)).hex() for n in (199, 200, 201)}
+    history = {str(n): r.encode('identity', lc._apply_due(staged, a, n)).hex() for n in (199, 200, 201)}
     return dict(scope='Ordered binary structural vectors plus lifecycle state snapshots; proof fixture bytes are not native Merkle evidence',
                 objects=objects, lifecycle=history, negatives=[
                     dict(kind='capabilities_request',hex='5641713100020000',error='version'),
@@ -106,29 +128,30 @@ def golden():
 
 class LifecycleTests(unittest.TestCase):
     def test_before_exact_after_replay_and_old_session(self):
-        s, a = initial(); old_session = lc.snapshot(s, a, 100, [(1, 1, 1)])
+        s, a = initial(); old_session = snapshot(s, a, 100, [(1, 1, 1)])
         staged, a = apply(s, a, update(s, a))
-        self.assertEqual(lc.snapshot(staged, a, 199, [(1, 1, 1)])[0]['epoch'], 1)
+        self.assertEqual(snapshot(staged, a, 199, [(1, 1, 1)])[0]['epoch'], 1)
+        self.assertFalse(lc._apply_due(staged, a, 200)['pending'])
         for at in (200, 201):
-            self.assertEqual(lc.snapshot(staged, a, at, [(1, 1, 1)])[0]['epoch'], 2)
+            self.assertEqual(snapshot(staged, a, at, [(1, 1, 1)])[0]['epoch'], 2)
         reloaded = r.decode('identity', r.encode('identity', staged))
-        self.assertEqual(lc.advance(reloaded, a, 200), lc.advance(staged, a, 200))
+        self.assertEqual(lc._apply_due(reloaded, a, 200), lc._apply_due(staged, a, 200))
         self.assertEqual(old_session[0]['epoch'], 1)
-        first = lc.snapshot(s, a, 100, [(1, 1, 1)])
+        first = snapshot(s, a, 100, [(1, 1, 1)])
         archive_key = a[r.object_id('key', first[0])]
         saved_epoch = archive_key['epoch']; archive_key['epoch'] = 77
         self.assertEqual(first[0]['epoch'], 1)
         archive_key['epoch'] = saved_epoch
-        done = lc.advance(staged, a, 200)
-        self.assertEqual(lc.advance(done, a, 201), done)
+        done = lc._apply_due(staged, a, 200)
+        self.assertEqual(lc._apply_due(done, a, 201), done)
         self.assertEqual(done['next_nonce'], staged['next_nonce'])
 
     def test_unrelated_change_does_not_invalidate_accepted_schedule(self):
         s, a = initial(); staged, a = apply(s, a, update(s, a))
         other, a = apply(staged, a, update(staged, a, role=2, effective=210), 150)
         self.assertNotEqual(other['previous'], staged['previous'])
-        self.assertEqual(lc.snapshot(other, a, 200, [(1, 1, 1)])[0]['epoch'], 2)
-        self.assertEqual(lc.snapshot(other, a, 210, [(2, 1, 1)])[0]['epoch'], 2)
+        self.assertEqual(snapshot(other, a, 200, [(1, 1, 1)])[0]['epoch'], 2)
+        self.assertEqual(snapshot(other, a, 210, [(2, 1, 1)])[0]['epoch'], 2)
 
     def test_explicit_cancel_and_conflict_no_silent_replace(self):
         s, a = initial(); staged, a = apply(s, a, update(s, a))
@@ -142,7 +165,7 @@ class LifecycleTests(unittest.TestCase):
         canceled, saved = apply(staged, a, cancel, 199)
         self.assertEqual(canceled['pending'], [])
         self.assertEqual(saved, a)
-        self.assertEqual(lc.snapshot(canceled, saved, 200, [(1, 1, 1)])[0]['epoch'], 1)
+        self.assertEqual(snapshot(canceled, saved, 200, [(1, 1, 1)])[0]['epoch'], 1)
         replacement = update(canceled, saved, effective=300)
         with self.assertRaisesRegex(r.Refusal, 'epoch'):
             apply(canceled, saved, replacement, 199)
@@ -152,7 +175,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(len(replaced['pending']), 1)
         with self.assertRaisesRegex(r.Refusal, 'predecessor'):
             apply(staged, a, cancel, 200)
-        cancel['previous'] = r.object_id('identity', lc.advance(staged, a, 200))
+        cancel['previous'] = r.object_id('identity', lc._apply_due(staged, a, 200))
         with self.assertRaisesRegex(r.Refusal, 'cancel-target'):
             apply(staged, a, cancel, 200)
         cancel['operation_data'] = h(99)
@@ -163,13 +186,13 @@ class LifecycleTests(unittest.TestCase):
     def test_retire_immediate_scheduled_and_key_validity(self):
         s, a = initial()
         retired, a = apply(s, a, update(s, a, op=3))
-        self.assertEqual(len(lc.snapshot(retired, a, 199, [(1, 1, 1)])), 1)
+        self.assertEqual(len(snapshot(retired, a, 199, [(1, 1, 1)])), 1)
         with self.assertRaisesRegex(r.Refusal, 'snapshot-missing'):
-            lc.snapshot(retired, a, 200, [(1, 1, 1)])
+            snapshot(retired, a, 200, [(1, 1, 1)])
         immediate, _ = apply(s, a, update(s, a, op=3, effective=0), 123)
         self.assertEqual(len(immediate['active']), 4)
         with self.assertRaisesRegex(r.Refusal, 'snapshot-validity'):
-            lc.snapshot(s, a, 1000, [(1, 1, 1)])
+            snapshot(s, a, 1000, [(1, 1, 1)])
 
     def test_nonce_predecessor_boundaries_and_atomic_refusal(self):
         s, a = initial(); original = copy.deepcopy((s, a))
@@ -199,7 +222,7 @@ class LifecycleTests(unittest.TestCase):
             with self.subTest(denied=name), self.assertRaisesRegex(r.Refusal, 'authority-'+name):
                 apply(s, a, u, verifiers=deny)
         auth = evidence(u, s)
-        auth['governance'] = [dict(update_id=r.object_id('update', u), committee=h(5), certificate=b'proof')]
+        auth['governance'] = [dict(update_id=r.object_id('update', u), committee=h(5), certificate=tr.value(b'proof', 4))]
         with self.assertRaisesRegex(r.Refusal, 'authority-shape'):
             apply(s, a, u, auth=auth)
         auth = evidence(u, s); auth['administration'][0]['update_id'] = h(9)
@@ -212,18 +235,18 @@ class LifecycleTests(unittest.TestCase):
                                  ('new_key', h(9), 'pending-key'), ('operation', 7, 'pending-operation')]:
             bad = copy.deepcopy(staged); bad['pending'][0][field] = val
             with self.subTest(field=field), self.assertRaisesRegex(r.Refusal, code):
-                lc.advance(bad, a, 200)
+                lc._apply_due(bad, a, 200)
         bad = copy.deepcopy(staged); bad['pending'] *= 2
         with self.assertRaisesRegex(r.Refusal, 'state-order'):
-            lc.advance(bad, a, 200)
+            lc._apply_due(bad, a, 200)
         bad['pending'] *= 6
         with self.assertRaisesRegex(r.Refusal, 'list-bound'):
-            lc.advance(bad, a, 200)
+            lc._apply_due(bad, a, 200)
 
     def test_register_after_retirement_uses_historical_epoch(self):
         s, a = initial(); retired, a = apply(s, a, update(s, a, op=3, effective=0))
         registered, a = apply(retired, a, update(retired, a, op=1, effective=150))
-        self.assertEqual(lc.snapshot(registered, a, 150, [(1, 1, 1)])[0]['epoch'], 2)
+        self.assertEqual(snapshot(registered, a, 150, [(1, 1, 1)])[0]['epoch'], 2)
 
 
 class ApiTests(unittest.TestCase):
@@ -248,7 +271,7 @@ class ApiTests(unittest.TestCase):
                             r.decode(name, bytes(bad))
 
     def test_endpoint_inventory_and_transport_responses(self):
-        self.assertEqual(len(api.METHODS), 13)
+        self.assertEqual(len(api.METHODS), 15)
         for method, definition in api.METHODS.items():
             method = int(method); result = shape(definition['result']); rid = h(4)
             encoded = api.encode_transport(method, result, response=True, rid=rid)
@@ -256,7 +279,7 @@ class ApiTests(unittest.TestCase):
             with self.assertRaisesRegex(r.Refusal, 'response-correlation'):
                 api.decode_transport(encoded, method, response=True, expected_id=h(5))
             for code in range(1, 15):
-                retry = int(method in (1,2,6,8,9,10,11,12,13) and code in (10,11,12))
+                retry = int(method in (1,2,6,8,9,10,11,12,13,14,15) and code in (10,11,12))
                 error = dict(request_id=rid, method=method, code=code, retryable=retry, request_state=4, message=b'diagnostic')
                 encoded = api.encode_transport(method, error, response=True, rid=rid, error=True)
                 self.assertEqual(api.decode_transport(encoded, method, response=True, expected_id=rid)[2], error)
@@ -349,7 +372,7 @@ class ApiTests(unittest.TestCase):
         api.verify_proof(p, anchor(), 1, h(5), lambda _: True)
         with self.assertRaisesRegex(r.Refusal, 'proof-authentication'):
             api.verify_proof(p, anchor(), 1, h(5), lambda _: False)
-        for field, val, code in [('kind', 2, 'proof-binding'), ('object_id', h(9), 'proof-binding'), ('proof', b'x', 'proof-hash')]:
+        for field, val, code in [('kind', 2, 'proof-binding'), ('object_id', h(9), 'proof-binding'), ('proof', tr.value(b'x', 5), 'proof-hash')]:
             bad = copy.deepcopy(p); bad[field] = val
             with self.assertRaisesRegex(r.Refusal, code):
                 api.verify_proof(bad, anchor(), 1, h(5), lambda _: True)
@@ -362,17 +385,17 @@ class ApiTests(unittest.TestCase):
             if kind == 'permit':
                 body['anchor'] = anchor(); body['expires_mc'] = 128
             wire = r.encode(kind+'_body', body)
-            _, obj['signature'] = vectors.sign(h(1), wire)
+            obj = service_sign(kind, body)
             expected = {k: v for k, v in body.items() if k != 'issuer'}
-            verify(obj, expected, {issuer: public}, verifier, **options)
+            verify(obj, expected, service_trust(public), verifier, **options)
             with self.assertRaisesRegex(r.Refusal, kind+'-issuer'):
                 verify(obj, expected, {}, verifier, **options)
             bad = copy.deepcopy(expected); bad['audience'] = h(9)
             with self.assertRaisesRegex(r.Refusal, 'permit-context|receipt-binding'):
-                verify(obj, bad, {issuer: public}, verifier, **options)
-            obj['signature'] = h(3)*2
+                verify(obj, bad, service_trust(public), verifier, **options)
+            obj['components'][0]['signature'] = h(3)*2
             with self.assertRaisesRegex(r.Refusal, kind+'-signature'):
-                verify(obj, expected, {issuer: public}, verifier, **options)
+                verify(obj, expected, service_trust(public), verifier, **options)
 
     def test_all_endpoint_semantic_pairs_and_single_field_mutations(self):
         fixtures = vectors.build(); policy = r.decode('policy', bytes.fromhex(fixtures['policy']))
@@ -390,7 +413,7 @@ class ApiTests(unittest.TestCase):
             8: dict(anchor=anchor()), 9: dict(anchor=anchor(), policy_id=r.object_id('policy', policy)),
             10: dict(anchor=anchor(), limit=2, cursor=[]), 11: dict(anchor=anchor(), key_id=kid),
             12: dict(anchor=anchor(), certificate_id=r.digest('certificate', cert)),
-            13: dict(anchor=anchor(), certificate=cert, committee=proof(5, duty['committee']), policy=proof(2, duty['policy']))}
+            13: dict(anchor=anchor(), certificate=tr.value(cert, 4), committee=proof(5, duty['committee']), policy=proof(2, duty['policy']))}
         results = {
             1: dict(interface_digest=policy['interface_digest'], installed=[dict(suite=1,parameters=1)], admitted=[dict(suite=1,parameters=1)], max_request=api.MAX_BINARY, max_result=api.MAX_BINARY, persistent_journal=1, fencing=1, stateful=0),
             2: k, 3: dict(prepared=dict(key=k,handle=h(1)),receipt=shape('receipt')),
@@ -401,7 +424,7 @@ class ApiTests(unittest.TestCase):
             9: dict(anchor=anchor(), policy=policy, proof=proof(2,r.object_id('policy',policy))),
             10: dict(anchor=anchor(), query_id=api.query_id(anchor(),2), identities=[state], cursor=[], proof=proof()),
             11: dict(anchor=anchor(), key=k, proof=proof(4,kid)),
-            12: dict(anchor=anchor(), era=1, interface_digest=policy['interface_digest'], certificate=cert, committee=proof(5,duty['committee']), policy=proof(2,duty['policy'])),
+            12: dict(anchor=anchor(), era=1, interface_digest=policy['interface_digest'], certificate=tr.value(cert, 4), committee=proof(5,duty['committee']), policy=proof(2,duty['policy'])),
             13: dict(anchor=anchor(), certificate_id=r.digest('certificate',cert), policy=duty['policy'], committee=duty['committee'], duty=r.object_id('duty',duty), signers=[h(11),h(12),h(13)],weight=3)}
         results[8]['proof'] = proof(6,r.object_id('profile_state',{k:results[8][k] for k in ('interface_digest','policy','active')}))
         results[10]['proof'] = proof(3, api.registry_page_id(requests[10],results[10]))
@@ -438,20 +461,19 @@ class ApiTests(unittest.TestCase):
         body=dict(issuer=issuer,audience=h(8),request_id=api.request_id(3,req),method=3,
                   subject=r.digest('api-subject',r.encode('prepare_request',req)),result_hash=api.result_hash(3,result),
                   journal_sequence=1,fence=1,state=2,context_id=ZERO)
-        _,signature=vectors.sign(h(1),r.encode('receipt_body',body))
-        result['receipt']=dict(body=body,signature=signature)
-        api.verify_result_receipt(3,req,result,h(8),{issuer:public},Verifier())
+        result['receipt']=service_sign('receipt', body)
+        api.verify_result_receipt(3,req,result,h(8),service_trust(public),Verifier())
         result['prepared']['handle']=h(2)
         with self.assertRaisesRegex(r.Refusal,'receipt-binding'):
-            api.verify_result_receipt(3,req,result,h(8),{issuer:public},Verifier())
+            api.verify_result_receipt(3,req,result,h(8),service_trust(public),Verifier())
         permit=shape('permit');permit['body'].update(issuer=issuer,anchor=anchor(),expires_mc=110)
-        _,permit['signature']=vectors.sign(h(1),r.encode('permit_body',permit['body']))
+        permit=service_sign('permit',permit['body'])
         expected={k:v for k,v in permit['body'].items() if k!='issuer'}
         for at in (100,110):
-            api.verify_permit(permit,expected,{issuer:public},Verifier(),at)
+            api.verify_permit(permit,expected,service_trust(public),Verifier(),at)
         for at in (99,111):
             with self.assertRaisesRegex(r.Refusal,'permit-current-coordinate'):
-                api.verify_permit(permit,expected,{issuer:public},Verifier(),at)
+                api.verify_permit(permit,expected,service_trust(public),Verifier(),at)
 
 
 if __name__ == '__main__':

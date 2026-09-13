@@ -50,8 +50,8 @@ def validate_state(state, archive):
                       and key['valid_from'] == p['effective_from'] < key['valid_until'], 'pending-key')
 
 
-def advance(state, archive, coordinate):
-    """Materialize due records before block operations or snapshot construction.
+def _apply_due(state, archive, coordinate):
+    """Private due phase of one consecutive block, before its operations.
 
     coordinate and monotonic replay position belong to the authenticated block,
     never an operator timer. Returns a new value; old session snapshots are owned.
@@ -103,7 +103,9 @@ def apply(state, archive, update, evidence, inclusion, verifiers, admit_key):
     and signatures. Allocation/genesis and global governance use separate paths.
     """
     r.encode('update', update)
-    current = advance(state, archive, inclusion)
+    current = deepcopy(state)
+    validate_state(current, archive)
+    r.require(all(p['effective_from'] > inclusion for p in current['pending']), 'due-phase-required')
     op = update['operation']
     r.require(op in (1, 2, 3, 7) and update['identity'] == current['identity'], 'operation-target')
     r.require(current['next_nonce'] <= update['nonce'] < MAX_NONCE, 'nonce')
@@ -167,7 +169,9 @@ def apply(state, archive, update, evidence, inclusion, verifiers, admit_key):
 
 
 def snapshot(state, archive, anchor, required):
-    materialized = advance(state, archive, anchor)
+    validate_state(state, archive)
+    r.require(all(p['effective_from'] > anchor for p in state['pending']), 'snapshot-state-not-current')
+    materialized = state
     active = {ref_slot(x): x['key']['key_id'] for x in materialized['active']}
     selected = []
     for wanted in required:
@@ -176,3 +180,25 @@ def snapshot(state, archive, anchor, required):
         r.require(key['valid_from'] <= anchor < key['valid_until'], 'snapshot-validity')
         selected.append(deepcopy(key))
     return selected
+
+
+def apply_block(parent, coordinate, updates, verifiers, admit_key):
+    """Only authenticated consecutive blocks may create registry state.
+
+    The native integration authenticates the parent block/state and supplies the
+    successful administrative operations in their committed execution order.
+    """
+    r.require(coordinate == parent['coordinate'] + 1 and coordinate < MAX_COORDINATE, 'block-gap')
+    out = deepcopy(parent)
+    out['coordinate'] = coordinate
+    for identity in sorted(out['identities']):
+        out['identities'][identity] = _apply_due(out['identities'][identity], out['archive'], coordinate)
+    for identity, update, evidence in updates:
+        r.require(identity in out['identities'], 'identity-allocation')
+        out['identities'][identity], out['archive'] = apply(out['identities'][identity], out['archive'], update,
+                                                          evidence, coordinate, verifiers, admit_key)
+    changed = out['identities'] != parent['identities'] or out['archive'] != parent['archive']
+    if changed:
+        r.require(out['registry_revision'] < MAX_NONCE, 'registry-revision')
+        out['registry_revision'] += 1
+    return out

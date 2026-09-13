@@ -3,7 +3,7 @@ import hashlib
 import struct
 import zlib
 
-MAX_OBJECT = 8 * 1024 * 1024
+MAX_OBJECT = 32 * 1024 * 1024
 MAX_WEIGHT = ((1 << 64) - 1) // 3
 FORMATS = {'u8': '>B', 'u16': '>H', 'u32': '>I', 'u64': '>Q', 'i32': '>i'}
 # The machine-readable schema is the only source of field order and bounds.
@@ -166,7 +166,7 @@ def verify_c0(cert, committee, policy, expected_duty, verifier):
     validate_payload(duty, cert['payload'])
     rows = cert['records']
     signers = [r['identity'] for r in rows]
-    require(signers and signers == sorted(set(signers)) and len(rows) <= len(members), 'signer-order')
+    require(signers and signers == sorted(set(signers)) and len(rows) <= len(members) <= 400, 'signer-order')
     roster = {m['identity']: m for m in members}
     admitted = []
     weight = 0
@@ -186,7 +186,7 @@ def verify_c0(cert, committee, policy, expected_duty, verifier):
     return weight
 
 def tl_frame(tag, raw):
-    require(len(tag) == 4 and len(raw) <= MAX_OBJECT, 'tl-bound')
+    require(len(tag) == 4 and len(raw) <= min(MAX_OBJECT, (1 << 24)-1), 'tl-bound')
     prefix = bytes([len(raw)]) if len(raw) < 254 else b'\xfe'+len(raw).to_bytes(3, 'little')
     sized = prefix + raw
     return tag + sized + bytes((-len(sized)) % 4)
@@ -215,7 +215,7 @@ def unbyte_tree(node):
     def walk(n, depth):
         nonlocal count
         count += 1
-        require(depth <= 9 and count <= 100000, 'tree-budget')
+        require(depth <= 10 and count <= 400000, 'tree-budget')
         if type(n) is tuple and len(n) == 2 and n[0] == 0:
             require(type(n[1]) is bytes and 1 <= len(n[1]) <= 120, 'leaf')
             return n[1]

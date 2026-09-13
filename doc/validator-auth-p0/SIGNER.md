@@ -62,7 +62,7 @@ Only api_version="1" is a transport integer string; all other integers
 are inside the canonical binary payload, never nested JSON fields. Binary fields are lowercase even-length hex of exact-width or
 bounded canonical bytes. No compression or redirects. Whole request/response cap
 is 4 MiB; binary payload cap 2000000 bytes; template cap 262144 bytes;
-proof attachment cap 1 MiB. Permits and receipts have exact bounded schema types.
+proof attachments use the bounded VAOv carrier and up to 64 MiB resolved BOC. Permits and receipts have exact bounded schema types.
 
 Paths: /v1/capabilities (GET), /v1/keys/public, /v1/keys/prepare, /v1/keys/stage,
 /v1/sign, /v1/requests/result, /v1/keys/retire (POST). Responses have exactly
@@ -142,3 +142,12 @@ Exact request/result/error/receipt, request-state variant, issuer trust, size an
 correlation rules are in [API-CONTRACT.md](API-CONTRACT.md). A retirement receipt
 is neither proof of chain inclusion nor permission to destroy a key used by an
 old session; lifecycle selection and signer safety retention remain distinct.
+
+## Frozen service evidence and large attachments
+
+Permit and receipt components use the independently trusted service_policy
+contract in API-CONTRACT.md. Service issuer/key trust remains distinct from all
+four chain authorizations. Resolve bounded VAOv attachments before association
+and authorization checks; upload acknowledgement cannot invoke a signing
+primitive or establish ownership. Object-storage quota release cannot refund
+stateful key capacity, clear duty tombstones or advance a journal frontier.

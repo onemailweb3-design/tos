@@ -4,9 +4,16 @@
   "version": 1,
   "flags": 0,
   "limits": {
-    "object_bytes": 8388608,
+    "object_bytes": 33554432,
     "api_binary_bytes": 2000000,
-    "transport_bytes": 4194304
+    "transport_bytes": 4194304,
+    "validators": 400,
+    "boc_bytes": 67108864,
+    "tree_depth": 10,
+    "tree_occurrences": 400000,
+    "chunk_bytes": 1048576,
+    "inline_bytes": 65536,
+    "transfer_bytes_per_principal": 67108864
   },
   "types": {
     "suite": {
@@ -230,7 +237,7 @@
         ],
         [
           "members",
-          "l16/1024/member"
+          "l16/400/member"
         ]
       ]
     },
@@ -338,7 +345,7 @@
         ],
         [
           "records",
-          "l16/1024/record"
+          "l16/400/record"
         ]
       ]
     },
@@ -581,7 +588,7 @@
         ],
         [
           "proof",
-          "b1048576"
+          "object_value"
         ]
       ]
     },
@@ -640,7 +647,7 @@
         ],
         [
           "certificate",
-          "b524288"
+          "object_value"
         ]
       ]
     },
@@ -657,7 +664,7 @@
         ],
         [
           "certificate",
-          "b524288"
+          "object_value"
         ]
       ]
     },
@@ -687,6 +694,10 @@
       "fields": [
         [
           "issuer",
+          "h"
+        ],
+        [
+          "service_policy",
           "h"
         ],
         [
@@ -755,8 +766,8 @@
           "permit_body"
         ],
         [
-          "signature",
-          "b64"
+          "components",
+          "l8/2/service_component"
         ]
       ]
     },
@@ -765,6 +776,10 @@
       "fields": [
         [
           "issuer",
+          "h"
+        ],
+        [
+          "service_policy",
           "h"
         ],
         [
@@ -813,8 +828,8 @@
           "receipt_body"
         ],
         [
-          "signature",
-          "b64"
+          "components",
+          "l8/2/service_component"
         ]
       ]
     },
@@ -1081,7 +1096,7 @@
         ],
         [
           "certificate",
-          "b524288"
+          "object_value"
         ],
         [
           "committee",
@@ -1118,7 +1133,7 @@
         ],
         [
           "signers",
-          "l16/1024/h"
+          "l16/400/h"
         ],
         [
           "weight",
@@ -1397,7 +1412,7 @@
         ],
         [
           "certificate",
-          "b524288"
+          "object_value"
         ],
         [
           "committee",
@@ -1478,6 +1493,162 @@
         ],
         [
           "active",
+          "l8/2/suite"
+        ]
+      ]
+    },
+    "object_ref": {
+      "tag": "VAOr",
+      "fields": [
+        [
+          "kind",
+          "u8"
+        ],
+        [
+          "byte_length",
+          "u32"
+        ],
+        [
+          "object_id",
+          "h"
+        ],
+        [
+          "chunk_hashes",
+          "l8/64/h"
+        ]
+      ]
+    },
+    "object_value": {
+      "tag": "VAOv",
+      "fields": [
+        [
+          "kind",
+          "u8"
+        ],
+        [
+          "inline",
+          "b65536"
+        ],
+        [
+          "reference",
+          "l8/1/object_ref"
+        ]
+      ]
+    },
+    "chunk_request": {
+      "tag": "VAqe",
+      "fields": [
+        [
+          "anchor",
+          "anchor"
+        ],
+        [
+          "manifest",
+          "object_ref"
+        ],
+        [
+          "index",
+          "u8"
+        ]
+      ]
+    },
+    "chunk_result": {
+      "tag": "VARe",
+      "fields": [
+        [
+          "anchor",
+          "anchor"
+        ],
+        [
+          "manifest_id",
+          "h"
+        ],
+        [
+          "index",
+          "u8"
+        ],
+        [
+          "data",
+          "b1048576"
+        ]
+      ]
+    },
+    "put_chunk_request": {
+      "tag": "VAqf",
+      "fields": [
+        [
+          "anchor",
+          "anchor"
+        ],
+        [
+          "manifest",
+          "object_ref"
+        ],
+        [
+          "index",
+          "u8"
+        ],
+        [
+          "data",
+          "b1048576"
+        ]
+      ]
+    },
+    "put_chunk_result": {
+      "tag": "VARf",
+      "fields": [
+        [
+          "anchor",
+          "anchor"
+        ],
+        [
+          "manifest_id",
+          "h"
+        ],
+        [
+          "index",
+          "u8"
+        ]
+      ]
+    },
+    "service_component": {
+      "tag": null,
+      "fields": [
+        [
+          "suite",
+          "u16"
+        ],
+        [
+          "parameters",
+          "u16"
+        ],
+        [
+          "key_id",
+          "h"
+        ],
+        [
+          "signature",
+          "b65536"
+        ]
+      ]
+    },
+    "service_policy": {
+      "tag": "VASp",
+      "fields": [
+        [
+          "issuer",
+          "h"
+        ],
+        [
+          "revision",
+          "u64"
+        ],
+        [
+          "previous",
+          "h"
+        ],
+        [
+          "suites",
           "l8/2/suite"
         ]
       ]
@@ -1574,6 +1745,20 @@
       "path": "/rpc/validatorAuth/v1/verifyCertificate",
       "request": "verify_certificate_request",
       "result": "verify_result"
+    },
+    "14": {
+      "name": "validatorAuth.v1.getObjectChunk",
+      "http": "POST",
+      "path": "/v1/objects/chunk",
+      "request": "chunk_request",
+      "result": "chunk_result"
+    },
+    "15": {
+      "name": "validatorAuth.v1.putObjectChunk",
+      "http": "POST",
+      "path": "/v1/objects/putChunk",
+      "request": "put_chunk_request",
+      "result": "put_chunk_result"
     }
   },
   "error_codes": {
