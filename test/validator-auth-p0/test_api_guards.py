@@ -50,6 +50,34 @@ class ApiGuardTests(unittest.TestCase):
                 with self.subTest(mode=mode), self.assertRaisesRegex(r.Refusal, 'verified-signer-order'):
                     api.validate_response(13, req, result)
 
+    def test_verified_summary_binds_exact_certificate_signers(self):
+        fixtures = vectors.build()
+        raw = bytes.fromhex(fixtures['cases'][0]['certificate'])
+        cert = r.decode('certificate', raw); duty = cert['duty']
+        signers = [row['identity'] for row in cert['records']]
+        req = dict(anchor=anchor(), certificate=tr.value(raw, 4),
+                   committee=proof(5, duty['committee']), policy=proof(2, duty['policy']))
+        result = dict(anchor=anchor(), certificate_id=r.digest('certificate', raw),
+                      policy=duty['policy'], committee=duty['committee'], duty=r.object_id('duty', duty),
+                      signers=signers, weight=3)
+        api.validate_request(13, req)
+        api.validate_response(13, req, result)
+        alternatives = {'omitted': signers[:-1], 'added': sorted(signers + [h(99)]),
+                        'replaced': [h(97), h(98), h(99)]}
+        original_request = copy.deepcopy(req)
+        for mode, claimed in alternatives.items():
+            with self.subTest(mode=mode):
+                self.assertTrue(claimed)
+                self.assertEqual(claimed, sorted(set(claimed)))
+                self.assertNotIn(ZERO, claimed)
+                self.assertNotEqual(claimed, signers)
+                bad = copy.deepcopy(result)
+                bad['signers'] = claimed
+                with self.assertRaisesRegex(r.Refusal, '^verified-signers$'):
+                    api.validate_response(13, req, bad)
+                self.assertEqual(req, original_request)
+        api.validate_response(13, req, result)
+
     def test_verification_request_pins_both_context_proofs(self):
         fixtures = vectors.build(); raw = bytes.fromhex(fixtures['cases'][0]['certificate'])
         duty = r.decode('certificate', raw)['duty']

@@ -35,6 +35,7 @@ MUTANTS = [
  ('absent-state','api.py',"state['statement_id'] == ZERO and state['fence'] == 0 and not state['result'] and not state['receipt']", "True"),
 
  ('c0-result-size','api.py',"all(len(x['signature']) == 64 for x in result['record']['components']\n                      if (x['suite'], x['parameters']) == (1, 1))", "True"),
+ ('verified-signers','api.py',"result['signers'] == signers and ", ""),
  ('verified-signer-order','api.py',"bool(signers) and signers == sorted(set(signers)) and ZERO not in signers", "True"),
  ('verify-request-context','api.py',"proof['anchor'] == req['anchor'] and proof['kind'] == kind\n                      and proof['object_id'] == cert['duty'][name]", "True"),
  ('terminal-polling','api.py',"r.require(previous == current, 'terminal-state-regression')", "r.require(True, 'terminal-state-regression')"),
@@ -46,6 +47,7 @@ MUTANTS = [
 ]
 
 TARGETS = {
+ 'verified-signers': 'test_api_guards.ApiGuardTests.test_verified_summary_binds_exact_certificate_signers',
  'block-gap': 'test_freeze.FreezeTests.test_replay_requires_every_block_and_snapshot_is_read_only',
  'chunk-hash': 'test_freeze.FreezeTests.test_chunk_rejections_and_bounded_upload',
  'transfer-budget': 'test_freeze.FreezeTests.test_chunk_rejections_and_bounded_upload',

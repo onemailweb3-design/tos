@@ -167,6 +167,7 @@ jobs:
           left = Path('evidence/validator-p0-profile')
           right = Path('evidence/validator-p0-profile-arm')
           required_tests = {
+              'test_api_guards.ApiGuardTests.test_verified_summary_binds_exact_certificate_signers',
               'test_freeze.FreezeTests.test_replay_requires_every_block_and_snapshot_is_read_only',
               'test_freeze.FreezeTests.test_400_limit_and_large_certificate',
               'test_freeze.FreezeTests.test_service_policy_and_component_separation',
@@ -197,9 +198,11 @@ jobs:
           if not all(guard[k] for k in ('compiled', 'killed', 'restored')):
               raise SystemExit('native guard not demonstrated')
           mutations = json.loads((left/'mutations.json').read_text())
-          if len(mutations) != 30 or len({x['guard'] for x in mutations}) != 30:
+          if len(mutations) != 31 or len({x['guard'] for x in mutations}) != 31:
               raise SystemExit('missing mutation inventory')
+          if 'verified-signers' not in {x['guard'] for x in mutations}:
+              raise SystemExit('missing signer-binding mutation')
           if not all(x['parsed'] and x['killed'] and x['returncode'] == 1 and x['failures'] for x in mutations):
               raise SystemExit('undemonstrated mutation kill')
-          print('PASS: same HEAD, eight equal evidence files, 30 discriminating reference mutations')
+          print('PASS: same HEAD, eight equal evidence files, 31 discriminating reference mutations')
           PYCODE

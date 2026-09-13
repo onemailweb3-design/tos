@@ -14,7 +14,7 @@
     "performance and recovery rehearsal"
   ],
   "artifact_sha256": {
-    ".github/workflows/validator-auth-p0-profile.yml": "0a6b500cccb13751b54f733d4d6784f25b103380324b52a187bd6738e68a0e53",
+    ".github/workflows/validator-auth-p0-profile.yml": "70cc91fef88a74cb66a6feafa00a96e8e162df87ea13fa14fae42752c75f679e",
     "doc/validator-auth-p0/ACTIVATION.md": "a74450d93f3883a48783410614baa57a0a1e9de4f48bc680df5779a3af00179c",
     "doc/validator-auth-p0/API-CONTRACT.md": "08728fb9358e83086d48da51a1525be6c468d7932197d6e013f6e80c4e4e15a1",
     "doc/validator-auth-p0/CLIENTS.md": "4d9f3486f215b1a2217096f0be118f9f00d1ff5c89c4aae221b04c85f09357cb",
@@ -43,18 +43,24 @@
     "test/validator-auth-p0/golden.json.gz": "4e0b5e63e69a258734d02cdfe0c9a850642cf2c109ead04aaf2bcbd67c6aa860",
     "test/validator-auth-p0/lifecycle-api-golden.json": "83823c819d61b1c116d6712fcd487daf9ce500f0482db46ee2e45e8464a3ba79",
     "test/validator-auth-p0/lifecycle.py": "167c7e9ebb16e272b1e30acc0b36a03f7179d408622589ef7080ba9bfdb97ecd",
-    "test/validator-auth-p0/mutations.py": "be93ebcf3af8b25b50a5e9d55dd199a32595b2b879ae5a5f34ba9a80dd924c18",
+    "test/validator-auth-p0/mutations.py": "269d075b4ebd2d3916ca4eb32221e24bab12c4aea948a2a9682d4f7ace9593f4",
     "test/validator-auth-p0/native-boc.cpp": "fb7e9c350d2b88347ccfdf4b0eeb828b43e80383e81b82f15c533a46a1625f4e",
     "test/validator-auth-p0/native-profile.cmake": "6cc986e733be7e7f036139879c0929b561c7ee27fd6e2ae5c75f17b100a6bcb5",
     "test/validator-auth-p0/native_guard.py": "72530987f41d1d6d55fa9204db6da67a2fe75a27b05a7524038d6fb556d02278",
     "test/validator-auth-p0/production-baseline.json": "4a641fbc02bd90559315e5c9d3b5b370a209c3949f491dc54d2c6d740681c92d",
     "test/validator-auth-p0/reference.py": "dbdd804d2c733db2cd1ac0c9b87a9185b43786bfad956862853673b1f22f5501",
     "test/validator-auth-p0/run_tests.py": "fe17eff01af3f33f7bfb55fafe52224e7df2708e542e3d217749af66bd402528",
-    "test/validator-auth-p0/test_api_guards.py": "0aa3fcdfcd2ec7d75a7875cdc0863cc4ac28b77683fdb66750c95eb9fb622f58",
+    "test/validator-auth-p0/test_api_guards.py": "bd838b26fa39c6cd144b40b6ac92fcdf56c59ed9acc4c0cb7182c3a950311600",
     "test/validator-auth-p0/test_freeze.py": "ddfcf1c619501fe37ebed79b200091ac4db96e2f0f38450dbd8616b2ad7d1976",
     "test/validator-auth-p0/test_lifecycle_api.py": "7e3974a1bcf85bf36947e0a3172066e9f62b172afeae7eedce0cafa7f440660a",
     "test/validator-auth-p0/test_profile.py": "4626be3b70b2b7842fda695984d955058b96aedc7b2a4f4707b354b1740cd35f",
     "test/validator-auth-p0/transfer.py": "2e3e71c2cd488d3add85f1c65d98d11e3d553b5cff0b905ff0a24b6a79e9f56c",
     "test/validator-auth-p0/vectors.py": "1f2ceb9b999761e449011ce21747770bbfe442d4e08e8310bd0f11e567351dfd"
-  }
+  },
+  "evidence_updates": [
+    {
+      "base_head": "a9c6efc0e0f218c18648aa45596f62e7574fb8ae",
+      "scope": "Test coverage only: exact response signer binding; no API behavior, schema, normative document, profile fingerprint or golden-vector change."
+    }
+  ]
 }
