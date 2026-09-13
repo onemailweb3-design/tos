@@ -42,7 +42,7 @@ jobs:
           gzip -dc test/validator-auth-p0/golden.json.gz > artifacts/golden.json
           python3 test/validator-auth-p0/contract_artifacts.py | tee artifacts/contract.log
           python3 test/validator-auth-p0/check_production.py --out artifacts/production-boundary.json
-          python3 -m unittest discover -s test/validator-auth-p0 -p 'test_*.py' -v 2>&1 | tee artifacts/tests.log
+          python3 test/validator-auth-p0/run_tests.py --out artifacts/test-results.json 2>&1 | tee artifacts/tests.log
           cp test/validator-auth-p0/lifecycle-api-golden.json artifacts/
           python3 test/validator-auth-p0/mutations.py --out artifacts/mutations.json
       - name: Compile the native TL parser and reject incompatible schema
@@ -60,3 +60,94 @@ jobs:
           path: artifacts/
           retention-days: 14
           if-no-files-found: error
+
+  profile-arm:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Check reference bytes, real C0 signatures and persistent schema constraints
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/commit.txt
+          python3 test/validator-auth-p0/archive_evidence.py --out artifacts/source.tar
+          sha256sum artifacts/source.tar > artifacts/source.sha256
+          sha256sum doc/validator-auth-p0/profile.json > artifacts/profile.sha256
+          python3 --version > artifacts/toolchain.txt
+          openssl version >> artifacts/toolchain.txt
+          gzip -dc test/validator-auth-p0/golden.json.gz > artifacts/golden.json
+          python3 test/validator-auth-p0/contract_artifacts.py | tee artifacts/contract.log
+          python3 test/validator-auth-p0/check_production.py --out artifacts/production-boundary.json
+          python3 test/validator-auth-p0/run_tests.py --out artifacts/test-results.json 2>&1 | tee artifacts/tests.log
+          cp test/validator-auth-p0/lifecycle-api-golden.json artifacts/
+      - name: Compile the native TL parser and reject incompatible schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S third-party/tl-parser -B build-p0-schema -G Ninja
+          cmake --build build-p0-schema -j2
+          python3 test/validator-auth-p0/check_schema.py --tl-parser build-p0-schema/tl-parser --out artifacts/schema.json
+          git diff --exit-code
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: validator-p0-profile-arm
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: error
+
+  conformance:
+    needs: [profile, profile-arm]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require both architecture jobs
+        run: |
+          test '${{ needs.profile.result }}' = success
+          test '${{ needs.profile-arm.result }}' = success
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: validator-p0-profile*
+          path: evidence
+      - name: Compare exact-head reference evidence and require mutations
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          left = Path('evidence/validator-p0-profile')
+          right = Path('evidence/validator-p0-profile-arm')
+          required_tests = {
+              'test_api_guards.ApiGuardTests.test_c0_sign_result_requires_exact_signature_size',
+              'test_api_guards.ApiGuardTests.test_verified_summary_rejects_noncanonical_signers',
+              'test_api_guards.ApiGuardTests.test_verification_request_pins_both_context_proofs',
+              'test_api_guards.ApiGuardTests.test_polling_preserves_terminal_state_and_exact_result',
+          }
+          for directory in (left, right):
+              if (directory/'commit.txt').read_text().strip() != os.environ['EXPECTED_HEAD']:
+                  raise SystemExit('wrong-head evidence')
+              report = json.loads((directory/'test-results.json').read_text())
+              if not report['success'] or report['tests_run'] != len(report['test_ids']):
+                  raise SystemExit('incomplete test execution')
+              if not required_tests <= set(report['test_ids']):
+                  raise SystemExit('missing API regression tests')
+          names = ('golden.json', 'lifecycle-api-golden.json', 'schema.json',
+                   'production-boundary.json', 'profile.sha256', 'contract.log', 'test-results.json')
+          for name in names:
+              if (left/name).read_bytes() != (right/name).read_bytes():
+                  raise SystemExit('cross-architecture mismatch: '+name)
+          mutations = json.loads((left/'mutations.json').read_text())
+          if len(mutations) != 26 or len({x['guard'] for x in mutations}) != 26:
+              raise SystemExit('missing mutation inventory')
+          if not all(x['parsed'] and x['killed'] and x['returncode'] == 1 and x['failures'] for x in mutations):
+              raise SystemExit('undemonstrated mutation kill')
+          print('PASS: same HEAD, seven equal evidence files, 26 discriminating reference mutations')
+          PYCODE

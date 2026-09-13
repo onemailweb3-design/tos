@@ -135,6 +135,12 @@ def validate_request(method, req):
         elif op == 3:
             r.require(req['key_id'] == req['update']['old_key'], 'retire-key')
         r.require(not req['authorizations']['governance'], 'identity-not-governance')
+    if method == 13:
+        cert = r.decode('certificate', req['certificate'])
+        for name, kind in (('committee', 5), ('policy', 2)):
+            proof = req[name]
+            r.require(proof['anchor'] == req['anchor'] and proof['kind'] == kind
+                      and proof['object_id'] == cert['duty'][name], 'verify-request-context')
     if 'fence' in req:
         r.require(req['fence'] > 0, 'fence')
 
@@ -220,6 +226,8 @@ def validate_response(method, req, result):
         r.require(result['request_id'] == rid and result['statement_id'] == r.digest('statement', statement)
                   and result['fence'] == req['fence'] and r.statement(template['duty'], result['record']) == statement, 'sign-result-binding')
         r.require(all(len(x['signature']) > 0 for x in result['record']['components']), 'sign-result-signatures')
+        r.require(all(len(x['signature']) == 64 for x in result['record']['components']
+                      if (x['suite'], x['parameters']) == (1, 1)), 'sign-result-c0-size')
     if method == 6:
         validate_request_state(result, rid)
     if method == 7:
@@ -254,7 +262,9 @@ def validate_response(method, req, result):
         r.require(result['certificate_id'] == r.digest('certificate', req['certificate'])
                   and result['policy'] == cert['duty']['policy'] and result['committee'] == cert['duty']['committee']
                   and result['duty'] == r.object_id('duty', cert['duty']), 'verified-binding')
-        r.require(result['signers'] == [x['identity'] for x in cert['records']] and 0 < result['weight'] <= r.MAX_WEIGHT, 'verified-signers')
+        signers = [x['identity'] for x in cert['records']]
+        r.require(bool(signers) and signers == sorted(set(signers)) and ZERO not in signers, 'verified-signer-order')
+        r.require(result['signers'] == signers and 0 < result['weight'] <= r.MAX_WEIGHT, 'verified-signers')
 
 
 def result_hash(method, result):
@@ -295,3 +305,22 @@ def verify_client_proofs(method, req, result, verifier):
         verify_proof(result['policy'], req['anchor'], 2, cert['duty']['policy'], verifier)
     else:
         raise r.Refusal('client-proof-method')
+
+
+def observe_request_state(previous, current, rid):
+    """Check authenticated polling observations before replacing local history.
+
+    Callers verify each state's receipt and issuer first. This comparison neither
+    authenticates a receipt nor proves a service's durable storage. It detects a
+    weaker response that must not overwrite an already observed safety result.
+    """
+    validate_request_state(current, rid)
+    if previous is None:
+        return
+    validate_request_state(previous, rid)
+    if previous['state'] in (2, 3):
+        r.require(previous == current, 'terminal-state-regression')
+    elif previous['state'] == 1:
+        r.require(current['state'] != 0, 'reserved-state-regression')
+        r.require(current['statement_id'] == previous['statement_id']
+                  and current['fence'] == previous['fence'], 'reserved-state-binding')

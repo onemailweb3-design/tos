@@ -34,9 +34,19 @@ MUTANTS = [
  ('permit-expiry','api.py',"current_mc is not None and body['anchor']['seqno'] <= current_mc <= body['expires_mc']", "True"),
  ('absent-state','api.py',"state['statement_id'] == ZERO and state['fence'] == 0 and not state['result'] and not state['receipt']", "True"),
 
+ ('c0-result-size','api.py',"all(len(x['signature']) == 64 for x in result['record']['components']\n                      if (x['suite'], x['parameters']) == (1, 1))", "True"),
+ ('verified-signer-order','api.py',"bool(signers) and signers == sorted(set(signers)) and ZERO not in signers", "True"),
+ ('verify-request-context','api.py',"proof['anchor'] == req['anchor'] and proof['kind'] == kind\n                      and proof['object_id'] == cert['duty'][name]", "True"),
+ ('terminal-polling','api.py',"r.require(previous == current, 'terminal-state-regression')", "r.require(True, 'terminal-state-regression')"),
+
 ]
 
 TARGETS = {
+ 'c0-result-size': 'test_api_guards.ApiGuardTests.test_c0_sign_result_requires_exact_signature_size',
+ 'verified-signer-order': 'test_api_guards.ApiGuardTests.test_verified_summary_rejects_noncanonical_signers',
+ 'verify-request-context': 'test_api_guards.ApiGuardTests.test_verification_request_pins_both_context_proofs',
+ 'terminal-polling': 'test_api_guards.ApiGuardTests.test_polling_preserves_terminal_state_and_exact_result',
+
  'due-boundary': 'LifecycleTests.test_before_exact_after_replay_and_old_session',
  'pending-conflict': 'LifecycleTests.test_explicit_cancel_and_conflict_no_silent_replace',
  'accepted-nonce': 'LifecycleTests.test_nonce_predecessor_boundaries_and_atomic_refusal',
@@ -54,7 +64,8 @@ TARGETS = {
 }
 
 def execute(root, target=None):
-    arguments = ['test_lifecycle_api.'+target, '-v'] if target else ['discover', '-p', 'test_*.py', '-v']
+    qualified = target if target and target.startswith('test_api_guards.') else 'test_lifecycle_api.' + (target or '')
+    arguments = [qualified, '-v'] if target else ['discover', '-p', 'test_*.py', '-v']
     return subprocess.run([sys.executable,'-B','-m','unittest',*arguments],
                           cwd=root/'test/validator-auth-p0',capture_output=True,text=True,timeout=90)
 
