@@ -30,6 +30,9 @@ regression evidence, not the production implementation of this profile.
 
 Read [WIRE.md](WIRE.md), [LIFECYCLE.md](LIFECYCLE.md), [SIGNER.md](SIGNER.md),
 [ACTIVATION.md](ACTIVATION.md), and [CLIENTS.md](CLIENTS.md).
+[OPEN-DECISIONS.md](OPEN-DECISIONS.md) records the two boundaries this profile
+does **not** fix, with the prior art for each. They are open, and a freeze that
+leaves them open ships a contract two implementations can satisfy differently.
 `profile.json` and the ordered grammar in WIRE.md fix the proposed numbers and
 encodings. `wire.tl` and `wire.tlb` deliberately remain outside production schemas.
 
