@@ -261,6 +261,12 @@ def reserve_vote(records, role, candidate):
 
 def select_policy(policies, anchor):
     require(policies and policies[0]['effective_from'] == 0, 'policy-history')
+    # The loop below only compares neighbours, so the first policy's own
+    # revision and predecessor were never checked and a history could begin at
+    # any revision or claim a predecessor. ACTIVATION.md fixes genesis at
+    # revision 1 with a zero predecessor; a truncated history needs an
+    # independently authenticated base supplied as input, not a weaker rule here.
+    require(policies[0]['revision'] == 1 and policies[0]['previous'] == bytes(32), 'policy-history')
     for old, new in zip(policies, policies[1:]):
         require(new['effective_from'] > old['effective_from'] and new['revision'] == old['revision']+1
                 and new['previous'] == object_id('policy', old), 'policy-history')

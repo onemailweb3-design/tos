@@ -212,6 +212,17 @@ class ProfileTests(unittest.TestCase):
         for field,value in (('revision',3),('previous',bytes(32)),('effective_from',0)):
             bad=copy.deepcopy(newer);bad[field]=value
             with self.subTest(field=field),self.assertRaises(r.Refusal):r.select_policy([POLICY,bad],200)
+        # The loop above only relates neighbours, so the first policy's own
+        # fields need their own cases. ACTIVATION.md fixes genesis at revision 1
+        # with a zero predecessor, and both were previously accepted at any value.
+        for field,value in (('revision',7),('previous',bytes([0xff])*32)):
+            bad=copy.deepcopy(POLICY);bad[field]=value
+            with self.subTest(genesis=field),self.assertRaises(r.Refusal):r.select_policy([bad],0)
+            with self.subTest(genesis=field,history=2),self.assertRaises(r.Refusal):
+                follower=copy.deepcopy(newer);follower['previous']=r.object_id('policy',bad)
+                r.select_policy([bad,follower],200)
+        both=copy.deepcopy(POLICY);both.update(revision=7,previous=bytes([0xff])*32)
+        with self.assertRaises(r.Refusal):r.select_policy([both],0)
 
     def test_sql_real_reopen_and_non_reusable_reservations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -234,6 +245,48 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT result FROM duties').fetchone()[0],b'exact signature')
             with self.assertRaises(sqlite3.IntegrityError):db.execute("UPDATE duties SET state='RESERVED',result=NULL")
             with self.assertRaises(sqlite3.IntegrityError):db.execute('DELETE FROM duties')
+            db.close()
+
+    def test_replacement_cannot_reopen_a_settled_row(self):
+        """INSERT OR REPLACE deletes the conflicting row first, and on a default
+        connection that removal does not run the DELETE triggers. Everything the
+        UPDATE and DELETE guards forbid was therefore reachable by one ordinary
+        statement: a settled duty reopened, an immutable key version rewritten,
+        a consumed capacity leaf reassigned. The guards are on the insert now, so
+        this holds without the caller having set recursive_triggers."""
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'store.sqlite';db=sqlite3.connect(path,isolation_level=None)
+            db.executescript((DOC/'signer-store.sql').read_text())
+            kid=r.object_id('key',COMMITTEE['members'][0]['keys'][0]);did=vectors.h(90)
+            slot=(vectors.h(11),vectors.h(20),-1,(1<<63).to_bytes(8,'big'),(8).to_bytes(8,'big'),2)
+            values=(did,)+slot+(vectors.h(91),bytes(8),'RESERVED',None)
+            db.execute('INSERT INTO key_versions VALUES (?,?)',(kid,b'public descriptor'))
+            db.execute('INSERT INTO duties VALUES (?,?,?,?,?,?,?,?,?,?,?)',values)
+            db.execute('INSERT INTO capacity_reservations VALUES (?,?,?)',(vectors.h(92),bytes(8),did))
+            db.execute("UPDATE duties SET state='COMPLETE',result=?",(b'exact signature',))
+            db.close()
+            # A fresh connection, which is where recursive_triggers is 0 again.
+            db=sqlite3.connect(path,isolation_level=None);db.execute('PRAGMA foreign_keys=ON')
+            self.assertEqual(db.execute('PRAGMA recursive_triggers').fetchone()[0],0)
+            reopened=(did,)+slot+(vectors.h(93),(9).to_bytes(8,'big'),'RESERVED',None)
+            # Same duty_id, and separately the same anti-equivocation slot under
+            # a different duty_id: either would let a second statement be signed
+            # for one identity, session, shard, position and role.
+            other=(vectors.h(94),)+slot+(vectors.h(95),(9).to_bytes(8,'big'),'RESERVED',None)
+            for label,sql,args in (
+                    ('duty by id','INSERT OR REPLACE INTO duties VALUES (?,?,?,?,?,?,?,?,?,?,?)',reopened),
+                    ('duty by slot','INSERT OR REPLACE INTO duties VALUES (?,?,?,?,?,?,?,?,?,?,?)',other),
+                    ('key version','INSERT OR REPLACE INTO key_versions VALUES (?,?)',(kid,b'rewritten')),
+                    ('capacity leaf','INSERT OR REPLACE INTO capacity_reservations VALUES (?,?,?)',
+                     (vectors.h(92),bytes(8),did))):
+                with self.subTest(label=label),self.assertRaises(sqlite3.IntegrityError):
+                    db.execute(sql,args)
+            self.assertEqual(db.execute('SELECT state FROM duties').fetchone()[0],'COMPLETE')
+            self.assertEqual(db.execute('SELECT descriptor FROM key_versions').fetchone()[0],b'public descriptor')
+            db.close()
+            db=sqlite3.connect(path,isolation_level=None)
+            self.assertEqual(db.execute('SELECT state FROM duties').fetchone()[0],'COMPLETE')
+            self.assertEqual(db.execute('SELECT count(*) FROM duties').fetchone()[0],1)
             db.close()
 
 if __name__ == '__main__':
