@@ -34,6 +34,11 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           git rev-parse HEAD > artifacts/commit.txt
+          git archive --format=tar HEAD doc/validator-auth-p0 test/validator-auth-p0 \
+            third-party/tl-parser tl/generate/scheme crypto/block/block.tlb tos/tos-types.h \
+            validator/consensus validator/manager.cpp keyring/keyring.h AGENTS.md \
+            .github/workflows/validator-auth-p0-profile.yml > artifacts/source.tar
+          sha256sum artifacts/source.tar > artifacts/source.sha256
           python3 --version > artifacts/toolchain.txt
           openssl version >> artifacts/toolchain.txt
           gzip -dc test/validator-auth-p0/golden.json.gz > artifacts/golden.json
