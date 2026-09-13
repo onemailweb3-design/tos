@@ -1,6 +1,7 @@
 # Two boundaries this profile does not yet fix
 
-**Status: prior art and options for review. Neither boundary is decided here.**
+**Status: open. Neither boundary is decided here, and the next revision should
+propose one normative answer to each rather than more prior art.**
 
 Everything else in this directory proposes a concrete answer. These two do not,
 and a freeze that leaves them open would ship a contract two implementations can
@@ -54,11 +55,22 @@ class Validator(Container):
 ```
 
 A record is created with every epoch field set to `FAR_FUTURE_EPOCH`, defined as
-`Epoch(2**64 - 1)`. That sentinel means *not scheduled*; "has this validator
-already initiated exit?" is the comparison `validator.exit_epoch ==
-FAR_FUTURE_EPOCH`. Initiating an exit computes a queue epoch, assigns it to
-`exit_epoch`, and sets `withdrawable_epoch = exit_epoch +
-MIN_VALIDATOR_WITHDRAWABILITY_DELAY`.
+`Epoch(2**64 - 1)`. That sentinel means *not scheduled*, and the comparison runs
+in that direction:
+
+```text
+exit_epoch == FAR_FUTURE_EPOCH   ->  no exit is scheduled
+exit_epoch != FAR_FUTURE_EPOCH   ->  an exit is already scheduled
+```
+
+`initiate_validator_exit` returns immediately on `validator.exit_epoch !=
+FAR_FUTURE_EPOCH`, and `process_voluntary_exit` requires `validator.exit_epoch
+== FAR_FUTURE_EPOCH` before accepting a new one. Scheduling an exit computes a
+queue epoch and assigns it to `exit_epoch`.
+
+What is borrowed here is only that the coordinate lives in authenticated state
+behind a sentinel. The economic machinery around it -- exit queues, a withdrawal
+delay, the balance rules -- answers a different question and is not proposed.
 
 Three properties follow, and all three are what is missing here:
 
@@ -95,14 +107,53 @@ Still to decide, and not answered by the prior art:
   versions, which points the same way but does not state it as a rule about
   scheduled removal.
 
-### The cheaper alternative
+### Constraints either encoding must satisfy
+
+These came out of review and are not optional once a shape is chosen.
+
+**A sentinel is not one rule.** `0xFFFFFFFF` means different things in a start
+field and an end field, and both have to be stated. It must never be usable as a
+real scheduling coordinate, arithmetic on it must not wrap, and "no scheduled
+retirement" must not silently override the key's own `valid_until`. Eligibility
+is the conjunction: the key's immutable validity interval **and** the schedule,
+never either alone.
+
+**Do not make a caller guess its own inclusion height.** Requests are signed
+before they are included, so a coordinate the caller picks cannot reliably equal
+the block that carries it. If immediate retirement is chosen, encode it as
+*effective at the coordinate of the including block*, not as a height the caller
+signs and hopes to match. This is a usability consequence of sign-then-include
+ordering, not a detail.
+
+**Evaluate the schedule where the snapshot is built.** Scheduling rules belong in
+the construction of an authenticated committee snapshot, not in the verification
+path, so the work lands on a state-update or session-creation boundary rather
+than on every signature check. The cost after real integration still has to be
+measured; nothing here promises it is free.
+
+### The cheaper alternative, and why review argues against it
 
 Make retirement immediate-only: require the coordinate to equal the inclusion
 height and reject anything else. This needs no new state and no promotion rules.
-It gives up pre-announcing a retirement, which matters if an operator wants a key
-to stop being selected at a coordinate the rest of the network can see in
-advance. Choosing this is a legitimate answer, but it has to be chosen and
-written down rather than left to the reader.
+
+Review recommends against it. Pre-announcing a transition is the useful case for
+key rotation, algorithm migration and coordinated activation, which are the
+things this profile exists to enable; saving a small amount of state is a poor
+trade against them. It remains a legitimate answer, but it has to be chosen
+deliberately rather than arrived at by leaving the gap open.
+
+### Which shape review prefers
+
+Not two coordinate fields bolted onto `RoleRef`, but an explicit **pending
+operation record** in identity state that determines the operation kind, the old
+key, the new key, the effective coordinate, and the authorizing request. The
+number of pending operations per role and per algorithm profile must be bounded.
+
+An interval-shaped `RoleRef` can also work. Whichever encoding is chosen, four
+behaviours have to be pinned down rather than described: how old and new keys
+switch atomically at a rotation boundary, how a pending operation is cancelled or
+replaced, how a restart reaches the same result from the same authenticated
+state, and how a session already under way keeps its snapshot.
 
 ### Tests either option requires
 
@@ -183,6 +234,36 @@ Still to decide:
   possession, an identity's administration keys, and governance quorum must not
   become interchangeable by accident, and the snapshot each is read from has to
   be identified.
+
+### Which shape review prefers
+
+One machine-readable **ordered binary schema** as the single authority for
+internal encoding, carried inside the existing thin JSON envelope, with JSON
+Schema constraining only the transport layer:
+
+```text
+canonical binary schema
+    -> exact request, result, receipt and error types, with fixed vectors
+    -> thin JSON envelope carrying those bytes
+```
+
+This continues the byte-oriented design already in [WIRE.md](WIRE.md) and avoids
+maintaining two internal representations that can drift apart. A route-level
+description may still be useful, but it should not become a second inner
+encoding specification. That the referenced project chose OpenAPI shows one way
+to reach interoperability; it does not make that format the requirement.
+
+**A schema validates fields, not protocol semantics.** Correlating a response to
+its request, establishing where a receipt's authority comes from, and binding a
+cursor to a snapshot are separate checks that no schema performs. Duplicate JSON
+keys in particular must be rejected during parsing, before the document becomes a
+map and the duplicate disappears.
+
+**Four authorizations must stay distinct** and must not substitute for one
+another: stake-owner authorization, proof of possession of the new key, the
+identity's current administration keys, and governance quorum. The next revision
+should make that separation visible in the types and validation rules rather than
+only in prose.
 
 ### Tests this requires
 
