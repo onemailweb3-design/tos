@@ -38,6 +38,20 @@ target_compile_features(tos_pq_consensus PUBLIC cxx_std_20)
 target_include_directories(tos_pq_consensus PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(tos_pq_consensus PUBLIC tos_mldsa44 PRIVATE OpenSSL::Crypto)
 
+# Validator CONSENSUS PQ signer: a separate sign-enabled backend (own namespace),
+# never linked into the consensus verify path or the ADNL keyring.
+add_library(tos_pq_consensus_signer_backend STATIC "${TOS_MLDSA_SOURCE_DIR}/mldsa/mldsa_native.c")
+set_target_properties(tos_pq_consensus_signer_backend PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(tos_pq_consensus_signer_backend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${TOS_MLDSA_SOURCE_DIR}/mldsa")
+target_compile_definitions(tos_pq_consensus_signer_backend PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
+
+add_library(tos_pq_consensus_signer STATIC consensus-pq-signer.cpp)
+set_target_properties(tos_pq_consensus_signer PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(tos_pq_consensus_signer PUBLIC cxx_std_20)
+target_include_directories(tos_pq_consensus_signer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
+target_compile_definitions(tos_pq_consensus_signer PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
+target_link_libraries(tos_pq_consensus_signer PUBLIC tos_pq_consensus PRIVATE tos_pq_consensus_signer_backend OpenSSL::Crypto)
+
 set(PQ_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-mldsa44")
 add_executable(test-pq-mldsa44-wrapper "${PQ_TEST_DIR}/test.cpp")
 target_link_libraries(test-pq-mldsa44-wrapper PRIVATE tos_mldsa44)
@@ -46,6 +60,11 @@ add_executable(test-pq-consensus "${PQ_TEST_DIR}/pq-consensus-test.cpp")
 set_target_properties(test-pq-consensus PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 target_link_libraries(test-pq-consensus PRIVATE tos_pq_consensus)
 add_test(NAME pq-consensus COMMAND test-pq-consensus)
+
+add_executable(test-pq-signer "${PQ_TEST_DIR}/pq-signer-test.cpp")
+set_target_properties(test-pq-signer PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(test-pq-signer PRIVATE tos_pq_consensus_signer tos_pq_consensus tos_mldsa44)
+add_test(NAME pq-signer COMMAND test-pq-signer)
 if(TARGET tos_crypto)
   target_sources(tos_crypto PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vm/pqops.cpp")
   target_sources(tos_crypto PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/pq-bytes.cpp")
