@@ -28,9 +28,24 @@ target_include_directories(tos_mldsa44 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
 target_compile_definitions(tos_mldsa44 PRIVATE MLD_CONFIG_FILE="mldsa44-config.h")
 target_link_libraries(tos_mldsa44 PRIVATE tos_mldsa_native)
 
+# PQ-native consensus identity primitives (N1): consensus algorithm id, key/signature
+# value types, stable key-id derivation, structural bounds. Verify-only; the signer is
+# a separate target.
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+add_library(tos_pq_consensus STATIC pq-consensus.cpp)
+set_target_properties(tos_pq_consensus PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(tos_pq_consensus PUBLIC cxx_std_20)
+target_include_directories(tos_pq_consensus PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(tos_pq_consensus PUBLIC tos_mldsa44 PRIVATE OpenSSL::Crypto)
+
 set(PQ_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-mldsa44")
 add_executable(test-pq-mldsa44-wrapper "${PQ_TEST_DIR}/test.cpp")
 target_link_libraries(test-pq-mldsa44-wrapper PRIVATE tos_mldsa44)
+
+add_executable(test-pq-consensus "${PQ_TEST_DIR}/pq-consensus-test.cpp")
+set_target_properties(test-pq-consensus PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(test-pq-consensus PRIVATE tos_pq_consensus)
+add_test(NAME pq-consensus COMMAND test-pq-consensus)
 if(TARGET tos_crypto)
   target_sources(tos_crypto PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vm/pqops.cpp")
   target_link_libraries(tos_crypto PRIVATE tos_mldsa44)
