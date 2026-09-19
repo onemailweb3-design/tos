@@ -16,8 +16,9 @@
 */
 
 #include "block/validator-session-members.h"
-#include "collator-node-session.hpp"
+
 #include "collator-node-limits.h"
+#include "collator-node-session.hpp"
 #include "collator-node.hpp"
 #include "fabric.h"
 #include "utils.hpp"
@@ -314,8 +315,8 @@ void CollatorNodeSession::process_result(std::shared_ptr<CacheEntry> cache_entry
 }
 
 void CollatorNodeSession::process_request(adnl::AdnlNodeIdShort src, std::vector<BlockIdExt> prev_blocks,
-                                          BlockCandidatePriority priority, ValidatorId creator,
-                                          td::Timestamp timeout, td::Promise<BlockCandidate> promise) {
+                                          BlockCandidatePriority priority, ValidatorId creator, td::Timestamp timeout,
+                                          td::Promise<BlockCandidate> promise) {
   // The requester chooses the block's created_by (creator); the response path
   // rewrites the candidate to it and persists a record keyed by the resulting
   // block id. An arbitrary creator would let one authorized validator mint

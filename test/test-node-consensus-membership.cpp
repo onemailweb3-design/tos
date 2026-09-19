@@ -25,16 +25,15 @@
 //   - membership via the permanent set -> same as temp
 // The set carries ONLY the member key; the decision follows the key sets PASSED IN, which is
 // why membership from live manager keys can never go stale against an online key change.
-#include "validator/node-consensus-status.h"
-
-#include "tos/tos-types.h"
-
-#include <cstring>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <set>
 #include <utility>
 #include <vector>
+
+#include "tos/tos-types.h"
+#include "validator/node-consensus-status.h"
 
 using namespace tos;
 
@@ -67,7 +66,7 @@ int main() {
   // Real checks, not assert(): assert() is stripped under NDEBUG, which would make this
   // test pass without evaluating anything.
   // The call itself has to run, which is exactly what assert() cannot promise here.
-  auto check = [&](const char *name, bool ok) {
+  auto check = [&](const char* name, bool ok) {
     if (!ok) {
       std::printf("FAIL %s\n", name);
       failures++;

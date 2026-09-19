@@ -17,14 +17,14 @@
     Copyright 2017-2020 Telegram Systems LLP
     Copyright 2025-2026 TOS Blockchain Teams
 */
+#include <cstring>
+
 #include "auto/tl/tos_api.hpp"
 #include "td/utils/base64.h"
 #include "td/utils/misc.h"
 #include "td/utils/overloaded.h"
 
 #include "fileref.hpp"
-
-#include <cstring>
 
 namespace tos {
 

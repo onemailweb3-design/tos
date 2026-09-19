@@ -1,17 +1,18 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
-#include "consensus-pq-signer.h"
-
-#include <vector>
-
-#include "mldsa_native.h"
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
+#include <vector>
+
+#include "consensus-pq-signer.h"
+#include "mldsa_native.h"
 
 namespace tos::pq {
 
 struct ValidatorPQKeyStore::Secret {
   std::array<std::uint8_t, MLDSA44_SECRETKEYBYTES> sk{};
-  ~Secret() { OPENSSL_cleanse(sk.data(), sk.size()); }
+  ~Secret() {
+    OPENSSL_cleanse(sk.data(), sk.size());
+  }
 };
 
 ValidatorPQKeyStore::ValidatorPQKeyStore(ValidatorPQKeyStore&&) noexcept = default;
@@ -53,8 +54,8 @@ std::optional<ValidatorPQKeyStore> ValidatorPQKeyStore::generate() noexcept {
 }
 
 std::optional<ConsensusPQSignature> ValidatorPQKeyStore::sign_consensus(std::string_view message) const noexcept {
-  if (!secret_ || key_.algorithm_id != PQAlgorithmId::mldsa44 ||
-      message.size() > mldsa44_max_message_bytes || simplex_sign_context.size() > mldsa44_max_context_bytes) {
+  if (!secret_ || key_.algorithm_id != PQAlgorithmId::mldsa44 || message.size() > mldsa44_max_message_bytes ||
+      simplex_sign_context.size() > mldsa44_max_context_bytes) {
     return std::nullopt;
   }
   // ML-DSA "pure" context: domain octet 0x00, context length, then the frozen
@@ -71,9 +72,9 @@ std::optional<ConsensusPQSignature> ValidatorPQKeyStore::sign_consensus(std::str
     return std::nullopt;
   }
   std::array<std::uint8_t, MLDSA44_BYTES> sig{};
-  const int rc = tos_pq_cs_native_signature_internal(
-      sig.data(), reinterpret_cast<const std::uint8_t*>(message.data()), message.size(),
-      prefix.data(), prefix.size(), rnd.data(), secret_->sk.data(), 0);
+  const int rc = tos_pq_cs_native_signature_internal(sig.data(), reinterpret_cast<const std::uint8_t*>(message.data()),
+                                                     message.size(), prefix.data(), prefix.size(), rnd.data(),
+                                                     secret_->sk.data(), 0);
   OPENSSL_cleanse(rnd.data(), rnd.size());
   if (rc != 0) {
     return std::nullopt;

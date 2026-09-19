@@ -2332,8 +2332,7 @@ bool get_transaction_owner(Ref<vm::Cell> trans_ref, tos::StdSmcAddress& addr) {
 // The magic is a new value rather than the inherited one, so a preimage produced by
 // either version can never be mistaken for the other:
 //   SHA-256("TOS-VALIDATOR-SET-v2")[0..4) = 0x79ae62d2
-std::string validator_set_hash_preimage(tos::CatchainSeqno cc_seqno,
-                                        const std::vector<tos::ValidatorDescr>& nodes) {
+std::string validator_set_hash_preimage(tos::CatchainSeqno cc_seqno, const std::vector<tos::ValidatorDescr>& nodes) {
   CHECK(nodes.size() <= 0xffffffff);
   // uint32 words: magic + cc_seqno + count, then per validator
   // validator_id(8) + key_id(8) + weight(2) + adnl_addr(8)

@@ -236,8 +236,7 @@ void RootDb::get_block_candidate(ValidatorId source, BlockIdExt id, FileHash col
                        << hash.to_hex() << ")"));
           return;
         }
-        promise.set_value(BlockCandidate{key, decoded_id, hash, std::move(val->data_),
-                                          std::move(val->collated_data_)});
+        promise.set_value(BlockCandidate{key, decoded_id, hash, std::move(val->data_), std::move(val->collated_data_)});
       });
   td::actor::send_closure(archive_db_, &ArchiveManager::get_temp_file_short,
                           fileref::Candidate{source, id, collated_data_file_hash}, std::move(P));

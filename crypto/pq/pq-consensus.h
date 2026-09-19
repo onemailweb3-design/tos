@@ -6,9 +6,9 @@
 // the signer live in separate units; this header carries no backend dependency.
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <optional>
-#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -20,7 +20,9 @@ namespace tos::pq {
 // there is no local algorithm choice and no Ed25519 fallback.
 enum class PQAlgorithmId : std::uint16_t { unknown = 0, mldsa44 = 1 };
 
-inline constexpr bool is_admitted(PQAlgorithmId a) noexcept { return a == PQAlgorithmId::mldsa44; }
+inline constexpr bool is_admitted(PQAlgorithmId a) noexcept {
+  return a == PQAlgorithmId::mldsa44;
+}
 
 // Fixed suite lengths (from the vendored backend), promoted into the consensus layer.
 struct PQSuite {
@@ -28,16 +30,15 @@ struct PQSuite {
   std::size_t public_key_bytes;
   std::size_t signature_bytes;
 };
-inline constexpr PQSuite mldsa44_suite{PQAlgorithmId::mldsa44, mldsa44_public_key_bytes,
-                                       mldsa44_signature_bytes};
+inline constexpr PQSuite mldsa44_suite{PQAlgorithmId::mldsa44, mldsa44_public_key_bytes, mldsa44_signature_bytes};
 
 // Structural hard bounds enforced before allocation/verification. max_certificate_bytes
 // is the worst-case a mainnet config must stay within; a config exceeding it is
 // rejected deterministically before install (never truncated).
 struct PQConsensusLimits {
   PQAlgorithmId algorithm_id = PQAlgorithmId::mldsa44;
-  std::size_t public_key_bytes = mldsa44_public_key_bytes;   // 1312
-  std::size_t signature_bytes = mldsa44_signature_bytes;     // 2420
+  std::size_t public_key_bytes = mldsa44_public_key_bytes;  // 1312
+  std::size_t signature_bytes = mldsa44_signature_bytes;    // 2420
   // Provisional structural ceiling for N1 sizing only: 21 is the launch committee,
   // 100/400 are the provisional main/total ceilings. Not a frozen protocol maximum;
   // the binding value comes from ConfigParam16 once N2 lands.
@@ -96,8 +97,7 @@ inline constexpr std::string_view config_admin_context = "TOS-CONFIG-ADMIN-v1";
 // (algorithm, key) and independent of validator_id.
 // Fails closed: an unadmitted algorithm or a public key of the wrong length yields
 // no id at all, so an unknown suite can never be given a usable identity.
-std::optional<std::array<std::uint8_t, 32>> derive_key_id(PQAlgorithmId algorithm_id,
-                                                          std::string_view public_key);
+std::optional<std::array<std::uint8_t, 32>> derive_key_id(PQAlgorithmId algorithm_id, std::string_view public_key);
 
 // Structural validation (size + admitted algorithm). Returns false, never throws, on
 // any malformed input; callers fail closed.

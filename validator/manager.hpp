@@ -26,6 +26,10 @@
 
 #include "collator-node/collator-node.hpp"
 #include "common/refcnt.hpp"
+#include "consensus/session-compat.h"
+#include "consensus/validator-cleanup-manager.h"
+#include "consensus/validator-cleanup-worker.h"
+#include "consensus/validator-cleanup.h"
 #include "db/db-event-publisher.hpp"
 #include "impl/ext-message-pool.hpp"
 #include "interfaces/db.h"
@@ -43,10 +47,7 @@
 #include "liteserver-admission.h"
 #include "manager-init.h"
 #include "manager-resource-policy.h"
-#include "consensus/session-compat.h"
-#include "consensus/validator-cleanup.h"
-#include "consensus/validator-cleanup-manager.h"
-#include "consensus/validator-cleanup-worker.h"
+#include "node-consensus-status.h"
 #include "queue-size-counter.hpp"
 #include "shard-block-retainer.hpp"
 #include "shard-block-verifier.hpp"
@@ -376,8 +377,7 @@ class ValidatorManagerImpl : public ValidatorManager {
   // what makes it that validator; the Ed25519 setters above cannot. The key identity is
   // recorded so membership lapses on its own once the set records a different one,
   // rather than a node continuing to act for a validator that has rotated away from it.
-  void add_pq_consensus_key(tos::ValidatorId validator_id,
-                            std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store,
+  void add_pq_consensus_key(tos::ValidatorId validator_id, std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store,
                             td::Promise<td::Unit> promise) override {
     auto status = pq_custody_.install(validator_id, std::move(store));
     if (status.is_error()) {

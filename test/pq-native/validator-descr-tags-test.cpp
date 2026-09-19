@@ -9,10 +9,10 @@
 #include <string>
 
 #include "block/block-auto.h"
+#include "crypto/pq/pq-bytes.h"
 #include "td/utils/misc.h"
 #include "vm/cells/CellBuilder.h"
 #include "vm/cells/CellSlice.h"
-#include "crypto/pq/pq-bytes.h"
 
 // The accepted ValidatorDescr constructor set is shared with the Rust reader
 // through test/pq-native/validator-descr-tags.tsv. One implementation accepting
@@ -27,7 +27,8 @@ int main() {
     assert(f);
     std::string line;
     while (std::getline(f, line)) {
-      if (line.empty() || line[0] == '#') continue;
+      if (line.empty() || line[0] == '#')
+        continue;
       auto tab = line.find('\t');
       assert(tab != std::string::npos);
       const auto parsed = std::stoul(line.substr(0, tab), nullptr, 16);
@@ -56,20 +57,20 @@ int main() {
   auto descriptor = [](unsigned tag) {
     vm::CellBuilder cb;
     cb.store_long(tag, 8);
-    if (tag == 0xb3) {  // the post-quantum shape
+    if (tag == 0xb3) {                          // the post-quantum shape
       cb.store_bytes(std::string(32, '\x01'));  // validator_id:bits256
       cb.store_long(1, 16);                     // algorithm_id:uint16
       cb.store_bytes(std::string(32, '\x02'));  // key_id:bits256
       cb.store_ref(tos::pq::pack_pq_bytes(td::Slice(std::string(1312, '\x03')),
                                           tos::pq::pq_bytes_hard_max)
-                       .move_as_ok());          // public_key:^Cell
-      cb.store_long(1234, 64);                  // weight:uint64
-      cb.store_bytes(std::string(32, '\x09'));  // adnl_addr:bits256
-    } else {                                    // the classical shape
-      cb.store_long(0x8e81278a, 32);            // ed25519_pubkey#8e81278a
-      cb.store_bytes(std::string(32, '\x07'));  // pubkey:bits256
-      cb.store_long(1234, 64);                  // weight:uint64
-      if (tag != 0x53) {                        // 0x53 carries no adnl_addr
+                       .move_as_ok());            // public_key:^Cell
+      cb.store_long(1234, 64);                    // weight:uint64
+      cb.store_bytes(std::string(32, '\x09'));    // adnl_addr:bits256
+    } else {                                      // the classical shape
+      cb.store_long(0x8e81278a, 32);              // ed25519_pubkey#8e81278a
+      cb.store_bytes(std::string(32, '\x07'));    // pubkey:bits256
+      cb.store_long(1234, 64);                    // weight:uint64
+      if (tag != 0x53) {                          // 0x53 carries no adnl_addr
         cb.store_bytes(std::string(32, '\x09'));  // adnl_addr:bits256
       }
     }

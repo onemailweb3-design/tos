@@ -21,12 +21,11 @@
 
 #include <deque>
 #include <functional>
+#include <memory>
 #include <vector>
 
-#include <memory>
-
-#include "crypto/pq/consensus-pq-signer.h"
 #include "adnl/adnl.h"
+#include "crypto/pq/consensus-pq-signer.h"
 #include "dht/dht.h"
 #include "interfaces/block-handle.h"
 #include "interfaces/block.h"

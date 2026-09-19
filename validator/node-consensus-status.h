@@ -26,9 +26,9 @@
 #include <utility>
 
 #include "block/validator-set.h"
-#include "td/utils/Status.h"
 #include "crypto/pq/consensus-pq-signer.h"
 #include "keys/keys.hpp"
+#include "td/utils/Status.h"
 
 namespace tos::validator {
 

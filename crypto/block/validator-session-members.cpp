@@ -14,11 +14,10 @@
     You should have received a copy of the GNU Lesser General Public License
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
-#include "block/validator-session-members.h"
-
-#include "block/validator-set.h"
-
 #include <keys/keys.hpp>
+
+#include "block/validator-session-members.h"
+#include "block/validator-set.h"
 
 namespace block {
 
@@ -28,8 +27,8 @@ std::vector<tos::tl_object_ptr<tos::tos_api::engine_validator_GroupMember>> vali
   members.reserve(nodes.size());
   for (const auto& n : nodes) {
     if (n.is_pq()) {
-      members.push_back(tos::create_tl_object<tos::tos_api::validator_groupMemberPQ>(n.validator_id.value, n.key_id.value,
-                                                                                n.addr, n.weight));
+      members.push_back(tos::create_tl_object<tos::tos_api::validator_groupMemberPQ>(n.validator_id.value,
+                                                                                     n.key_id.value, n.addr, n.weight));
     } else {
       auto pub_key = tos::PublicKey{tos::pubkeys::Ed25519{n.classical_key()}};
       members.push_back(tos::create_tl_object<tos::tos_api::validator_groupMember>(

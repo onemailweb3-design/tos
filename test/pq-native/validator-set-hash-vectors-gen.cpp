@@ -22,8 +22,12 @@ td::Bits256 fill(unsigned char b) {
 // Identities are given explicitly so a case can rotate the key identity while
 // holding the membership identity fixed, which is the property under test.
 tos::ValidatorDescr descr(unsigned char vid, unsigned char kid, td::uint64 weight, unsigned char adnl) {
-  return tos::ValidatorDescr{tos::ValidatorId{fill(vid)}, 1, tos::ConsensusKeyId{fill(kid)},
-                             std::string(tos::pq::mldsa44_public_key_bytes, '\x01'), weight, fill(adnl)};
+  return tos::ValidatorDescr{tos::ValidatorId{fill(vid)},
+                             1,
+                             tos::ConsensusKeyId{fill(kid)},
+                             std::string(tos::pq::mldsa44_public_key_bytes, '\x01'),
+                             weight,
+                             fill(adnl)};
 }
 
 void emit(const char* name, tos::CatchainSeqno cc_seqno, const std::vector<tos::ValidatorDescr>& nodes) {
@@ -36,12 +40,11 @@ void emit(const char* name, tos::CatchainSeqno cc_seqno, const std::vector<tos::
     if (!fields.empty()) {
       fields += ";";
     }
-    fields += td::hex_encode(n.validator_id.value.as_slice()) + ":" +
-              td::hex_encode(n.key_id.value.as_slice()) + ":" + std::to_string(n.weight) + ":" +
-              td::hex_encode(n.addr.as_slice());
+    fields += td::hex_encode(n.validator_id.value.as_slice()) + ":" + td::hex_encode(n.key_id.value.as_slice()) + ":" +
+              std::to_string(n.weight) + ":" + td::hex_encode(n.addr.as_slice());
   }
-  printf("%s %u %s %s %08x\n", name, (unsigned)cc_seqno, fields.c_str(),
-         td::hex_encode(td::Slice(preimage)).c_str(), hash);
+  printf("%s %u %s %s %08x\n", name, (unsigned)cc_seqno, fields.c_str(), td::hex_encode(td::Slice(preimage)).c_str(),
+         hash);
 }
 
 }  // namespace

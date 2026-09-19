@@ -27,16 +27,15 @@ void emit(const char* name, const tos::ValidatorDescr& node) {
   auto member_bytes = tos::serialize_tl_object(members[0], true);
 
   // The same group shape the node builds for a session.
-  auto group = tos::create_tl_object<tos::tos_api::validator_groupNew>(
-      0, static_cast<long long>(0x8000000000000000ull), 0, 0, 1, td::Bits256::zero(),
-      block::validator_session_members({node}));
+  auto group = tos::create_tl_object<tos::tos_api::validator_groupNew>(0, static_cast<long long>(0x8000000000000000ull),
+                                                                       0, 0, 1, td::Bits256::zero(),
+                                                                       block::validator_session_members({node}));
   auto group_bytes = tos::serialize_tl_object(group, true);
   auto session_id = tos::get_tl_object_sha_bits256(group);
 
   // line format: <name> <member_constructor_id> <member_hex> <group_hex> <session_id_hex>
-  printf("%s %08x %s %s %s\n", name, members[0]->get_id(),
-         td::hex_encode(member_bytes.as_slice()).c_str(), td::hex_encode(group_bytes.as_slice()).c_str(),
-         td::hex_encode(session_id.as_slice()).c_str());
+  printf("%s %08x %s %s %s\n", name, members[0]->get_id(), td::hex_encode(member_bytes.as_slice()).c_str(),
+         td::hex_encode(group_bytes.as_slice()).c_str(), td::hex_encode(session_id.as_slice()).c_str());
 }
 
 }  // namespace
@@ -44,8 +43,12 @@ void emit(const char* name, const tos::ValidatorDescr& node) {
 int main() {
   const auto adnl = fill(0xc0);
   auto pq = [&](unsigned char vid, unsigned char kid) {
-    return tos::ValidatorDescr{tos::ValidatorId{fill(vid)}, 1, tos::ConsensusKeyId{fill(kid)},
-                               std::string(tos::pq::mldsa44_public_key_bytes, '\x01'), 5, adnl};
+    return tos::ValidatorDescr{tos::ValidatorId{fill(vid)},
+                               1,
+                               tos::ConsensusKeyId{fill(kid)},
+                               std::string(tos::pq::mldsa44_public_key_bytes, '\x01'),
+                               5,
+                               adnl};
   };
   emit("classical", tos::ValidatorDescr{tos::Ed25519_PublicKey{fill(0x11)}, 5, adnl});
   emit("pq-a-key1", pq(0xa0, 0xb0));

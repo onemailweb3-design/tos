@@ -39,7 +39,9 @@ int main() {
   // SHA-256, so any independent implementation must reproduce this byte for byte:
   //   SHA-256("TOS-PQ-CONSENSUS-KEY-v1" || u16_le(1) || 0x01 * 1312)
   // This locks the domain string AND the little-endian algorithm-id encoding.
-  const std::array<std::uint8_t, 32> expect_key_id{0xab, 0xf4, 0xe6, 0xdd, 0xe7, 0x10, 0x7b, 0x53, 0xa4, 0x8a, 0xb9, 0xb7, 0x0f, 0xc3, 0x94, 0x22, 0x45, 0x14, 0x6d, 0x9e, 0x37, 0x47, 0xeb, 0x2f, 0x5f, 0x1a, 0xa7, 0x34, 0xb0, 0x4e, 0x14, 0x11};
+  const std::array<std::uint8_t, 32> expect_key_id{0xab, 0xf4, 0xe6, 0xdd, 0xe7, 0x10, 0x7b, 0x53, 0xa4, 0x8a, 0xb9,
+                                                   0xb7, 0x0f, 0xc3, 0x94, 0x22, 0x45, 0x14, 0x6d, 0x9e, 0x37, 0x47,
+                                                   0xeb, 0x2f, 0x5f, 0x1a, 0xa7, 0x34, 0xb0, 0x4e, 0x14, 0x11};
   assert(*a == expect_key_id);
 
   // the four frozen signature contexts are distinct and exactly as specified
@@ -58,7 +60,7 @@ int main() {
          std::numeric_limits<std::size_t>::max());  // saturates, never wraps
   assert(L.estimated_certificate_bytes(0) == 0);
 
-  printf("PQ_CONSENSUS_N1_FOUNDATION_OK cert100=%zu cert400=%zu key_id0=%02x\n",
-         L.estimated_certificate_bytes(100), L.estimated_certificate_bytes(400), (*a)[0]);
+  printf("PQ_CONSENSUS_N1_FOUNDATION_OK cert100=%zu cert400=%zu key_id0=%02x\n", L.estimated_certificate_bytes(100),
+         L.estimated_certificate_bytes(400), (*a)[0]);
   return 0;
 }

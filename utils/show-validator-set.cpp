@@ -102,9 +102,8 @@ int main(int argc, char** argv) {
     // descriptor carries directly and a classical one derives from its key.
     auto hash = node.validator_id.value;
     if (hash.is_zero()) {
-      hash = tos::PublicKey{tos::pubkeys::Ed25519{node.classical_key().as_bits256()}}
-                 .compute_short_id()
-                 .bits256_value();
+      hash =
+          tos::PublicKey{tos::pubkeys::Ed25519{node.classical_key().as_bits256()}}.compute_short_id().bits256_value();
     }
 
     std::cout << std::left << std::setw(4) << i << std::setw(46) << td::base64_encode(hash.as_slice()) << std::setw(66)

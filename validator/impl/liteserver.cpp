@@ -3722,8 +3722,8 @@ void LiteQuery::finish_getDispatchQueueMessages(StdSmcAddress addr, LogicalTime 
 void LiteQuery::perform_nonfinal_getCandidate(td::Bits256 source, BlockIdExt blkid, td::Bits256 collated_data_hash) {
   LOG(DEBUG) << "started a nonfinal.getCandidate liteserver query";
   td::actor::send_closure_later(
-      manager_, &ValidatorManager::get_block_candidate_for_litequery, ValidatorId{source}, blkid,
-      collated_data_hash, [Self = actor_id(this)](td::Result<BlockCandidate> R) {
+      manager_, &ValidatorManager::get_block_candidate_for_litequery, ValidatorId{source}, blkid, collated_data_hash,
+      [Self = actor_id(this)](td::Result<BlockCandidate> R) {
         if (R.is_error()) {
           td::actor::send_closure(Self, &LiteQuery::abort_query, R.move_as_error());
         } else {

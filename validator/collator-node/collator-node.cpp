@@ -14,17 +14,17 @@
     You should have received a copy of the GNU Lesser General Public License
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include "block/validator-session-members.h"
 #include "impl/collator-impl.h"
 #include "impl/shard.hpp"
 #include "td/utils/lz4.h"
 #include "tos/tos-tl.hpp"
 
 #include "block-auto.h"
-#include "block/validator-session-members.h"
 #include "block-db.h"
 #include "checksum.h"
-#include "collator-node.hpp"
 #include "collator-node-limits.h"
+#include "collator-node.hpp"
 #include "fabric.h"
 #include "utils.hpp"
 

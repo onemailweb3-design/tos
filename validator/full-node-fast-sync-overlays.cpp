@@ -15,12 +15,12 @@
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "block/validator-session-members.h"
-#include "auto/tl/tos_api_json.h"
-#include "common/delay.h"
-#include "interfaces/validator-full-id.h"
 #include <fstream>
 
+#include "auto/tl/tos_api_json.h"
+#include "block/validator-session-members.h"
+#include "common/delay.h"
+#include "interfaces/validator-full-id.h"
 #include "td/utils/JsonBuilder.h"
 #include "td/utils/port/Stat.h"
 #include "td/utils/port/path.h"

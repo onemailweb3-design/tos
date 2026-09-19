@@ -779,8 +779,7 @@ inline constexpr td::uint32 validator_set_hash_magic_v2 = 0x79ae62d2u;
 // The exact bytes the version 2 commitment is taken over. Exposed so the shared
 // vectors are generated from the same code that the hash uses, rather than from a
 // second copy of the layout that could drift away from it.
-std::string validator_set_hash_preimage(tos::CatchainSeqno cc_seqno,
-                                        const std::vector<tos::ValidatorDescr>& nodes);
+std::string validator_set_hash_preimage(tos::CatchainSeqno cc_seqno, const std::vector<tos::ValidatorDescr>& nodes);
 
 td::uint32 compute_validator_set_hash(tos::CatchainSeqno cc_seqno, tos::ShardIdFull from,
                                       const std::vector<tos::ValidatorDescr>& nodes);

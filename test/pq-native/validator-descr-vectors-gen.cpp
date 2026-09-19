@@ -48,8 +48,7 @@ int main() {
     auto boc = vm::std_boc_serialize(cell, 31).move_as_ok();
     printf("%s %d %s %s %llu %s %s %s\n", td::hex_encode(td::Slice(vid)).c_str(), c.algorithm_id,
            td::hex_encode(td::Slice(kid)).c_str(), td::hex_encode(td::Slice(pk)).c_str(), c.weight,
-           td::hex_encode(td::Slice(adnl)).c_str(),
-           td::hex_encode(cell->get_hash().as_slice()).c_str(),
+           td::hex_encode(td::Slice(adnl)).c_str(), td::hex_encode(cell->get_hash().as_slice()).c_str(),
            td::hex_encode(boc.as_slice()).c_str());
   }
   return 0;

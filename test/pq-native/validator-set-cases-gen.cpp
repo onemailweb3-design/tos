@@ -83,8 +83,7 @@ td::Ref<vm::Cell> validator_set(const std::vector<td::Ref<vm::Cell>>& descriptor
 
 void emit(const char* name, const char* verdict, td::Ref<vm::Cell> set) {
   // line format: <name> <accept|reject> <set_boc_hex>
-  printf("%s %s %s\n", name, verdict,
-         td::hex_encode(vm::std_boc_serialize(set, 31).move_as_ok().as_slice()).c_str());
+  printf("%s %s %s\n", name, verdict, td::hex_encode(vm::std_boc_serialize(set, 31).move_as_ok().as_slice()).c_str());
 }
 
 }  // namespace
@@ -101,22 +100,18 @@ int main() {
   emit("valid", "accept", validator_set({good_a(), good_b()}, 12));
   emit("duplicate-validator-id", "reject",
        validator_set({good_a(), descriptor(vid_a, 1, kid_b, key_b, 7, adnl_b)}, 12));
-  emit("duplicate-key-id", "reject",
-       validator_set({good_a(), descriptor(vid_b, 1, kid_a, key_a, 7, adnl_b)}, 12));
+  emit("duplicate-key-id", "reject", validator_set({good_a(), descriptor(vid_b, 1, kid_a, key_a, 7, adnl_b)}, 12));
   emit("duplicate-public-key", "reject",
        validator_set({good_a(), descriptor(vid_b, 1, key_id_of(key_a), key_a, 7, adnl_b)}, 12));
   emit("key-id-mismatch", "reject", validator_set({descriptor(vid_a, 1, kid_b, key_a, 5, adnl_a)}, 5));
   // The key identity matches what this algorithm would derive, so nothing but the
   // algorithm rule itself can refuse it.
-  emit("unknown-algorithm", "reject",
-       validator_set({descriptor(vid_a, 7, raw_key_id(7, key_a), key_a, 5, adnl_a)}, 5));
+  emit("unknown-algorithm", "reject", validator_set({descriptor(vid_a, 7, raw_key_id(7, key_a), key_a, 5, adnl_a)}, 5));
   // Same again: the identity matches the key that is present, so only its length is wrong.
   const std::string short_key(tos::pq::mldsa44_public_key_bytes - 1, '\x11');
   const std::string long_key(tos::pq::mldsa44_public_key_bytes + 1, '\x11');
-  emit("short-key", "reject",
-       validator_set({descriptor(vid_a, 1, raw_key_id(1, short_key), short_key, 5, adnl_a)}, 5));
-  emit("long-key", "reject",
-       validator_set({descriptor(vid_a, 1, raw_key_id(1, long_key), long_key, 5, adnl_a)}, 5));
+  emit("short-key", "reject", validator_set({descriptor(vid_a, 1, raw_key_id(1, short_key), short_key, 5, adnl_a)}, 5));
+  emit("long-key", "reject", validator_set({descriptor(vid_a, 1, raw_key_id(1, long_key), long_key, 5, adnl_a)}, 5));
   emit("zero-validator-id", "reject", validator_set({descriptor(fill(0), 1, kid_a, key_a, 5, adnl_a)}, 5));
   emit("zero-adnl", "reject", validator_set({descriptor(vid_a, 1, kid_a, key_a, 5, fill(0))}, 5));
   emit("zero-weight", "reject", validator_set({good_a(), descriptor(vid_b, 1, kid_b, key_b, 0, adnl_b)}, 5));

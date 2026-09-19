@@ -2,29 +2,29 @@
 #ifdef NDEBUG
 #undef NDEBUG  // test assertions must stay live even in Release (-DNDEBUG)
 #endif
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <keys/keys.hpp>
+#include <map>
 #include <string>
 #include <type_traits>
 #include <vector>
 
-#include "block/block-auto.h"
-#include "block/mc-config.h"
-#include "block/validator-set.h"
-#include "block/validator-session-members.h"
-#include <keys/keys.hpp>
 #include "auto/tl/tos_api.hpp"
-#include "tl-utils/tl-utils.hpp"
+#include "block/block-auto.h"
+#include "block/block.h"
+#include "block/mc-config.h"
+#include "block/validator-session-members.h"
+#include "block/validator-set.h"
 #include "crypto/pq/pq-bytes.h"
 #include "crypto/pq/pq-consensus.h"
+#include "td/utils/misc.h"
+#include "tl-utils/tl-utils.hpp"
 #include "vm/cells/CellBuilder.h"
 #include "vm/dict.h"
-#include <algorithm>
-#include <fstream>
-#include <map>
-#include "block/block.h"
-#include "td/utils/misc.h"
 
 namespace {
 
@@ -44,9 +44,8 @@ td::Bits256 key_id_of(const std::string& public_key) {
 
 // One post-quantum descriptor, with every field under the caller's control so a single
 // rule can be broken at a time and nothing else.
-td::Ref<vm::Cell> pq_descriptor(const td::Bits256& validator_id, int algorithm_id,
-                                const td::Bits256& key_id, const std::string& public_key,
-                                td::uint64 weight, const td::Bits256& adnl_addr) {
+td::Ref<vm::Cell> pq_descriptor(const td::Bits256& validator_id, int algorithm_id, const td::Bits256& key_id,
+                                const std::string& public_key, td::uint64 weight, const td::Bits256& adnl_addr) {
   vm::CellBuilder cb;
   cb.store_long(0xb3, 8);
   cb.store_bits_bool(validator_id.cbits(), 256);
@@ -69,13 +68,13 @@ td::Ref<vm::Cell> validator_set_cell(const std::vector<td::Ref<vm::Cell>>& descr
     assert(ok);
   }
   vm::CellBuilder cb;
-  cb.store_long(0x12, 8);                                            // validators_ext#12
-  cb.store_long(100, 32);                                            // utime_since
-  cb.store_long(200, 32);                                            // utime_until
-  cb.store_long(static_cast<long long>(descriptors.size()), 16);     // total
-  cb.store_long(static_cast<long long>(descriptors.size()), 16);     // main
-  cb.store_long(static_cast<long long>(total_weight), 64);           // total_weight
-  cb.store_maybe_ref(dict.get_root_cell());                          // list
+  cb.store_long(0x12, 8);                                         // validators_ext#12
+  cb.store_long(100, 32);                                         // utime_since
+  cb.store_long(200, 32);                                         // utime_until
+  cb.store_long(static_cast<long long>(descriptors.size()), 16);  // total
+  cb.store_long(static_cast<long long>(descriptors.size()), 16);  // main
+  cb.store_long(static_cast<long long>(total_weight), 64);        // total_weight
+  cb.store_maybe_ref(dict.get_root_cell());                       // list
   return cb.finalize();
 }
 
@@ -90,12 +89,12 @@ int main() {
   assert(kid_a != kid_b);  // different keys really do have different identities
 
   // The same validator, before and after rotating its consensus key.
-  auto before = block::Config::unpack_validator_set(
-                    validator_set_cell({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl)}, 5), false)
-                    .move_as_ok();
-  auto after = block::Config::unpack_validator_set(
-                   validator_set_cell({pq_descriptor(vid, 1, kid_b, key_b, 5, adnl)}, 5), false)
-                   .move_as_ok();
+  auto before =
+      block::Config::unpack_validator_set(validator_set_cell({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl)}, 5), false)
+          .move_as_ok();
+  auto after =
+      block::Config::unpack_validator_set(validator_set_cell({pq_descriptor(vid, 1, kid_b, key_b, 5, adnl)}, 5), false)
+          .move_as_ok();
 
   block::ValidatorSet set_before{1, tos::ShardIdFull{tos::masterchainId}, before->export_validator_set()};
   block::ValidatorSet set_after{1, tos::ShardIdFull{tos::masterchainId}, after->export_validator_set()};
@@ -121,15 +120,15 @@ int main() {
   assert(!set_after.is_validator(tos::ValidatorId{adnl}));
 
   // A descriptor may not claim a key identity its key does not derive.
-  assert(block::Config::unpack_validator_set(
-             validator_set_cell({pq_descriptor(vid, 1, kid_a, key_b, 5, adnl)}, 5), false)
-             .is_error());
+  assert(
+      block::Config::unpack_validator_set(validator_set_cell({pq_descriptor(vid, 1, kid_a, key_b, 5, adnl)}, 5), false)
+          .is_error());
   // An unknown algorithm and a wrong-length key are both refused by the derivation
   // itself, which yields nothing rather than an identity. The diagnosis is asserted
   // because that is this guard's whole contribution: without it the code would go on to
   // read an identity that was never produced.
-  auto unknown_alg = block::Config::unpack_validator_set(
-      validator_set_cell({pq_descriptor(vid, 7, kid_a, key_a, 5, adnl)}, 5), false);
+  auto unknown_alg =
+      block::Config::unpack_validator_set(validator_set_cell({pq_descriptor(vid, 7, kid_a, key_a, 5, adnl)}, 5), false);
   assert(unknown_alg.is_error());
   assert(unknown_alg.error().message().str().find("unknown consensus algorithm") != std::string::npos);
   const std::string short_key(tos::pq::mldsa44_public_key_bytes - 1, '\x11');
@@ -137,11 +136,11 @@ int main() {
       validator_set_cell({pq_descriptor(vid, 1, key_id_of(key_a), short_key, 5, adnl)}, 5), false);
   assert(short_key_set.is_error());
   assert(short_key_set.error().message().str().find("unknown consensus algorithm") != std::string::npos);
-  assert(block::Config::unpack_validator_set(
-             validator_set_cell({pq_descriptor(vid, 1, kid_a, key_a, 5, fill(0))}, 5), false)
+  assert(block::Config::unpack_validator_set(validator_set_cell({pq_descriptor(vid, 1, kid_a, key_a, 5, fill(0))}, 5),
+                                             false)
              .is_error());
-  assert(block::Config::unpack_validator_set(
-             validator_set_cell({pq_descriptor(fill(0), 1, kid_a, key_a, 5, adnl)}, 5), false)
+  assert(block::Config::unpack_validator_set(validator_set_cell({pq_descriptor(fill(0), 1, kid_a, key_a, 5, adnl)}, 5),
+                                             false)
              .is_error());
 
   {  // Every structural rule gets an input that is valid apart from the one thing it
@@ -153,19 +152,15 @@ int main() {
       return block::Config::unpack_validator_set(validator_set_cell(d, w), false);
     };
     // the two-member baseline every case below is a single change away from
-    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
-               pq_descriptor(fill(0xa5), 1, kid_c, key_c, 7, fill(0xc5))},
+    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl), pq_descriptor(fill(0xa5), 1, kid_c, key_c, 7, fill(0xc5))},
               12)
                .is_ok());
 
     // one validator appearing twice, under two different keys
-    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
-               pq_descriptor(vid, 1, kid_c, key_c, 7, fill(0xc5))},
-              12)
+    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl), pq_descriptor(vid, 1, kid_c, key_c, 7, fill(0xc5))}, 12)
                .is_error());
     // two validators sharing one consensus key
-    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
-               pq_descriptor(fill(0xa5), 1, kid_a, key_a, 7, fill(0xc5))},
+    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl), pq_descriptor(fill(0xa5), 1, kid_a, key_a, 7, fill(0xc5))},
               12)
                .is_error());
     // the same public key twice, which is refused because a key identity is bound to
@@ -177,9 +172,8 @@ int main() {
     // A member with no stake at all. The weight accumulator refuses this too, so what
     // is checked here is the diagnosis: reported as a zero weight, not as exceeding the
     // protocol cap, which would send an operator looking in the wrong place.
-    auto zero_weight = ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
-                           pq_descriptor(fill(0xa5), 1, kid_c, key_c, 0, fill(0xc5))},
-                          5);
+    auto zero_weight = ok(
+        {pq_descriptor(vid, 1, kid_a, key_a, 5, adnl), pq_descriptor(fill(0xa5), 1, kid_c, key_c, 0, fill(0xc5))}, 5);
     assert(zero_weight.is_error());
     assert(zero_weight.error().message().str().find("zero weight") != std::string::npos);
     // a declared total that does not match what the members add up to
@@ -274,8 +268,12 @@ int main() {
           block::validator_session_members(nodes));
     };
     auto pq_node = [](const td::Bits256& vid, const td::Bits256& kid) {
-      return tos::ValidatorDescr{tos::ValidatorId{vid}, 1, tos::ConsensusKeyId{kid},
-                                 std::string(tos::pq::mldsa44_public_key_bytes, '\x01'), 5, fill(0xc0)};
+      return tos::ValidatorDescr{tos::ValidatorId{vid},
+                                 1,
+                                 tos::ConsensusKeyId{kid},
+                                 std::string(tos::pq::mldsa44_public_key_bytes, '\x01'),
+                                 5,
+                                 fill(0xc0)};
     };
     const auto vid_x = fill(0xa0), vid_y = fill(0xa1);
     const auto kid_1 = fill(0xb0), kid_2 = fill(0xb1);
@@ -330,16 +328,14 @@ int main() {
      // design; only a post-quantum one separates them.
     auto classical = tos::ValidatorDescr{tos::Ed25519_PublicKey{fill(0x11)}, 5, fill(0xc0)};
     block::ValidatorSet classical_set{1, tos::ShardIdFull{tos::masterchainId}, {classical}};
-    const auto* c = classical_set.get_validator(
-        tos::ValidatorId{tos::PublicKey{tos::pubkeys::Ed25519{tos::Ed25519_PublicKey{fill(0x11)}}}
-                             .compute_short_id()
-                             .bits256_value()});
+    const auto* c = classical_set.get_validator(tos::ValidatorId{
+        tos::PublicKey{tos::pubkeys::Ed25519{tos::Ed25519_PublicKey{fill(0x11)}}}.compute_short_id().bits256_value()});
     assert(c != nullptr);
 
-    const auto raw_key = fill(0x11);                  // the Ed25519 key itself
-    const auto short_id = c->validator_id.value;      // the identity derived from it
-    const auto adnl = c->addr;                        // where it is reachable
-    assert(raw_key != short_id);                      // the confusion that rejected blocks
+    const auto raw_key = fill(0x11);              // the Ed25519 key itself
+    const auto short_id = c->validator_id.value;  // the identity derived from it
+    const auto adnl = c->addr;                    // where it is reachable
+    assert(raw_key != short_id);                  // the confusion that rejected blocks
     assert(short_id != adnl);
     assert(raw_key != adnl);
     // For a classical descriptor the key identity is the same value as the membership
@@ -366,12 +362,12 @@ int main() {
     const std::string key_c(tos::pq::mldsa44_public_key_bytes, '\x44');
     const auto kid_c = key_id_of(key_c);
     const auto vid_b = fill(0xa7), adnl_b = fill(0xc7);
-    auto two = block::Config::unpack_validator_set(
-                   validator_set_cell({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
-                                       pq_descriptor(vid_b, 1, kid_c, key_c, 7, adnl_b)},
-                                      12),
-                   false)
-                   .move_as_ok();
+    auto two =
+        block::Config::unpack_validator_set(
+            validator_set_cell(
+                {pq_descriptor(vid, 1, kid_a, key_a, 5, adnl), pq_descriptor(vid_b, 1, kid_c, key_c, 7, adnl_b)}, 12),
+            false)
+            .move_as_ok();
     block::ValidatorSet vset{1, tos::ShardIdFull{tos::masterchainId}, two->export_validator_set()};
 
     // Each validator may ask for its own blocks, from its own address.
@@ -412,8 +408,7 @@ int main() {
     assert(tos::pq::pq_bytes_hard_max == frozen_value("pq_bytes_hard_max"));
     assert(tos::pq::mldsa44_public_key_bytes == frozen_value("mldsa44_public_key_bytes"));
     assert(tos::pq::mldsa44_signature_bytes == frozen_value("mldsa44_signature_bytes"));
-    assert(static_cast<unsigned long long>(tos::pq::PQAlgorithmId::mldsa44) ==
-           frozen_value("mldsa44_algorithm_id"));
+    assert(static_cast<unsigned long long>(tos::pq::PQAlgorithmId::mldsa44) == frozen_value("mldsa44_algorithm_id"));
     assert(block::validator_set_hash_magic_v2 == frozen_value("validator_set_hash_magic_v2"));
     // The descriptor tag comes from the schema itself rather than a copy of it.
     const auto& tags = block::gen::ValidatorDescr::cons_tag;

@@ -29,6 +29,7 @@
 #include "block/block-auto.h"
 #include "block/block-parse.h"
 #include "block/block.h"
+#include "block/validator-session-members.h"
 #include "block/workchain-execution-dispatch.h"
 #include "common/delay.h"
 #include "common/stats.h"
@@ -40,10 +41,11 @@
 #include "impl/applied-ext-message-cleanup.hpp"
 #include "impl/config.hpp"
 #include "interfaces/validator-full-id.h"
-#include "node-consensus-status.h"
 #include "td/actor/MultiPromise.h"
 #include "td/actor/coro_utils.h"
+#include "td/db/RocksDb.h"
 #include "td/utils/JsonBuilder.h"
+#include "td/utils/PathView.h"
 #include "td/utils/Random.h"
 #include "td/utils/ScopeGuard.h"
 #include "td/utils/buffer.h"
@@ -54,6 +56,9 @@
 #include "tos/lite-tl.hpp"
 #include "tos/tos-io.hpp"
 #include "tos/tos-tl.hpp"
+#include "validator/consensus/db-path.h"
+#include "validator/consensus/validator-cleanup-dispatch.h"
+#include "validator/consensus/validator-cleanup-store.h"
 #include "validator/stats-merger.h"
 
 #include "checksum.h"
@@ -63,16 +68,8 @@
 #include "import-db-slice-local.hpp"
 #include "import-db-slice.hpp"
 #include "manager.h"
-#include "block/validator-session-members.h"
 #include "manager.hpp"
-
-#include "validator/consensus/db-path.h"
-#include "validator/consensus/validator-cleanup-dispatch.h"
-#include "validator/consensus/validator-cleanup-store.h"
-#include "td/db/RocksDb.h"
-#include "td/utils/PathView.h"
-#include "td/utils/filesystem.h"
-#include "td/utils/port/path.h"
+#include "node-consensus-status.h"
 #include "shard.hpp"
 #include "state-serializer.hpp"
 #include "validate-broadcast.hpp"
@@ -505,7 +502,8 @@ td::actor::Task<> ValidatorManagerImpl::new_external_message_broadcast(td::Buffe
   }
   auto r_check_result =
       co_await td::actor::ask(ext_message_pool_, &ExtMessagePool::check_add_external_message, std::move(data), priority,
-                              /* add_to_mempool = */ has_local_validator_keys() || !collator_nodes_.empty(), std::move(source_peer))
+                              /* add_to_mempool = */ has_local_validator_keys() || !collator_nodes_.empty(),
+                              std::move(source_peer))
           .wrap();
   if (r_check_result.is_error()) {
     VLOG(VALIDATOR_DEBUG) << "Dropping external message broadcast (prio=" << priority
@@ -3076,7 +3074,8 @@ void ValidatorManagerImpl::update_shards() {
         }
 
         if (shard.is_masterchain()) {
-          mc_validator_adnl_id = adnl::AdnlNodeIdShort{val_set->get_validator(tos::ValidatorId{validator_id.bits256_value()})->addr};
+          mc_validator_adnl_id =
+              adnl::AdnlNodeIdShort{val_set->get_validator(tos::ValidatorId{validator_id.bits256_value()})->addr};
           if (mc_validator_adnl_id.is_zero()) {
             mc_validator_adnl_id = adnl::AdnlNodeIdShort{validator_id.bits256_value()};
           }
@@ -3098,7 +3097,8 @@ void ValidatorManagerImpl::update_shards() {
       }
       get_or_make_next_group(shard, val_group_id, val_set);
       if (shard.is_masterchain() && mc_validator_adnl_id.is_zero()) {
-        mc_validator_adnl_id = adnl::AdnlNodeIdShort{val_set->get_validator(tos::ValidatorId{validator_id.bits256_value()})->addr};
+        mc_validator_adnl_id =
+            adnl::AdnlNodeIdShort{val_set->get_validator(tos::ValidatorId{validator_id.bits256_value()})->addr};
         if (mc_validator_adnl_id.is_zero()) {
           mc_validator_adnl_id = adnl::AdnlNodeIdShort{validator_id.bits256_value()};
         }
@@ -3376,8 +3376,7 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
   CHECK(!validator_id.is_zero());
   auto descr = validator_set->get_validator(tos::ValidatorId{validator_id.bits256_value()});
   CHECK(descr);
-  auto adnl_id = adnl::AdnlNodeIdShort{
-      block::validator_adnl_identity(*descr)};
+  auto adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(*descr)};
 
   auto new_consensus_config = last_masterchain_state_->get_new_consensus_config(shard.workchain);
   if (!consensus_group_admissible(new_consensus_config)) {
@@ -3928,7 +3927,8 @@ void ValidatorManagerImpl::prepare_stats(td::Promise<std::vector<std::pair<std::
   vec.emplace_back("active_observer_groups", td::to_string(observer_groups_.size()));
 
   bool serializer_enabled = opts_->get_state_serializer_enabled();
-  if (has_local_validator_keys() && last_masterchain_state_.not_null() && last_masterchain_state_->get_global_id() == 1) {
+  if (has_local_validator_keys() && last_masterchain_state_.not_null() &&
+      last_masterchain_state_->get_global_id() == 1) {
     serializer_enabled = false;
   }
   vec.emplace_back("stateserializerenabled", serializer_enabled ? "true" : "false");

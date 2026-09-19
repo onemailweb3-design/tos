@@ -22,11 +22,11 @@
 #include <map>
 #include <set>
 
-#include "validator/node-consensus-status.h"
 #include "db/celldb.hpp"
 #include "interfaces/db.h"
 #include "interfaces/validator-manager.h"
 #include "tos/tos-types.h"
+#include "validator/node-consensus-status.h"
 
 #include "manager-hardfork.h"
 #include "manager-init.h"
@@ -101,8 +101,7 @@ class ValidatorManagerImpl : public ValidatorManager {
   void del_temp_key(PublicKeyHash key, td::Promise<td::Unit> promise) override {
     UNREACHABLE();
   }
-  void add_pq_consensus_key(tos::ValidatorId validator_id,
-                            std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store,
+  void add_pq_consensus_key(tos::ValidatorId validator_id, std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store,
                             td::Promise<td::Unit> promise) override {
     auto status = pq_custody_.install(validator_id, std::move(store));
     if (status.is_error()) {

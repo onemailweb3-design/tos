@@ -76,9 +76,9 @@ struct Fixture {
       nodes.emplace_back(tos::Ed25519_PublicKey{key.ed25519_value().raw()}, weights[i]);
       // A classical validator's membership identity is the one derived from its key,
       // which is what the validator set settles on too.
-      bus.validator_set.push_back({tos::ValidatorId{key.compute_short_id().bits256_value()},
-                                   c::PeerValidatorId{i}, key, key.compute_short_id(),
-                                   tos::adnl::AdnlNodeIdShort{key.compute_short_id()}, weights[i]});
+      bus.validator_set.push_back({tos::ValidatorId{key.compute_short_id().bits256_value()}, c::PeerValidatorId{i}, key,
+                                   key.compute_short_id(), tos::adnl::AdnlNodeIdShort{key.compute_short_id()},
+                                   weights[i]});
       expect(tos::checked_add_validator_weight(bus.total_weight, weights[i]), "fixture-weight-" + std::to_string(i));
     }
     vset = td::make_ref<block::ValidatorSet>(bus.cc_seqno, bus.shard, std::move(nodes));

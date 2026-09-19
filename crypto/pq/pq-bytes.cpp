@@ -1,10 +1,10 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
-#include "pq-bytes.h"
-
 #include <algorithm>
 
 #include "vm/cells/CellBuilder.h"
 #include "vm/cells/CellSlice.h"
+
+#include "pq-bytes.h"
 
 namespace tos::pq {
 

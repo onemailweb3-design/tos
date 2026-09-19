@@ -24,7 +24,9 @@ class ValidatorPQKeyStore {
   // Deterministic keypair from a caller-owned 32-byte seed (test vectors / recovery).
   static std::optional<ValidatorPQKeyStore> from_seed(std::string_view seed) noexcept;
 
-  const ConsensusPQKey& consensus_key() const noexcept { return key_; }
+  const ConsensusPQKey& consensus_key() const noexcept {
+    return key_;
+  }
 
   // Sign under the frozen simplex_sign_context (domain-separated from wallet/agent
   // ML-DSA use and from the other frozen consensus authority surfaces).

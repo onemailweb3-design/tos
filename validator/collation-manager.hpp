@@ -37,9 +37,9 @@ class CollationManager : public td::actor::Actor {
   void alarm() override;
 
   void collate_block(ShardIdFull shard, BlockIdExt min_masterchain_block_id, std::vector<BlockIdExt> prev,
-                     ValidatorId creator, BlockCandidatePriority priority,
-                     td::Ref<block::ValidatorSet> validator_set, td::uint64 max_answer_size,
-                     td::CancellationToken cancellation_token, td::Promise<GeneratedCandidate> promise);
+                     ValidatorId creator, BlockCandidatePriority priority, td::Ref<block::ValidatorSet> validator_set,
+                     td::uint64 max_answer_size, td::CancellationToken cancellation_token,
+                     td::Promise<GeneratedCandidate> promise);
 
   void update_options(td::Ref<ValidatorManagerOptions> opts);
 

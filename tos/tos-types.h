@@ -596,9 +596,8 @@ struct ValidatorDescr {
     return key;
   }
   bool operator==(const ValidatorDescr& other) const {
-    return key == other.key && weight == other.weight && addr == other.addr &&
-           validator_id == other.validator_id && key_id == other.key_id &&
-           algorithm_id == other.algorithm_id && pq_public_key == other.pq_public_key;
+    return key == other.key && weight == other.weight && addr == other.addr && validator_id == other.validator_id &&
+           key_id == other.key_id && algorithm_id == other.algorithm_id && pq_public_key == other.pq_public_key;
   }
   bool operator!=(const ValidatorDescr& other) const {
     return !(operator==(other));

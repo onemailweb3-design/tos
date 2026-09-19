@@ -34,9 +34,9 @@ void CollationManager::start_up() {
 }
 
 void CollationManager::collate_block(ShardIdFull shard, BlockIdExt min_masterchain_block_id,
-                                     std::vector<BlockIdExt> prev, ValidatorId creator,
-                                     BlockCandidatePriority priority, td::Ref<block::ValidatorSet> validator_set,
-                                     td::uint64 max_answer_size, td::CancellationToken cancellation_token,
+                                     std::vector<BlockIdExt> prev, ValidatorId creator, BlockCandidatePriority priority,
+                                     td::Ref<block::ValidatorSet> validator_set, td::uint64 max_answer_size,
+                                     td::CancellationToken cancellation_token,
                                      td::Promise<GeneratedCandidate> promise) {
   if (shard.is_masterchain()) {
     run_collate_query(CollateParams{.shard = shard,

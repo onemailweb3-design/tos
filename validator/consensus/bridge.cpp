@@ -10,7 +10,6 @@
 #include "td/db/RocksDb.h"
 #include "td/utils/port/Stat.h"
 #include "td/utils/port/path.h"
-#include "candidate-relay-policy.h"
 #include "tos/lite-tl.hpp"
 #include "tos/quorum.h"
 #include "validator/consensus/db-path.h"
@@ -19,6 +18,8 @@
 #include "validator/full-node.h"
 #include "validator/interfaces/validator-full-id.h"
 #include "validator/validator-group.hpp"
+
+#include "candidate-relay-policy.h"
 
 namespace tos::validator {
 
@@ -656,8 +657,7 @@ td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
   // key. A post-quantum one always carries an explicit address, precisely so that a
   // consensus key never doubles as a transport identity.
   CHECK(!descr->is_pq() || !descr->addr.is_zero());
-  auto local_adnl_id = adnl::AdnlNodeIdShort{
-      block::validator_adnl_identity(*descr)};
+  auto local_adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(*descr)};
   consensus::BridgeCreationParams params{
       .name = name_with_seqno,
       .is_create_session_called = create_session,

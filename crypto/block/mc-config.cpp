@@ -27,18 +27,18 @@
     Copyright 2025-2026 TOS Blockchain Teams
 */
 #include <algorithm>
-#include <set>
 #include <cstring>
+#include <keys/keys.hpp>
 #include <mutex>
+#include <set>
 #include <stack>
 
 #include "block/block-auto.h"
-#include <keys/keys.hpp>
-#include "crypto/pq/pq-bytes.h"
-#include "crypto/pq/pq-consensus.h"
 #include "block/block-parse.h"
 #include "block/block.h"
 #include "common/bitstring.h"
+#include "crypto/pq/pq-bytes.h"
+#include "crypto/pq/pq-consensus.h"
 #include "openssl/digest.hpp"
 #include "td/utils/bits.h"
 #include "td/utils/uint128.h"
@@ -713,14 +713,14 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
     if (is_pq) {
       gen::ValidatorDescr::Record_validator_pq pq;
       if (!tlb::csr_unpack(descr_cs, pq)) {
-        error = td::Status::Error(PSLICE()
-                                  << "validator #" << i << " has an invalid post-quantum ValidatorDescr record");
+        error =
+            td::Status::Error(PSLICE() << "validator #" << i << " has an invalid post-quantum ValidatorDescr record");
         return false;
       }
       auto key_bytes = tos::pq::unpack_pq_bytes(pq.public_key, tos::pq::pq_bytes_hard_max);
       if (key_bytes.is_error()) {
-        error = td::Status::Error(PSLICE()
-                                  << "validator #" << i << " has a malformed post-quantum public key encoding");
+        error =
+            td::Status::Error(PSLICE() << "validator #" << i << " has a malformed post-quantum public key encoding");
         return false;
       }
       pq_public_key = key_bytes.move_as_ok().as_slice().str();
@@ -748,9 +748,9 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
       }
       // An ADNL identity is never derived from a consensus key, so it has to be present.
       if (pq.adnl_addr.is_zero()) {
-        error = td::Status::Error(PSLICE()
-                                  << "validator #" << i
-                                  << " has no explicit ADNL identity, which a post-quantum descriptor requires");
+        error =
+            td::Status::Error(PSLICE() << "validator #" << i
+                                       << " has no explicit ADNL identity, which a post-quantum descriptor requires");
         return false;
       }
       validator_id = tos::ValidatorId{pq.validator_id};
@@ -763,9 +763,9 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
         descr.adnl_addr.set_zero();
         if (!(gen::t_ValidatorDescr.unpack_validator(descr_cs.write(), descr.public_key, descr.weight) &&
               descr_cs->empty_ext())) {
-          error = td::Status::Error(
-              PSLICE() << "validator #" << i
-                       << " has an invalid ValidatorDescr record in the validator set dictionary");
+          error =
+              td::Status::Error(PSLICE() << "validator #" << i
+                                         << " has an invalid ValidatorDescr record in the validator set dictionary");
           return false;
         }
       }
@@ -2124,8 +2124,8 @@ namespace {
 // keeps its Ed25519 key. Weight is passed separately because shard subsets override it.
 tos::ValidatorDescr to_validator_descr(const ValidatorDescr& node, tos::ValidatorWeight weight) {
   if (node.is_pq()) {
-    return tos::ValidatorDescr{node.validator_id, node.algorithm_id, node.key_id,
-                               node.pq_public_key,  weight,          node.adnl_addr};
+    return tos::ValidatorDescr{node.validator_id, node.algorithm_id, node.key_id, node.pq_public_key, weight,
+                               node.adnl_addr};
   }
   tos::ValidatorDescr out{node.pubkey, weight, node.adnl_addr};
   out.validator_id = node.validator_id;
