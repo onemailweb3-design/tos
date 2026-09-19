@@ -1806,6 +1806,55 @@ fn a_key_already_registered_by_another_controller_is_returned() {
     );
 }
 
+/// A key released by a rotation is registrable by the controller that was refused it.
+///
+/// The book and its reverse index are two halves of one fact, and the half that decides
+/// admission is the index. Removing a key from it on rotation is only meaningful if the
+/// removal is what a later registration sees; an index that merely looked empty to a
+/// getter, while the member record still spoke for the key, would leave the key
+/// permanently unusable by anyone.
+#[test]
+fn a_key_released_by_a_rotation_is_registrable_by_the_controller_it_was_refused_to() {
+    let (mut chain, first, election) = open_election("pq-release", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let second = chain.blockchain.treasury("pq-release-second", 60_000 * TOS).expect("an account");
+    let contested = PqValidator::new(12);
+    let rotated = PqValidator::new(13);
+
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &first, &contested, election, 1, 11_000 * TOS)),
+        (STAKE_ACCEPTED, 0),
+        "the first controller could not register the contested key"
+    );
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &second, &contested, election, 2, 11_000 * TOS)),
+        (STAKE_RETURNED, REASON_ANOTHER_ADDRESS),
+        "the second controller took a key that was already held"
+    );
+
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &first, &rotated, election, 3, 11_000 * TOS)),
+        (STAKE_ACCEPTED, 0),
+        "the holder could not rotate away from the contested key"
+    );
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &second, &contested, election, 4, 11_000 * TOS)),
+        (STAKE_ACCEPTED, 0),
+        "the released key stayed unusable by anyone"
+    );
+
+    let first_id = chain_block::UInt256::from_slice(&first.address().address().get_bytestring(0));
+    let second_id = chain_block::UInt256::from_slice(&second.address().address().get_bytestring(0));
+    assert_eq!(pq_member_key_id(&chain, &first), Some(rotated.key_id()));
+    assert_eq!(pq_member_key_id(&chain, &second), Some(contested.key_id()));
+    assert_eq!(pq_key_holder(&chain, &rotated.key_id()), Some(first_id));
+    assert_eq!(
+        pq_key_holder(&chain, &contested.key_id()),
+        Some(second_id),
+        "the index and the member records disagree about who holds the contested key"
+    );
+}
+
 #[test]
 fn a_controller_rotates_its_key_and_releases_the_one_it_held() {
     let (mut chain, treasury, election) = open_election("pq-validator-e", 60_000 * TOS);
