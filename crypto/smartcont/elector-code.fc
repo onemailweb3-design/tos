@@ -314,19 +314,15 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   cell signature = cs~load_ref();
   cs.end_parse();
 
-  ;; Both identities are the contract's own: the validator is the account that sent this,
-  ;; and the key identity is derived from the key presented. Neither is read from the
-  ;; request, so a request cannot name one validator while carrying another's key.
+  ;; The validator identity is the contract's own: the account that sent this. The key
+  ;; identity is derived from the key presented, below. Neither is read from the request,
+  ;; so a request cannot name one validator while carrying another's key.
   int validator_id = src_addr;
-  (_, cell key_chain) = pq::stored_key(algorithm_id, public_key);
-  int key_id = pq::key_id(algorithm_id, public_key);
-  cell signature_chain = pq::stored_signature(algorithm_id, signature);
 
-  ifnot (pq_check_mldsa44(
-      pq::stake_preimage(stake_at, max_factor, validator_id, algorithm_id, key_id, adnl_addr),
-      pq::election_context(), signature_chain, key_chain)) {
-    return return_stake(s_addr, query_id, 1);
-  }
+  ;; Everything that can be decided without the key is decided first. Verifying a
+  ;; post-quantum signature costs an order of magnitude more than the whole rest of this
+  ;; function, and a request that is refused for its election, its factor or its address
+  ;; must not be able to spend that on the way out.
   if (max_factor < 0x10000) {
     ;; factor must be >= 1. = 65536/65536
     return return_stake(s_addr, query_id, 6);
@@ -353,6 +349,8 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   if (finished) {
     return return_stake(s_addr, query_id, 0);
   }
+  (_, cell key_chain) = pq::stored_key(algorithm_id, public_key);
+  int key_id = pq::key_id(algorithm_id, public_key);
   ;; A key another controller registered is refused here rather than thrown, so the stake
   ;; goes back instead of bouncing with the reason lost.
   int holder = pq::key_holder(pq_key_owner, key_id);
@@ -371,6 +369,15 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     return return_stake(s_addr, query_id, 5);
   }
   throw_unless(44, msg_value);
+
+  ;; The signature is checked last, when nothing else can refuse this stake: it is the
+  ;; only step whose cost an unauthorised sender could otherwise impose at will.
+  cell signature_chain = pq::stored_signature(algorithm_id, signature);
+  ifnot (pq_check_mldsa44(
+      pq::stake_preimage(stake_at, max_factor, validator_id, algorithm_id, key_id, adnl_addr),
+      pq::election_context(), signature_chain, key_chain)) {
+    return return_stake(s_addr, query_id, 1);
+  }
   accept_message();
 
   (pq_members, pq_key_owner) = pq::register_member(pq_members, pq_key_owner, validator_id, msg_value,

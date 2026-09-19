@@ -174,6 +174,7 @@ const STAKE_RETURNED: u32 = 0xee6f454c;
 const NEW_STAKE: u32 = 0x4e73744b;
 /// `return_stake` reason 1: the signature did not verify.
 const REASON_BAD_SIGNATURE: u32 = 1;
+const REASON_WRONG_ELECTION: u32 = 3;
 const ELECT_REQUEST: u32 = 0x654c5074;
 
 const TOS: u64 = 1_000_000_000;
@@ -1939,6 +1940,49 @@ fn an_election_opened_before_the_upgrade_is_read_and_written_again() {
         pq_member_key_id(&chain, &treasury),
         Some(validator.key_id()),
         "the book was not created for an election that was opened without one"
+    );
+}
+
+/// A stake for an election that is not the open one, refused for a reason that is
+/// decided without looking at the key or the signature.
+///
+/// Anyone can send such a message, and the elector pays for what it does with it out of
+/// the masterchain block's gas. Verifying a post-quantum signature is an order of
+/// magnitude more expensive than everything else this contract does, so if it happened
+/// before the cheap refusals, every one of those messages would cost the chain a
+/// verification it never needed.
+#[test]
+fn a_stake_refused_without_its_key_does_not_pay_for_a_verification() {
+    let (mut chain, treasury, election) = open_election("pq-refusal-cost", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(11);
+
+    let refused = pq_stake(&mut chain, &treasury, &validator, election + 1, 1, 11_000 * TOS);
+    assert_eq!(
+        reply(&refused),
+        (STAKE_RETURNED, REASON_WRONG_ELECTION),
+        "the fixture must be refused for its election and nothing else"
+    );
+    let refusal = compute_gas(&refused);
+
+    let accepted = pq_stake(&mut chain, &treasury, &validator, election, 2, 11_000 * TOS);
+    assert_eq!(reply(&accepted), (STAKE_ACCEPTED, 0), "the fixture needs a registration to compare");
+    let registration = compute_gas(&accepted);
+
+    let classical = Validator::new(0xf7);
+    let classical_refused = stake(&mut chain, &treasury, &classical, election + 1, 3, 11_000 * TOS);
+    assert_eq!(reply(&classical_refused), (STAKE_RETURNED, REASON_WRONG_ELECTION));
+    let classical_refusal = compute_gas(&classical_refused);
+
+    assert!(
+        refusal * 4 < registration,
+        "refusing a stake for its election costs {refusal} gas against {registration} for a \
+         registration, so the verification is being paid for before the refusal"
+    );
+    assert!(
+        refusal < classical_refusal * 2,
+        "the same refusal costs {refusal} gas on the post-quantum path and \
+         {classical_refusal} on the classical one, though neither needs a key"
     );
 }
 
