@@ -14,7 +14,7 @@ use crate::{
     error::{BlockError, Result},
     fail,
     pq_bytes::{pack_pq_bytes, unpack_pq_bytes, PQ_BYTES_HARD_MAX},
-    sha512_digest,
+    sha256_digest, sha512_digest,
     shard::{MASTERCHAIN_ID, SHARD_FULL},
     signature::{CryptoSignature, SigPubKey},
     types::Number16,
@@ -137,6 +137,65 @@ Tag 0x93 was a Rust-only reader/writer path that never existed in block.tlb and
 that the C++ side rejects; it has been removed so both implementations accept
 exactly the same constructors.
 */
+
+/// The one consensus signature suite admitted at genesis. Mirrors `PQAlgorithmId` in
+/// crypto/pq/pq-consensus.h.
+pub const MLDSA44_ALGORITHM_ID: u16 = 1;
+pub const MLDSA44_PUBLIC_KEY_BYTES: usize = 1312;
+
+/// Frozen domain for the consensus key identity. Must stay byte-identical to
+/// `key_id_domain` in crypto/pq/pq-consensus.h, since both derive the same identity.
+const CONSENSUS_KEY_ID_DOMAIN: &[u8] = b"TOS-PQ-CONSENSUS-KEY-v1";
+
+/// key_id = SHA-256(domain || u16_le(algorithm_id) || public_key), the counterpart of
+/// `derive_key_id` on the C++ side.
+pub fn derive_consensus_key_id(algorithm_id: u16, public_key: &[u8]) -> UInt256 {
+    let mut preimage = Vec::with_capacity(CONSENSUS_KEY_ID_DOMAIN.len() + 2 + public_key.len());
+    preimage.extend_from_slice(CONSENSUS_KEY_ID_DOMAIN);
+    preimage.extend_from_slice(&algorithm_id.to_le_bytes());
+    preimage.extend_from_slice(public_key);
+    UInt256::from(sha256_digest(&preimage))
+}
+
+/// The protocol cap on the summed weight of a validator set. Mirrors
+/// `kMaxTotalValidatorWeight` in tos/quorum.h: it keeps the quorum arithmetic, which
+/// multiplies weights by three, from overflowing.
+pub const MAX_TOTAL_VALIDATOR_WEIGHT: u64 = u64::MAX / 3;
+
+/// Validate a whole list and return the weight it sums to.
+///
+/// Both building a set and reading one go through here, so a set that one path refuses
+/// cannot be accepted by the other.
+pub fn validate_validator_list(list: &[ValidatorDescr]) -> Result<u64> {
+    let mut seen_validator_ids = std::collections::HashSet::new();
+    let mut seen_key_ids = std::collections::HashSet::new();
+    let mut total: u64 = 0;
+    for descr in list {
+        descr.validate_consensus()?;
+        // One validator may appear once: a second entry would let a single member be
+        // counted twice toward a quorum.
+        if !seen_validator_ids.insert(descr.validator_id()?) {
+            fail!("validator set repeats a validator identity")
+        }
+        // A consensus key belongs to one validator. This is a different fault from a
+        // repeated member, and it also covers a repeated public key, since a key
+        // identity is bound to the key that derives it.
+        if !seen_key_ids.insert(descr.consensus_key_id()?) {
+            fail!("validator set repeats a consensus key identity")
+        }
+        total = match total.checked_add(descr.weight) {
+            Some(v) => v,
+            None => fail!("total weight of all validators in validator set exceeds u64"),
+        };
+        if total > MAX_TOTAL_VALIDATOR_WEIGHT {
+            fail!(
+                "total weight of all validators in validator set exceeds the protocol cap \
+                 (UINT64_MAX/3), which the quorum arithmetic depends on"
+            )
+        }
+    }
+    Ok(total)
+}
 
 /// The post-quantum consensus key a validator currently holds.
 ///
@@ -277,6 +336,43 @@ impl ValidatorDescr {
         match &self.key {
             ValidatorKey::Ed25519(pk) => Ok(pk.pub_key().id().data().into()),
             ValidatorKey::Pq(k) => Ok(k.key_id.clone()),
+        }
+    }
+
+    /// Everything a descriptor must satisfy before it can take part in consensus.
+    ///
+    /// The node applies the same rules when it decodes a validator set, and a set that
+    /// one implementation accepts while the other refuses is a split waiting to happen,
+    /// so these are checked here rather than left to whichever caller remembers.
+    pub fn validate_consensus(&self) -> Result<()> {
+        // A member with no stake cannot be part of a quorum.
+        if self.weight == 0 {
+            fail!("validator descriptor has zero weight")
+        }
+        match &self.key {
+            ValidatorKey::Ed25519(_) => Ok(()),
+            ValidatorKey::Pq(key) => {
+                if key.algorithm_id != MLDSA44_ALGORITHM_ID {
+                    fail!("validator descriptor names an unadmitted consensus algorithm")
+                }
+                if key.public_key.len() != MLDSA44_PUBLIC_KEY_BYTES {
+                    fail!("post-quantum consensus key has the wrong length")
+                }
+                // The declared key identity must be the one this key derives, otherwise a
+                // descriptor could claim an identity its key does not back.
+                if derive_consensus_key_id(key.algorithm_id, &key.public_key) != key.key_id {
+                    fail!("declared key identity is not the one the public key derives")
+                }
+                if self.validator_id.is_zero() {
+                    fail!("post-quantum descriptor has a zero validator identity")
+                }
+                // An ADNL identity is never derived from a consensus key, so it has to be
+                // carried explicitly.
+                match self.adnl_addr.as_ref() {
+                    Some(addr) if !addr.is_zero() => Ok(()),
+                    _ => fail!("post-quantum descriptor has no explicit ADNL identity"),
+                }
+            }
         }
     }
 
@@ -447,12 +543,13 @@ impl ValidatorSet {
         if list.is_empty() {
             fail!(BlockError::InvalidArg("`list` can't be empty".to_string()))
         }
-        let mut total_weight = 0;
+        // The same rules the node applies when it decodes a set, so a set that can be
+        // built here is one it would also accept, and vice versa.
+        let total_weight = validate_validator_list(&list)?;
+        let mut running = 0u64;
         for descr in &mut list {
-            descr.prev_weight_sum = total_weight;
-            total_weight = total_weight.checked_add(descr.weight).ok_or_else(|| {
-                BlockError::InvalidData("Validator's total weight is more than 2^64".to_string())
-            })?;
+            descr.prev_weight_sum = running;
+            running += descr.weight;
         }
         Ok(ValidatorSet {
             utime_since,
@@ -715,18 +812,23 @@ impl Deserializable for ValidatorSet {
             validators.read_from(cell)?; // HashmapE
         }
         self.list.clear();
-        let mut total_weight = 0;
         for i in 0..self.total.as_u16() {
-            let mut val = validators.get(&i)?.ok_or_else(|| {
+            let val = validators.get(&i)?.ok_or_else(|| {
                 BlockError::InvalidData(format!(
                     "Validator's hash map doesn't \
                     contain validator with index {}",
                     i
                 ))
             })?;
-            val.prev_weight_sum = total_weight;
-            total_weight += val.weight;
             self.list.push(val);
+        }
+        // A decoded set is untrusted input, so it goes through the same validation as one
+        // built in process rather than the bare accumulation this used to do.
+        let total_weight = validate_validator_list(&self.list)?;
+        let mut running = 0u64;
+        for val in self.list.iter_mut() {
+            val.prev_weight_sum = running;
+            running += val.weight;
         }
         if self.list.is_empty() {
             fail!(BlockError::InvalidData("list can't be empty".to_string()));

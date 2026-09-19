@@ -200,7 +200,8 @@ fn get_validator_set() -> ValidatorSet {
     for n in 0..2 {
         let keypair = Ed25519KeyOption::generate().unwrap();
         let key = SigPubKey::from_bytes(keypair.pub_key().unwrap()).unwrap();
-        let vd = ValidatorDescr::with_params(key, n, None);
+        // weights start at one: a validator with no stake is not a valid member
+        let vd = ValidatorDescr::with_params(key, n + 1, None);
         list.push(vd);
     }
 

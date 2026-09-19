@@ -73,7 +73,8 @@ fn test_validator_set_serialize() {
     for n in 0..20 {
         let keypair = crate::Ed25519KeyOption::generate().unwrap();
         let key = SigPubKey::from_bytes(keypair.pub_key().unwrap()).unwrap();
-        let vd = ValidatorDescr::with_params(key, n, None);
+        // weights start at one: a validator with no stake is not a valid member
+        let vd = ValidatorDescr::with_params(key, n + 1, None);
         list.push(vd);
     }
 
@@ -482,4 +483,34 @@ fn validator_set_hash_matches_shared_cpp_vectors() {
     // The property the whole split exists for: holding the membership identity fixed and
     // rotating only the key identity has to move the commitment.
     assert_ne!(by_name["single"], by_name["rotated"]);
+}
+
+// The verdicts on a malformed validator set are shared with the C++ side through
+// test/pq-native/validator-set-cases.txt. Both read these exact encoded sets: one
+// implementation accepting a set the other refuses is a split, and for consensus state
+// that has to be caught here rather than in production.
+#[test]
+fn validator_set_verdicts_match_cpp() {
+    use crate::read_single_root_boc;
+
+    let path =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../../test/pq-native/validator-set-cases.txt");
+    let text = std::fs::read_to_string(path).expect("shared validator-set cases");
+    let mut checked = 0;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split(' ').collect();
+        assert_eq!(f.len(), 3, "bad case line");
+        let (name, verdict) = (f[0], f[1]);
+        let cell = read_single_root_boc(&hex::decode(f[2]).unwrap()).unwrap();
+
+        let accepted = SliceData::load_cell_ref(&cell)
+            .and_then(|mut cs| ValidatorSet::construct_from(&mut cs))
+            .is_ok();
+        assert_eq!(accepted, verdict == "accept", "verdict for {name}");
+        checked += 1;
+    }
+    assert!(checked >= 13, "expected the full case set, saw {checked}");
 }
