@@ -643,8 +643,12 @@ td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
       << NewConsensusConfig::MAX_SUPPORTED_PROTOCOL_VERSION << ")";
   auto name_with_seqno =
       std::string(name.begin(), name.end()) + "." + std::to_string(validator_set->get_catchain_seqno());
-  auto descr = validator_set->get_validator(local_id.bits256_value());
+  auto descr = validator_set->get_validator(tos::ValidatorId{local_id.bits256_value()});
   CHECK(descr);
+  // Only a classical descriptor may fall back to deriving an ADNL identity from its
+  // key. A post-quantum one always carries an explicit address, precisely so that a
+  // consensus key never doubles as a transport identity.
+  CHECK(!descr->is_pq() || !descr->addr.is_zero());
   auto local_adnl_id = adnl::AdnlNodeIdShort{
       descr->addr.is_zero() ? ValidatorFullId{descr->key}.compute_short_id().bits256_value() : descr->addr};
   consensus::BridgeCreationParams params{

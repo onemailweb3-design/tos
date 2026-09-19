@@ -41,12 +41,12 @@ inline std::pair<bool, bool> node_validator_membership(const block::ValidatorSet
                                                        const std::set<PublicKeyHash>& permanent_keys) {
   bool has_keys = !temp_keys.empty() || !permanent_keys.empty();
   for (const auto& key : temp_keys) {
-    if (set.is_validator(key.bits256_value())) {
+    if (set.is_validator(tos::ValidatorId{key.bits256_value()})) {
       return {has_keys, true};
     }
   }
   for (const auto& key : permanent_keys) {
-    if (set.is_validator(key.bits256_value())) {
+    if (set.is_validator(tos::ValidatorId{key.bits256_value()})) {
       return {has_keys, true};
     }
   }

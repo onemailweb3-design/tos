@@ -484,18 +484,96 @@ struct BlockCandidatePriority {
   td::int32 priority{};
 };
 
+// Three different 256-bit identities meet on a validator, and code that mixes them
+// up fails in ways nothing catches. They are distinct types so the compiler will not
+// let one stand in for another:
+//   ValidatorId    - stable membership identity; unchanged when the key rotates
+//   ConsensusKeyId - identity of the consensus key currently held; changes on rotation
+//   Bits256 addr   - the ADNL transport identity, which implies no consensus authority
+struct ValidatorId {
+  Bits256 value;
+  ValidatorId() {
+    value.set_zero();
+  }
+  explicit ValidatorId(const Bits256& v) : value(v) {
+  }
+  bool is_zero() const {
+    return value.is_zero();
+  }
+  bool operator==(const ValidatorId& other) const {
+    return value == other.value;
+  }
+  bool operator!=(const ValidatorId& other) const {
+    return !(operator==(other));
+  }
+  bool operator<(const ValidatorId& other) const {
+    return value < other.value;
+  }
+};
+
+struct ConsensusKeyId {
+  Bits256 value;
+  ConsensusKeyId() {
+    value.set_zero();
+  }
+  explicit ConsensusKeyId(const Bits256& v) : value(v) {
+  }
+  bool is_zero() const {
+    return value.is_zero();
+  }
+  bool operator==(const ConsensusKeyId& other) const {
+    return value == other.value;
+  }
+  bool operator!=(const ConsensusKeyId& other) const {
+    return !(operator==(other));
+  }
+  bool operator<(const ConsensusKeyId& other) const {
+    return value < other.value;
+  }
+};
+
 struct ValidatorDescr {
   /* tos::validator::ValidatorFullId */ Ed25519_PublicKey key;
   ValidatorWeight weight;
   /* adnl::AdnlNodeIdShort */ Bits256 addr;
+  // Stable membership identity. For a classical descriptor this is the identity
+  // derived from its Ed25519 key, so membership behaviour is unchanged; for a
+  // post-quantum descriptor it is carried explicitly and survives key rotation.
+  ValidatorId validator_id;
+  // Identity of the consensus key currently held. Rotating the key changes this
+  // while leaving validator_id alone.
+  ConsensusKeyId key_id;
+  // Post-quantum key material. algorithm_id is zero and pq_public_key is empty on a
+  // classical descriptor, so is_pq() is the only correct way to ask.
+  td::uint16 algorithm_id{0};
+  std::string pq_public_key;
+
   ValidatorDescr(const Ed25519_PublicKey& key_, ValidatorWeight weight_) : key(key_), weight(weight_) {
     addr.set_zero();
   }
   ValidatorDescr(const Ed25519_PublicKey& key_, ValidatorWeight weight_, const Bits256& addr_)
       : key(key_), weight(weight_), addr(addr_) {
   }
+  // A post-quantum descriptor has no Ed25519 key at all; the classical field stays
+  // zero and is_pq() tells every reader not to look at it.
+  ValidatorDescr(const ValidatorId& validator_id_, td::uint16 algorithm_id_, const ConsensusKeyId& key_id_,
+                 std::string pq_public_key_, ValidatorWeight weight_, const Bits256& addr_)
+      : key(Bits256::zero())
+      , weight(weight_)
+      , addr(addr_)
+      , validator_id(validator_id_)
+      , key_id(key_id_)
+      , algorithm_id(algorithm_id_)
+      , pq_public_key(std::move(pq_public_key_)) {
+  }
+
+  bool is_pq() const {
+    return algorithm_id != 0;
+  }
   bool operator==(const ValidatorDescr& other) const {
-    return key == other.key && weight == other.weight && addr == other.addr;
+    return key == other.key && weight == other.weight && addr == other.addr &&
+           validator_id == other.validator_id && key_id == other.key_id &&
+           algorithm_id == other.algorithm_id && pq_public_key == other.pq_public_key;
   }
   bool operator!=(const ValidatorDescr& other) const {
     return !(operator==(other));

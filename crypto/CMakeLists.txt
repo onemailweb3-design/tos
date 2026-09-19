@@ -193,6 +193,7 @@ set(TLB_BLOCK_AUTO
 )
 
 set(BLOCK_SOURCE
+  pq/pq-bytes.cpp
   block/Binlog.h
   block/Binlog.cpp
   block/block.cpp
@@ -390,7 +391,7 @@ target_link_libraries(src_parser PUBLIC tos_crypto_core)
 add_library(tos_block STATIC ${BLOCK_SOURCE})
 target_include_directories(tos_block PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/block> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>)
-target_link_libraries(tos_block PUBLIC tos_crypto_core tdactor tl_api)
+target_link_libraries(tos_block PUBLIC tos_crypto_core tdactor tl_api tos_pq_consensus)
 if (MINGW)
   # Resolve circular static linking between tos_block and tos_crypto on MinGW.
   target_link_libraries(tos_block PUBLIC tos_crypto)

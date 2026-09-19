@@ -3075,7 +3075,7 @@ void ValidatorManagerImpl::update_shards() {
         }
 
         if (shard.is_masterchain()) {
-          mc_validator_adnl_id = adnl::AdnlNodeIdShort{val_set->get_validator(validator_id.bits256_value())->addr};
+          mc_validator_adnl_id = adnl::AdnlNodeIdShort{val_set->get_validator(tos::ValidatorId{validator_id.bits256_value()})->addr};
           if (mc_validator_adnl_id.is_zero()) {
             mc_validator_adnl_id = adnl::AdnlNodeIdShort{validator_id.bits256_value()};
           }
@@ -3097,7 +3097,7 @@ void ValidatorManagerImpl::update_shards() {
       }
       get_or_make_next_group(shard, val_group_id, val_set);
       if (shard.is_masterchain() && mc_validator_adnl_id.is_zero()) {
-        mc_validator_adnl_id = adnl::AdnlNodeIdShort{val_set->get_validator(validator_id.bits256_value())->addr};
+        mc_validator_adnl_id = adnl::AdnlNodeIdShort{val_set->get_validator(tos::ValidatorId{validator_id.bits256_value()})->addr};
         if (mc_validator_adnl_id.is_zero()) {
           mc_validator_adnl_id = adnl::AdnlNodeIdShort{validator_id.bits256_value()};
         }
@@ -3379,7 +3379,7 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
 
   auto validator_id = get_validator(shard, validator_set);
   CHECK(!validator_id.is_zero());
-  auto descr = validator_set->get_validator(validator_id.bits256_value());
+  auto descr = validator_set->get_validator(tos::ValidatorId{validator_id.bits256_value()});
   CHECK(descr);
   auto adnl_id = adnl::AdnlNodeIdShort{
       descr->addr.is_zero() ? ValidatorFullId{descr->key}.compute_short_id().bits256_value() : descr->addr};
@@ -3420,7 +3420,7 @@ std::set<adnl::AdnlNodeIdShort> ValidatorManagerImpl::get_observer_adnl_ids(
     td::Ref<block::ValidatorSet> validator_set) const {
   std::set<adnl::AdnlNodeIdShort> result;
   for (const auto &key : temp_keys_) {
-    if (validator_set->is_validator(key.bits256_value())) {
+    if (validator_set->is_validator(tos::ValidatorId{key.bits256_value()})) {
       continue;
     }
     for (int offset = -1; offset <= 1; ++offset) {
@@ -3428,7 +3428,7 @@ std::set<adnl::AdnlNodeIdShort> ValidatorManagerImpl::get_observer_adnl_ids(
       if (total_set.is_null()) {
         continue;
       }
-      auto descr = total_set->get_validator(key.bits256_value());
+      auto descr = total_set->get_validator(tos::ValidatorId{key.bits256_value()});
       if (!descr) {
         continue;
       }
@@ -3794,7 +3794,7 @@ bool ValidatorManagerImpl::validating_masterchain() {
 
 PublicKeyHash ValidatorManagerImpl::get_validator(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set) {
   for (auto &key : temp_keys_) {
-    if (val_set->is_validator(key.bits256_value())) {
+    if (val_set->is_validator(tos::ValidatorId{key.bits256_value()})) {
       return key;
     }
   }

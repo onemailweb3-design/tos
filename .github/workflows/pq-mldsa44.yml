@@ -47,6 +47,7 @@ jobs:
           cmake -LA -N build | grep -E '(CMAKE_.*COMPILER|CMAKE_BUILD_TYPE|TOS_ARCH)'
           cmake --build build --target test-pq-mldsa44 test-pq-mldsa44-wrapper \
             test-pq-consensus test-pq-signer test-pq-bytes test-validator-descr-tags \
+            test-validator-identity \
             func fift tol -j2
       - name: Verify PQ consensus identity, signer and PQBytes codec
         id: n1
@@ -55,9 +56,11 @@ jobs:
           build/crypto/pq/test-pq-consensus
           build/crypto/pq/test-pq-signer
           build/crypto/pq/test-pq-bytes
-      - name: Verify the accepted validator-descriptor tag set
+      - name: Verify the descriptor tag set and the validator identity rules
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: build/crypto/pq/test-validator-descr-tags
+        run: |
+          build/crypto/pq/test-validator-descr-tags
+          build/crypto/pq/test-validator-identity
       - name: Prepare pinned public vectors
         id: vectors
         run: python3 test/pq-mldsa44/prepare_vectors.py --out pq-results
