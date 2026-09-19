@@ -50,29 +50,49 @@
     "test": "validator_controller_sandbox::a_root_rotation_needs_both"
   },
   {
-    "guard": "proof-shape-bits",
+    "guard": "witness-shape-bits",
     "killed": true,
     "test": "controller_admission_sandbox::each_refusal_is_reachable"
   },
   {
-    "guard": "proof-shape-refs",
+    "guard": "witness-shape-refs",
     "killed": true,
     "test": "controller_admission_sandbox::each_refusal_is_reachable"
   },
   {
-    "guard": "proof-shape-tag",
+    "guard": "witness-code-depth-bound",
     "killed": true,
     "test": "controller_admission_sandbox::each_refusal_is_reachable"
   },
   {
-    "guard": "proof-pruned-code",
+    "guard": "witness-data-depth-bound",
     "killed": true,
     "test": "controller_admission_sandbox::each_refusal_is_reachable"
   },
   {
-    "guard": "proof-address-binding",
+    "guard": "witness-branch-type",
     "killed": true,
-    "test": "elector_sandbox::a_stake_carrying_another_accounts_proof"
+    "test": "controller_admission_sandbox::each_refusal_is_reachable"
+  },
+  {
+    "guard": "witness-branch-level",
+    "killed": true,
+    "test": "controller_admission_sandbox::each_refusal_is_reachable"
+  },
+  {
+    "guard": "witness-state-init-shape",
+    "killed": true,
+    "test": "controller_admission_sandbox::each_refusal_is_reachable"
+  },
+  {
+    "guard": "witness-address-binding",
+    "killed": true,
+    "test": "elector_sandbox::a_stake_carrying_another_accounts_witness"
+  },
+  {
+    "guard": "witness-level-zero-hash",
+    "killed": true,
+    "test": "controller_admission_sandbox::each_refusal_is_reachable"
   },
   {
     "guard": "policy-absent-fails-closed",
@@ -85,9 +105,9 @@
     "test": "elector_sandbox::a_stake_from_an_unadmitted_controller"
   },
   {
-    "guard": "elector-proof-required",
+    "guard": "elector-witness-required",
     "killed": true,
-    "test": "elector_sandbox::a_stake_carrying_another_accounts_proof"
+    "test": "elector_sandbox::a_stake_carrying_another_accounts_witness"
   },
   {
     "guard": "elector-retirement",

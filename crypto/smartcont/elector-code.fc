@@ -247,7 +247,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   int max_factor = cs~load_uint(32);
   int adnl_addr = cs~load_uint(256);
   cell signature = cs~load_ref();
-  cell controller_proof = cs~load_maybe_ref();
+  cell controller_birth_witness = cs~load_maybe_ref();
   cs.end_parse();
 
   ;; The validator identity is the contract's own: the account that sent this. The key
@@ -325,14 +325,19 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     ;; A controller topping up or rotating keeps the stake it already placed.
     msg_value += placed;
   } else {
-    if (cell_null?(controller_proof)) {
+    if (cell_null?(controller_birth_witness)) {
       return return_stake(s_addr, query_id, 8);
     }
-    (int proved_code, int proof_status) = pq::controller_code_hash?(controller_proof, validator_id);
-    if (proof_status != pq::proof::ok) {
-      ;; The sender is told its proof did not establish it; which rule refused is a
-      ;; distinction the library keeps for the tests that hold each of them.
+    (int proved_code, int witness_status) =
+      pq::controller_code_hash?(controller_birth_witness, validator_id);
+    ;; A witness that is the wrong shape is a different mistake from one whose numbers do
+    ;; not describe this account, and the sender is told which: the first is a malformed
+    ;; request, the second is a claim about an account it was not deployed as.
+    if (witness_status == pq::witness::bad_shape) {
       return return_stake(s_addr, query_id, 9);
+    }
+    if (witness_status == pq::witness::bad_address) {
+      return return_stake(s_addr, query_id, 13);
     }
     ifnot (pq::controller_admitted?(admitted_codes, proved_code)) {
       return return_stake(s_addr, query_id, 10);

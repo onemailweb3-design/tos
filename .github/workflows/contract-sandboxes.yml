@@ -71,8 +71,9 @@ jobs:
       # invalidated one would have reached a green pull request.
       - name: Executor rules the contracts depend on
         run: |
-          cmake --build build --target test-fift -j2
+          cmake --build build --target test-fift test-cells -j2
           ./build/test-fift
+          ./build/test-cells
 
       - name: Build the post-quantum key tool
         run: |

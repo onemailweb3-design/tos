@@ -14,7 +14,8 @@
 //! the root's own bits, and a pruned branch in place of each child.
 //!
 //! That works only if the virtual machine computes the level-zero hash, which is the one
-//! the pruned branches carry. `cell_hash` does not: it is `HASHCU`, the highest-level
+//! the pruned branches carry. The elector now builds those branches itself, from the four
+//! numbers a birth witness carries, so this is the property that reconstruction rests on. `cell_hash` does not: it is `HASHCU`, the highest-level
 //! hash, and a tree holding pruned branches has a level above zero. The design is written
 //! on `CHASHI 0`, and this file shows both halves of that claim rather than the
 //! convenient one alone.

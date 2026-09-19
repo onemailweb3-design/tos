@@ -98,45 +98,96 @@ MUTANTS = [
         "validator_controller_sandbox",
         "a_root_rotation_needs_both",
     ),
+    # ---------------------------------------------------------------------------
+    # The birth witness
+    #
+    # A first stake carries four numbers and the elector rebuilds the state init its
+    # sender was deployed with. Each rule below is one the reconstruction rests on, and
+    # none of them announces itself when it stops holding: a witness that is believed
+    # rather than checked admits an account nobody deployed as a validator controller.
+    # ---------------------------------------------------------------------------
     (
-        "proof-shape-bits",
+        "witness-shape-bits",
         "pq-validator.fc",
-        "  if (cs.slice_bits() != 5) {",
+        "  if (cs.slice_bits() != pq::witness_bits) {",
         "  if (false) {",
         "controller_admission_sandbox",
         "each_refusal_is_reachable",
     ),
     (
-        "proof-shape-refs",
+        "witness-shape-refs",
         "pq-validator.fc",
-        "  if (cs.slice_refs() != 2) {",
+        "  if (cs.slice_refs() != 0) {",
+        "  if (false) {",
+        "controller_admission_sandbox",
+        "each_refusal_is_reachable",
+    ),
+    # The rule that a witness must be ordinary has no mutation here, because no input
+    # kills it. An exotic cell cannot be 544 bits with no references: a pruned branch is
+    # 288 or 560, a library reference is 264, and the two Merkle types carry references.
+    # So the bit and reference rules refuse every exotic witness first, and the machine
+    # refuses a pruned one before the contract sees it at all. The check stays -- it is
+    # cheap and says what is meant -- but a mutation of it would survive, and a surviving
+    # mutation in the list is worth less than this sentence.
+    (
+        "witness-code-depth-bound",
+        "pq-validator.fc",
+        "  if (code_depth > pq::max_child_depth) {",
         "  if (false) {",
         "controller_admission_sandbox",
         "each_refusal_is_reachable",
     ),
     (
-        "proof-shape-tag",
+        "witness-data-depth-bound",
         "pq-validator.fc",
-        "  if (cs~load_uint(5) != pq::state_init_shape) {",
-        "  if (cs~load_uint(5) == 999) {",
-        "controller_admission_sandbox",
-        "each_refusal_is_reachable",
-    ),
-    (
-        "proof-pruned-code",
-        "pq-validator.fc",
-        "  if (pq::cell_level(code) != 1) {",
+        "  if (data_depth > pq::max_child_depth) {",
         "  if (false) {",
         "controller_admission_sandbox",
         "each_refusal_is_reachable",
     ),
     (
-        "proof-address-binding",
+        "witness-branch-type",
         "pq-validator.fc",
-        "  if (pq::hash_level0(proof) != expected_address) {",
+        "    .store_uint(1, 8)      ;; PrunedBranch",
+        "    .store_uint(2, 8)      ;; PrunedBranch",
+        "controller_admission_sandbox",
+        "each_refusal_is_reachable",
+    ),
+    (
+        "witness-branch-level",
+        "pq-validator.fc",
+        "    .store_uint(1, 8)      ;; one level",
+        "    .store_uint(3, 8)      ;; one level",
+        "controller_admission_sandbox",
+        "each_refusal_is_reachable",
+    ),
+    (
+        "witness-state-init-shape",
+        "pq-validator.fc",
+        "    .store_uint(pq::state_init_shape, 5)",
+        "    .store_uint(0, 5)",
+        "controller_admission_sandbox",
+        "each_refusal_is_reachable",
+    ),
+    (
+        "witness-address-binding",
+        "pq-validator.fc",
+        "  if (pq::hash_level0(rebuilt) != expected_address) {",
         "  if (false) {",
         "elector_sandbox",
-        "a_stake_carrying_another_accounts_proof",
+        "a_stake_carrying_another_accounts_witness",
+    ),
+    (
+        # The reconstruction must commit at level zero. `cell_hash` is the highest-level
+        # hash, which for a tree holding pruned branches is a different number, and using
+        # it would make every honest witness fail while an attacker's choice of depth
+        # stopped mattering.
+        "witness-level-zero-hash",
+        "pq-validator.fc",
+        "  if (pq::hash_level0(rebuilt) != expected_address) {",
+        "  if (cell_hash(rebuilt) != expected_address) {",
+        "controller_admission_sandbox",
+        "each_refusal_is_reachable",
     ),
     (
         "policy-absent-fails-closed",
@@ -155,12 +206,12 @@ MUTANTS = [
         "a_stake_from_an_unadmitted_controller",
     ),
     (
-        "elector-proof-required",
+        "elector-witness-required",
         "elector-code.fc",
-        "    if (cell_null?(controller_proof)) {\n      return return_stake(s_addr, query_id, 8);\n    }",
+        "    if (cell_null?(controller_birth_witness)) {\n      return return_stake(s_addr, query_id, 8);\n    }",
         "    if (false) {\n      return return_stake(s_addr, query_id, 8);\n    }",
         "elector_sandbox",
-        "a_stake_carrying_another_accounts_proof",
+        "a_stake_carrying_another_accounts_witness",
     ),
     (
         "elector-retirement",

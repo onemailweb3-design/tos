@@ -1719,22 +1719,21 @@ fn govern_install_pq(
     govern_install_with(chain, &keys, param_id, value, query_base)
 }
 
-/// A contract cannot forward a proof of its own birth code.
+/// Why the witness carries four numbers instead of a proof.
 ///
-/// The first stake is supposed to carry a pruned proof of the sender's state init, and
-/// the sender is supposed to be the controller, because the elector reads the validator
-/// identity from the message source. Those two requirements are in conflict: an outbound
-/// message a contract builds may not carry a cell of level greater than zero, and a
-/// pruned branch has level one.
+/// The first stake used to carry a pruned proof of the sender's state init. A contract
+/// cannot send one: the commit at the end of a run requires the action list to have level
+/// zero, and a pruned branch has level one. So the same stake is sent twice here, once
+/// carrying a pruned branch and once carrying the witness that replaced it, and the two
+/// answers are pinned.
 ///
-/// Nothing caught this before because every test that carries a proof sends it from a
-/// sandbox treasury, whose messages are injected rather than sent by a contract, so the
-/// rule was never reached. This test sends the same body the same way twice, changing
-/// only whether the proof's children are pruned, and pins both answers.
+/// Nothing caught this while the proof was the design, because every test that carried
+/// one sent it from a sandbox treasury, whose messages are injected rather than sent by a
+/// contract. This sends from a real controller.
 #[test]
-fn a_contract_cannot_send_a_message_carrying_a_pruned_proof() {
-    use chain_block::IBitstring;
-    let (mut chain, _treasury, election) = open_election("pruned-proof-limit", 200_000 * TOS);
+fn a_contract_can_send_the_witness_but_not_the_proof_it_replaced() {
+    use chain_block::{GetRepresentationHash, IBitstring};
+    let (mut chain, _treasury, election) = open_election("witness-vs-proof", 200_000 * TOS);
     raise_to_post_quantum_version(&mut chain);
     let mut validator = deploy_rooted_validator(&mut chain, 9);
     admit_code_of(&mut chain, &validator.address);
@@ -1748,22 +1747,34 @@ fn a_contract_cannot_send_a_message_carrying_a_pruned_proof() {
         &validator.consensus.adnl,
     );
     let signature = validator.consensus.sign(&preimage);
-    let proof = proof_of_birth_code(&chain, &validator.address.clone());
-    assert_eq!(proof.level(), 1, "a state-init proof is a level-one cell");
 
-    // The same bits and the same number of children, every child ordinary. If the two
-    // answers differ, the difference is the level and not the size.
-    let mut twin = chain_block::BuilderData::with_raw(proof.data().to_vec(), proof.bit_length())
-        .expect("the proof's own bits");
-    for _ in 0..proof.references_count() {
-        let mut ordinary = chain_block::BuilderData::new();
-        ordinary.append_raw(&[0u8; 32], 256).expect("filler");
-        twin.checked_append_reference(ordinary.into_cell().expect("a child")).expect("a child");
+    // The carrier the design used to specify: the state init with both children pruned.
+    let account = chain
+        .blockchain
+        .get_account(&validator.address)
+        .expect("the controller is deployed")
+        .clone();
+    let state_init = account.state_init().expect("a state init");
+    let mut pruned_proof = chain_block::BuilderData::new();
+    pruned_proof.append_bits(0b00110, 5).expect("the state-init shape");
+    for child in [state_init.code().expect("code"), state_init.data().expect("data")] {
+        let mut branch = chain_block::BuilderData::new();
+        branch.set_type(chain_block::CellType::PrunedBranch);
+        branch.append_u8(u8::from(chain_block::CellType::PrunedBranch)).expect("the type");
+        branch.append_u8(1).expect("one level");
+        branch.append_raw(child.repr_hash().as_slice(), 256).expect("the hash");
+        branch.append_u16(child.repr_depth()).expect("the depth");
+        pruned_proof
+            .checked_append_reference(branch.into_cell().expect("a pruned branch"))
+            .expect("a pruned child");
     }
-    let twin = twin.into_cell().expect("a twin of the proof");
-    assert_eq!(twin.level(), 0, "the twin is here to be the ordinary one");
+    let pruned_proof = pruned_proof.into_cell().expect("a pruned state-init proof");
+    assert_eq!(pruned_proof.level(), 1, "a pruned proof is a level-one cell");
 
-    let send = |chain: &mut Chain, validator: &mut RootedValidator, carried, query| {
+    let witness = birth_witness(&chain, &validator.address.clone());
+    assert_eq!(witness.level(), 0, "a witness is ordinary");
+
+    let mut send = |chain: &mut Chain, carried: chain_block::Cell, query: u64| -> i32 {
         let body = pq_stake_body(
             query,
             &validator.consensus,
@@ -1784,34 +1795,21 @@ fn a_contract_cannot_send_a_message_carrying_a_pruned_proof() {
     };
 
     assert_eq!(
-        send(&mut chain, &mut validator, twin, 1),
-        0,
-        "a controller cannot send a stake at all, so this test measures nothing"
+        send(&mut chain, pruned_proof, 1),
+        8,
+        "a controller can now forward a pruned proof, and the carrier that replaced it \
+         could be reconsidered"
     );
     assert_eq!(
-        send(&mut chain, &mut validator, proof.clone(), 2),
-        8,
-        "a controller can now forward a pruned proof, and the registration path that was \
-         blocked on this should be reconsidered"
+        send(&mut chain, witness, 2),
+        0,
+        "a controller cannot send the witness either, so the replacement does not work"
     );
-
-    // Not the size and not the depth of the message: a body carrying nothing but the
-    // proof, two cells deep against the twenty-one of a stake, is refused the same way.
-    let mut alone = chain_block::BuilderData::new();
-    alone.append_u32(1).expect("something to read as an operation");
-    alone.checked_append_reference(proof).expect("the proof alone");
-    let alone = alone.into_cell().expect("a body carrying only the proof");
-    assert!(alone.repr_depth() < 5, "the small case has to be small");
-    let result = validator.send_to_elector(&mut chain, TOS, alone);
-    let (_, transaction) = result.transactions.first().expect("a transaction");
-    let exit = match transaction.read_description().expect("description") {
-        chain_block::TransactionDescr::Ordinary(descr) => match descr.compute_ph {
-            chain_block::TrComputePhase::Vm(vm) => vm.exit_code,
-            _ => panic!("the controller did not run"),
-        },
-        _ => panic!("not an ordinary transaction"),
-    };
-    assert_eq!(exit, 8, "the small case was allowed, so size is part of the rule after all");
+    assert_eq!(
+        pq_member_key_id_at(&chain, &validator.address),
+        Some(validator.consensus.key_id()),
+        "the stake the controller sent did not register it"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2611,30 +2609,31 @@ fn pq_stake_preimage_for(
 
 /// A proof of what a sender was deployed as: the state init's own bits, with a pruned
 /// branch in place of each child.
-fn controller_proof(chain: &Chain, who: &tos_sandbox::Treasury) -> chain_block::Cell {
-    proof_of_birth_code(chain, who.address())
+fn controller_birth_witness(chain: &Chain, who: &tos_sandbox::Treasury) -> chain_block::Cell {
+    birth_witness(chain, who.address())
 }
 
-fn proof_of_birth_code(chain: &Chain, address: &MsgAddressInt) -> chain_block::Cell {
-    use chain_block::{GetRepresentationHash, IBitstring, Serializable};
+/// `controller_birth_witness_v1`: the hash and depth of the code and data an account was
+/// deployed with, and nothing else.
+///
+/// Four numbers in one ordinary cell. The elector rebuilds the state init from them and
+/// requires the result to be the sender's address, so a wrong number is not believed --
+/// it produces a different address and is refused. It replaced a pruned proof of the
+/// state init, which is a level-one cell and so cannot be sent by a contract at all.
+fn birth_witness(chain: &Chain, address: &MsgAddressInt) -> chain_block::Cell {
+    use chain_block::{GetRepresentationHash, IBitstring};
     let account = chain.blockchain.get_account(address).expect("the sender exists");
     let state_init = account.state_init().expect("the sender was deployed with a state init");
-    let root = state_init.write_to_new_cell().expect("state init").into_cell().expect("cell");
-    let mut partial = chain_block::BuilderData::with_raw(root.data().to_vec(), root.bit_length())
-        .expect("the root's own bits");
-    for index in 0..root.references_count() {
-        let child = root.reference(index).expect("a child");
-        let mut branch = chain_block::BuilderData::new();
-        branch.set_type(chain_block::CellType::PrunedBranch);
-        branch.append_u8(u8::from(chain_block::CellType::PrunedBranch)).expect("the type byte");
-        branch.append_u8(1).expect("one stored hash, at merkle depth zero");
-        branch.append_raw(child.repr_hash().as_slice(), 256).expect("the pruned hash");
-        branch.append_u16(child.repr_depth()).expect("the pruned depth");
-        partial
-            .checked_append_reference(branch.into_cell().expect("a pruned branch"))
-            .expect("a pruned child");
-    }
-    partial.into_cell().expect("a controller proof")
+    let code = state_init.code().expect("a controller is deployed with code");
+    let data = state_init.data().expect("a controller is deployed with data");
+
+    let mut witness = chain_block::BuilderData::new();
+    witness.append_raw(code.repr_hash().as_slice(), 256).expect("the code hash");
+    witness.append_u16(code.repr_depth()).expect("the code depth");
+    witness.append_raw(data.repr_hash().as_slice(), 256).expect("the data hash");
+    witness.append_u16(data.repr_depth()).expect("the data depth");
+    assert_eq!(witness.length_in_bits(), 544, "the witness is four numbers and nothing else");
+    witness.into_cell().expect("a birth witness")
 }
 
 /// The code every sandbox account is deployed with, which is what the fixture admits.
@@ -2716,7 +2715,7 @@ fn pq_stake_body(
     stake_at: u32,
     max_factor: u32,
     signature: &[u8],
-    proof: Option<chain_block::Cell>,
+    witness: Option<chain_block::Cell>,
 ) -> chain_block::Cell {
     use chain_block::IBitstring;
     let mut body = chain_block::BuilderData::new();
@@ -2728,13 +2727,13 @@ fn pq_stake_body(
     body.append_u32(max_factor).expect("max factor");
     body.append_raw(&validator.adnl, 256).expect("adnl address");
     body.checked_append_reference(stored_bytes(signature)).expect("signature");
-    match proof {
+    match witness {
         Some(cell) => {
-            body.append_bit_one().expect("a proof is present");
-            body.checked_append_reference(cell).expect("the controller proof");
+            body.append_bit_one().expect("a witness is present");
+            body.checked_append_reference(cell).expect("the controller birth witness");
         }
         None => {
-            body.append_bit_zero().expect("no proof");
+            body.append_bit_zero().expect("no witness");
         }
     }
     body.into_cell().expect("stake body")
@@ -2825,14 +2824,14 @@ fn pq_stake_with_max_factor(
     let signature = validator.sign(&preimage);
     // A first registration proves what its sender was deployed as; a controller the book
     // already knows is re-checked against the policy instead.
-    let proof = Some(controller_proof(chain, from));
+    let witness = Some(controller_birth_witness(chain, from));
     chain
         .blockchain
         .send_message(from.build_message(
             &chain.elector,
             value,
             true,
-            Some(pq_stake_body(query_id, validator, election, max_factor, &signature, proof)),
+            Some(pq_stake_body(query_id, validator, election, max_factor, &signature, witness)),
         ))
         .expect("the stake is delivered")
 }
@@ -2893,8 +2892,13 @@ fn pq_member_key_id(
     chain: &Chain,
     controller: &tos_sandbox::Treasury,
 ) -> Option<chain_block::UInt256> {
+    pq_member_key_id_at(chain, controller.address())
+}
+
+/// The same, for a member that is a deployed contract rather than a treasury.
+fn pq_member_key_id_at(chain: &Chain, address: &MsgAddressInt) -> Option<chain_block::UInt256> {
     let (members, _) = pq_book(chain);
-    let record = members.get(controller.address().address().clone()).expect("lookup")?;
+    let record = members.get(address.address().clone()).expect("lookup")?;
     let mut record = record;
     let bytes = record.get_next_int(4).expect("stake length") as usize;
     if bytes > 0 {
@@ -2982,7 +2986,7 @@ fn a_post_quantum_stake_signed_by_another_key_is_returned() {
         &validator.adnl,
     );
     let signature = impostor.sign(&preimage);
-    let proof = controller_proof(&chain, &treasury);
+    let proof = controller_birth_witness(&chain, &treasury);
     let result = chain
         .blockchain
         .send_message(treasury.build_message(
@@ -3139,9 +3143,20 @@ fn a_controller_rotates_its_key_and_releases_the_one_it_held() {
         rotation_gas < 1_000_000,
         "a rotation costs {rotation_gas} gas, over what an ordinary transaction may spend"
     );
+    // A registration rebuilds the state init the sender was deployed with and a rotation
+    // does not, so a registration now costs more. The difference is what that
+    // reconstruction costs, and it is the figure to watch: it is paid by every validator
+    // that joins, and by nobody else.
     assert!(
-        rotation_gas >= registration_gas,
-        "a rotation does strictly more work than a registration but cost less"
+        registration_gas > rotation_gas,
+        "a registration costs {registration_gas} gas against {rotation_gas} for a rotation, \
+         so it is not rebuilding the birth commitment"
+    );
+    let reconstruction = registration_gas - rotation_gas;
+    assert!(
+        reconstruction < 10_000,
+        "rebuilding the birth commitment costs {reconstruction} gas, far more than the \
+         two exotic cells and one hash it is"
     );
 }
 
@@ -3504,7 +3519,7 @@ fn pq_stake_signed_over(
                 election,
                 0x10000,
                 &signature,
-                Some(controller_proof(chain, from)),
+                Some(controller_birth_witness(chain, from)),
             )),
         ))
         .expect("the stake is delivered")
@@ -3669,8 +3684,8 @@ fn a_stake_naming_an_unadmitted_suite_is_refused() {
     body.append_u32(0x10000).expect("max factor");
     body.append_raw(&validator.adnl, 256).expect("adnl address");
     body.checked_append_reference(stored_bytes(&vec![0u8; 2420])).expect("signature");
-    body.append_bit_one().expect("a proof is present");
-    body.checked_append_reference(controller_proof(&chain, &treasury))
+    body.append_bit_one().expect("a witness is present");
+    body.checked_append_reference(controller_birth_witness(&chain, &treasury))
         .expect("the controller proof");
 
     let result = chain
@@ -3705,7 +3720,10 @@ fn a_stake_after_the_election_closes_is_returned_before_the_tick_conducts_it() {
 
 /// Reasons the elector refuses a stake over the controller it came from.
 const REASON_PROOF_MISSING: u32 = 8;
-const REASON_PROOF_MISMATCH: u32 = 9;
+/// `return_stake` reason 9: the witness is not four numbers in one ordinary cell.
+const REASON_WITNESS_MALFORMED: u32 = 9;
+/// `return_stake` reason 13: the witness is well formed, and describes another account.
+const REASON_WITNESS_NOT_THIS_ACCOUNT: u32 = 13;
 const REASON_CODE_NOT_ADMITTED: u32 = 10;
 const REASON_NO_POLICY: u32 = 11;
 const REASON_CODE_RETIRED: u32 = 12;
@@ -3792,7 +3810,7 @@ fn a_stake_from_an_unadmitted_controller_is_returned() {
 
 /// A proof that does not reconstruct the sender's own address proves nothing about it.
 #[test]
-fn a_stake_carrying_another_accounts_proof_is_returned() {
+fn a_stake_carrying_another_accounts_witness_is_returned() {
     let (mut chain, treasury, election) = open_election("pq-foreign-proof", 60_000 * TOS);
     raise_to_post_quantum_version(&mut chain);
     let other = chain.blockchain.treasury("pq-foreign-proof-other", TOS).expect("an account");
@@ -3813,7 +3831,7 @@ fn a_stake_carrying_another_accounts_proof_is_returned() {
         &validator.adnl,
     );
     let signature = validator.sign(&preimage);
-    let foreign = controller_proof(&chain, &other);
+    let foreign = controller_birth_witness(&chain, &other);
     let result = chain
         .blockchain
         .send_message(treasury.build_message(
@@ -3825,11 +3843,11 @@ fn a_stake_carrying_another_accounts_proof_is_returned() {
         .expect("the stake is delivered");
     assert_eq!(
         reply(&result),
-        (STAKE_RETURNED, REASON_PROOF_MISMATCH),
-        "a proof of another account admitted this one"
+        (STAKE_RETURNED, REASON_WITNESS_NOT_THIS_ACCOUNT),
+        "a witness for another account admitted this one"
     );
 
-    // And a first registration with no proof at all says so, rather than being admitted.
+    // And a first registration with no witness at all says so, rather than being admitted.
     let bare = chain
         .blockchain
         .send_message(treasury.build_message(
@@ -3866,21 +3884,16 @@ fn account_with_code(seed: u8) -> (MsgAddressInt, chain_block::Cell, chain_block
     let root = state.write_to_new_cell().expect("state init").into_cell().expect("cell");
     let address = MsgAddressInt::with_params(-1, root.hash(0)).expect("address");
 
-    let mut partial = chain_block::BuilderData::with_raw(root.data().to_vec(), root.bit_length())
-        .expect("the root's own bits");
+    // The witness is built from the two children the state init was made of, in the order
+    // the state init holds them.
+    let mut witness = chain_block::BuilderData::new();
     for index in 0..root.references_count() {
         let child = root.reference(index).expect("a child");
-        let mut branch = chain_block::BuilderData::new();
-        branch.set_type(chain_block::CellType::PrunedBranch);
-        branch.append_u8(u8::from(chain_block::CellType::PrunedBranch)).expect("the type byte");
-        branch.append_u8(1).expect("one stored hash");
-        branch.append_raw(child.repr_hash().as_slice(), 256).expect("the pruned hash");
-        branch.append_u16(child.repr_depth()).expect("the pruned depth");
-        partial
-            .checked_append_reference(branch.into_cell().expect("a pruned branch"))
-            .expect("a pruned child");
+        witness.append_raw(child.repr_hash().as_slice(), 256).expect("a child hash");
+        witness.append_u16(child.repr_depth()).expect("a child depth");
     }
-    (address, partial.into_cell().expect("a proof"), code.repr_hash())
+    assert_eq!(witness.length_in_bits(), 544, "a state init has exactly two children");
+    (address, witness.into_cell().expect("a birth witness"), code.repr_hash())
 }
 
 /// Send a stake from an address the fixture names, with the proof that address commits to.

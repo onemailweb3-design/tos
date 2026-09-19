@@ -7,11 +7,11 @@
 //! What the frozen controller admission check costs, measured on the check itself.
 //!
 //! The elector will admit a first stake by proving one fact about its sender: that the
-//! account was deployed with a controller code the configuration admits. The check is
-//! four steps — the proof's shape, the address it reconstructs, the code hash its pruned
-//! branch carries, and the policy lookup — and this file implements exactly those four
-//! and measures them, so the carrier and the gas the design was sized against are numbers
-//! rather than estimates before the contracts that will carry them exist.
+//! account was deployed with a controller code the configuration admits. The sender
+//! carries four numbers — the hash and depth of its code and of its data — and the check
+//! rebuilds the state init from them, requires the result to be the sender's address, and
+//! looks the proven code hash up in the policy. This file implements exactly that and
+//! measures it, so the carrier and the gas are numbers rather than estimates.
 //!
 //! Nothing here is the production path. It is the frozen check, run in isolation, to find
 //! out what it costs.
@@ -23,7 +23,9 @@ use tos_vm::stack::{StackItem, integer::IntegerData};
 const TOS: u64 = 1_000_000_000;
 
 /// The refusal reasons the frozen gate list names, each reachable on its own.
-const ERROR_PROOF_SHAPE: i32 = 80;
+const ERROR_WITNESS_SHAPE: i32 = 80;
+/// The machine's own refusal to read a cell whose content was pruned away.
+const ERROR_PRUNED_CELL_ACCESS: i32 = 15;
 const ERROR_ADDRESS_MISMATCH: i32 = 81;
 const ERROR_CODE_NOT_ADMITTED: i32 = 82;
 const ERROR_POLICY_ABSENT: i32 = 83;
@@ -50,10 +52,10 @@ const int ctl::error::policy_absent = 83;
 
 ;; The four steps the design freezes, in the order it freezes them, taken from the
 ;; library the elector uses rather than from a copy of it.
-int probe_admit(cell proof, int expected_address, cell policy) method_id {
-  (int code_hash, int status) = pq::controller_code_hash?(proof, expected_address);
-  throw_if(ctl::error::proof_shape, status == pq::proof::bad_shape);
-  throw_if(ctl::error::address_mismatch, status == pq::proof::bad_address);
+int probe_admit(cell witness, int expected_address, cell policy) method_id {
+  (int code_hash, int status) = pq::controller_code_hash?(witness, expected_address);
+  throw_if(ctl::error::proof_shape, status == pq::witness::bad_shape);
+  throw_if(ctl::error::address_mismatch, status == pq::witness::bad_address);
   throw_if(ctl::error::policy_absent, cell_null?(policy));
   throw_unless(ctl::error::code_not_admitted, pq::controller_admitted?(policy, code_hash));
   return code_hash;
@@ -92,27 +94,30 @@ fn deploy(chain: &mut Blockchain) -> MsgAddressInt {
     address
 }
 
-fn pruned_branch(hash: &chain_block::UInt256, depth: u16) -> Cell {
-    use chain_block::IBitstring;
-    let mut branch = chain_block::BuilderData::new();
-    branch.set_type(chain_block::CellType::PrunedBranch);
-    branch.append_u8(u8::from(chain_block::CellType::PrunedBranch)).expect("the type byte");
-    branch.append_u8(1).expect("one stored hash, at merkle depth zero");
-    branch.append_raw(hash.as_slice(), 256).expect("the pruned hash");
-    branch.append_u16(depth).expect("the pruned depth");
-    branch.into_cell().expect("a pruned branch")
+/// `controller_birth_witness_v1`: the hash and depth of each child of a state init, in
+/// the order the state init holds them.
+fn birth_witness(root: &Cell) -> Cell {
+    witness_of(
+        &root.reference(0).expect("code").repr_hash(),
+        root.reference(0).expect("code").repr_depth(),
+        &root.reference(1).expect("data").repr_hash(),
+        root.reference(1).expect("data").repr_depth(),
+    )
 }
 
-fn prune_children(root: &Cell) -> Cell {
-    let mut partial = chain_block::BuilderData::with_raw(root.data().to_vec(), root.bit_length())
-        .expect("the root's own bits");
-    for index in 0..root.references_count() {
-        let child = root.reference(index).expect("a child");
-        partial
-            .checked_append_reference(pruned_branch(&child.repr_hash(), child.repr_depth()))
-            .expect("a pruned child");
-    }
-    partial.into_cell().expect("a partial tree")
+fn witness_of(
+    code_hash: &chain_block::UInt256,
+    code_depth: u16,
+    data_hash: &chain_block::UInt256,
+    data_depth: u16,
+) -> Cell {
+    use chain_block::IBitstring;
+    let mut witness = chain_block::BuilderData::new();
+    witness.append_raw(code_hash.as_slice(), 256).expect("the code hash");
+    witness.append_u16(code_depth).expect("the code depth");
+    witness.append_raw(data_hash.as_slice(), 256).expect("the data hash");
+    witness.append_u16(data_depth).expect("the data depth");
+    witness.into_cell().expect("a birth witness")
 }
 
 /// A controller-sized account: code of a few kilobytes, and data holding a root key.
@@ -215,7 +220,7 @@ fn the_admission_check_is_measured_on_the_check_itself() {
 
     let state_init = controller_state_init(0xa1);
     let address = state_init.repr_hash();
-    let proof = prune_children(&state_init);
+    let proof = birth_witness(&state_init);
     let code_hash = state_init.reference(0).expect("code").repr_hash();
 
     let (whole_cells, whole_bits) = tree_size(&state_init);
@@ -239,7 +244,7 @@ fn the_admission_check_is_measured_on_the_check_itself() {
     // The proof must not grow with the controller it proves. That is the whole reason it
     // is pruned, and the reason the carrier can be sized once.
     let bigger = controller_state_init(0xc3);
-    let bigger_proof = prune_children(&bigger);
+    let bigger_proof = birth_witness(&bigger);
     assert_eq!(
         tree_size(&bigger_proof),
         (proof_cells, proof_bits),
@@ -261,7 +266,7 @@ fn the_first_stake_carrier_is_measured_with_its_proof() {
     use chain_block::IBitstring;
 
     let state_init = controller_state_init(0xa1);
-    let proof = prune_children(&state_init);
+    let proof = birth_witness(&state_init);
 
     // The same shape the elector reads today, plus the proof the frozen carrier adds.
     let stored = |bytes: &[u8]| -> Cell {
@@ -299,7 +304,7 @@ fn the_first_stake_carrier_is_measured_with_its_proof() {
         (34, 30_353),
         "the request this measures is no longer the one the branch asserts elsewhere"
     );
-    assert_eq!((full_cells, full_bits), (37, 30_934), "the first-stake carrier changed shape");
+    assert_eq!((full_cells, full_bits), (35, 30_897), "the first-stake carrier changed shape");
 }
 
 /// Each refusal the frozen gate list names, reached on its own and costing little.
@@ -312,14 +317,14 @@ fn each_refusal_is_reachable_and_cheap() {
 
     let state_init = controller_state_init(0xa1);
     let address = state_init.repr_hash();
-    let proof = prune_children(&state_init);
+    let proof = birth_witness(&state_init);
     let code_hash = state_init.reference(0).expect("code").repr_hash();
     let admitted = vec![code_hash];
 
     // A well-formed proof of an account whose code nothing admits.
     let other = controller_state_init(0xc3);
     let (exit, unadmitted_gas) =
-        admit(&chain, &probe, prune_children(&other), &other.repr_hash(), policy(&admitted));
+        admit(&chain, &probe, birth_witness(&other), &other.repr_hash(), policy(&admitted));
     assert_eq!(exit, ERROR_CODE_NOT_ADMITTED, "an unadmitted code was admitted");
 
     // The same proof presented for somebody else's address.
@@ -332,58 +337,151 @@ fn each_refusal_is_reachable_and_cheap() {
 
     // A child that is an ordinary cell rather than a pruned branch: the shape is wrong
     // even though the hashes could be made to agree.
-    let mut unpruned =
-        chain_block::BuilderData::with_raw(state_init.data().to_vec(), state_init.bit_length())
-            .expect("the root's own bits");
-    unpruned
-        .checked_append_reference(state_init.reference(0).expect("code"))
-        .expect("an unpruned code");
-    unpruned
-        .checked_append_reference(pruned_branch(
-            &state_init.reference(1).expect("data").repr_hash(),
-            state_init.reference(1).expect("data").repr_depth(),
-        ))
-        .expect("a pruned data branch");
+    // Each rule about the witness needs an input only it refuses, or removing the rule
+    // changes no verdict and it is held by its neighbours rather than by a test.
+    let code = state_init.reference(0).expect("code");
+    let data = state_init.reference(1).expect("data");
+
+    // A sender trying to supply a branch rather than the numbers to rebuild one. The
+    // virtual machine refuses before the contract does: a pruned cell's content is absent
+    // by definition, so reading one is its own error and the shape rule below never sees
+    // it. Recorded because it is the refusal an operator would actually meet.
+    let mut pruned = chain_block::BuilderData::new();
+    pruned.set_type(chain_block::CellType::PrunedBranch);
+    pruned.append_u8(u8::from(chain_block::CellType::PrunedBranch)).expect("the type byte");
+    pruned.append_u8(1).expect("one level");
+    pruned.append_raw(code.repr_hash().as_slice(), 256).expect("a hash");
+    pruned.append_u16(code.repr_depth()).expect("a depth");
     let (exit, _) = admit(
         &chain,
         &probe,
-        unpruned.into_cell().expect("a mixed tree"),
+        pruned.into_cell().expect("a pruned witness"),
         &address,
         policy(&admitted),
     );
-    assert_eq!(exit, ERROR_PROOF_SHAPE, "a proof carrying a whole subtree was accepted");
+    assert_eq!(exit, ERROR_PRUNED_CELL_ACCESS, "a pruned witness was read rather than refused");
 
-    // Each rule about the proof's shape needs an input only it refuses, or removing it
-    // changes no verdict and the rule is held by its neighbours rather than by a test.
-    let branches = |bits: usize, value: u8, refs: usize| -> Cell {
-        let mut root = chain_block::BuilderData::new();
-        root.append_bits(value as usize, bits).expect("the shape bits");
-        for index in 0..refs {
-            let child = state_init.reference(index.min(1)).expect("a child");
-            root.checked_append_reference(pruned_branch(&child.repr_hash(), child.repr_depth()))
-                .expect("a pruned child");
+    // An exotic cell the machine will let the contract look at, so the contract's own
+    // rule is the one that answers. Without this the rule would be held by the machine
+    // and removing it would change no verdict.
+    let mut library = chain_block::BuilderData::new();
+    library.set_type(chain_block::CellType::LibraryReference);
+    library.append_u8(u8::from(chain_block::CellType::LibraryReference)).expect("the type byte");
+    library.append_raw(code.repr_hash().as_slice(), 256).expect("the library hash");
+    let (exit, _) = admit(
+        &chain,
+        &probe,
+        library.into_cell().expect("a library witness"),
+        &address,
+        policy(&admitted),
+    );
+    assert_eq!(exit, ERROR_WITNESS_SHAPE, "an exotic witness was accepted");
+
+    // One bit too few and one too many: only the bit count refuses either.
+    for bits in [543usize, 545] {
+        let mut wrong = chain_block::BuilderData::new();
+        while wrong.length_in_bits() + 64 <= bits {
+            wrong.append_u64(0).expect("sixty-four bits");
         }
-        root.into_cell().expect("a shaped root")
+        while wrong.length_in_bits() < bits {
+            wrong.append_bit_zero().expect("a bit");
+        }
+        assert_eq!(wrong.length_in_bits(), bits, "the fixture did not build what it meant to");
+        let (exit, _) = admit(
+            &chain,
+            &probe,
+            wrong.into_cell().expect("a witness of the wrong length"),
+            &address,
+            policy(&admitted),
+        );
+        assert_eq!(exit, ERROR_WITNESS_SHAPE, "a witness of {bits} bits was accepted");
+    }
+
+    // The right 544 bits, carrying a reference it has no business carrying.
+    let mut with_child =
+        chain_block::BuilderData::with_raw(birth_witness(&state_init).data().to_vec(), 544)
+            .expect("the witness bits");
+    with_child.checked_append_reference(Cell::default()).expect("a stray reference");
+    let (exit, _) = admit(
+        &chain,
+        &probe,
+        with_child.into_cell().expect("a witness with a child"),
+        &address,
+        policy(&admitted),
+    );
+    assert_eq!(exit, ERROR_WITNESS_SHAPE, "a witness carrying a reference was accepted");
+
+    // A depth the state-init root could not be built over. Refused before anything is
+    // built, so the request is answered rather than thrown over.
+    let (exit, _) = admit(
+        &chain,
+        &probe,
+        witness_of(&code.repr_hash(), 1024, &data.repr_hash(), data.repr_depth()),
+        &address,
+        policy(&admitted),
+    );
+    assert_eq!(exit, ERROR_WITNESS_SHAPE, "a code depth past the ceiling was accepted");
+    let (exit, _) = admit(
+        &chain,
+        &probe,
+        witness_of(&code.repr_hash(), code.repr_depth(), &data.repr_hash(), 1024),
+        &address,
+        policy(&admitted),
+    );
+    assert_eq!(exit, ERROR_WITNESS_SHAPE, "a data depth past the ceiling was accepted");
+
+    // Every field, mutated one at a time and within its bounds, so each reaches the
+    // address binding and is refused there rather than for its shape.
+    let flipped = |hash: &chain_block::UInt256| {
+        let mut bytes = hash.as_slice().to_vec();
+        bytes[31] ^= 1;
+        chain_block::UInt256::from_slice(&bytes)
     };
-
-    // Two references and the right tag, but a bit too many: only the bit count refuses it.
-    let (exit, _) = admit(&chain, &probe, branches(6, 0b001100, 2), &address, policy(&admitted));
-    assert_eq!(exit, ERROR_PROOF_SHAPE, "a root with the wrong bit count was accepted");
-
-    // The right bits, one reference short: only the reference count refuses it.
-    let (exit, _) = admit(&chain, &probe, branches(5, 0b00110, 1), &address, policy(&admitted));
-    assert_eq!(exit, ERROR_PROOF_SHAPE, "a root missing a child was accepted");
-
-    // The right size, the wrong tag: a state init that says it carries no code.
-    let (exit, _) = admit(&chain, &probe, branches(5, 0b00000, 2), &address, policy(&admitted));
-    assert_eq!(exit, ERROR_PROOF_SHAPE, "a root claiming no code was accepted");
-
-    // A root that is not a state init shape at all.
-    let mut nonsense = chain_block::BuilderData::new();
-    nonsense.append_raw(&[0xff; 4], 32).expect("bits");
-    let (exit, _) =
-        admit(&chain, &probe, nonsense.into_cell().expect("nonsense"), &address, policy(&admitted));
-    assert_eq!(exit, ERROR_PROOF_SHAPE, "a cell that is not a state init was accepted");
+    for (what, witness) in [
+        (
+            "the code hash",
+            witness_of(
+                &flipped(&code.repr_hash()),
+                code.repr_depth(),
+                &data.repr_hash(),
+                data.repr_depth(),
+            ),
+        ),
+        (
+            "the code depth",
+            witness_of(
+                &code.repr_hash(),
+                code.repr_depth() + 1,
+                &data.repr_hash(),
+                data.repr_depth(),
+            ),
+        ),
+        (
+            "the data hash",
+            witness_of(
+                &code.repr_hash(),
+                code.repr_depth(),
+                &flipped(&data.repr_hash()),
+                data.repr_depth(),
+            ),
+        ),
+        (
+            "the data depth",
+            witness_of(
+                &code.repr_hash(),
+                code.repr_depth(),
+                &data.repr_hash(),
+                data.repr_depth() + 1,
+            ),
+        ),
+        (
+            "the two halves swapped",
+            witness_of(&data.repr_hash(), data.repr_depth(), &code.repr_hash(), code.repr_depth()),
+        ),
+    ] {
+        let (exit, _) = admit(&chain, &probe, witness, &address, policy(&admitted));
+        assert_eq!(exit, ERROR_ADDRESS_MISMATCH, "a witness with {what} changed was accepted");
+    }
 
     eprintln!("unadmitted code refused at {unadmitted_gas} gas");
 }

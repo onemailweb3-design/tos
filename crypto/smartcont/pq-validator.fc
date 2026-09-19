@@ -43,43 +43,90 @@ int pq::cell_level(cell c) asm "CLEVEL";
 ;; present, library empty. Five bits and two references, and nothing else.
 const int pq::state_init_shape = 0x06;  ;; 0b00110
 
+;; controller_birth_witness_v1
+;;   code_hash:uint256 code_depth:uint16 data_hash:uint256 data_depth:uint16
+;;
+;; Four numbers, 544 bits, no references, and ordinary. It replaces the pruned state-init
+;; proof it used to carry, which no contract can send: a message a contract builds may not
+;; contain a cell of level greater than zero, and a pruned branch has level one.
+const int pq::witness_bits = 256 + 16 + 256 + 16;
+
+;; The deepest child the state-init root can be built over. The root adds one level and
+;; the virtual machine refuses a cell deeper than 1024.
+const int pq::max_child_depth = 1023;
+
+;; A builder finalised as an exotic cell. The instruction takes the flag from the stack,
+;; so the constant is pushed here rather than by every caller.
+cell pq::end_exotic(builder b) asm "TRUE ENDXC";
+
+;; The pruned branch the platform would have produced for a level-zero child: its type,
+;; one level, the child's hash and the child's depth, in that order. The layout is held to
+;; the platform's own by a test that builds both and compares them.
+cell pq::pruned_branch(int hash, int depth) inline {
+  return pq::end_exotic(begin_cell()
+    .store_uint(1, 8)      ;; PrunedBranch
+    .store_uint(1, 8)      ;; one level
+    .store_uint(hash, 256)
+    .store_uint(depth, 16));
+}
+
 ;; What a proof failed at, so a caller can say which rule refused it. The elector refuses
 ;; the stake either way, but a rule nobody can tell apart from another is a rule nobody
 ;; can test.
-const int pq::proof::ok = 0;
-const int pq::proof::bad_shape = 1;
-const int pq::proof::bad_address = 2;
+const int pq::witness::ok = 0;
+const int pq::witness::bad_shape = 1;
+const int pq::witness::bad_address = 2;
 
 ;; Returns the controller code hash the proof establishes, and what it failed at. Never
 ;; throws: a malformed proof is a stake to refuse, not a transaction to bounce.
-(int, int) pq::controller_code_hash?(cell proof, int expected_address) {
-  (slice cs, int special) = pq::parse_maybe_special(proof);
+(int, int) pq::controller_code_hash?(cell witness, int expected_address) {
+  ;; The witness is ordinary and carries nothing but four numbers. A special cell here
+  ;; would be a caller trying to supply a branch rather than the material to rebuild one.
+  (slice cs, int special) = pq::parse_maybe_special(witness);
   if (special) {
-    return (0, pq::proof::bad_shape);
+    return (0, pq::witness::bad_shape);
   }
-  if (cs.slice_bits() != 5) {
-    return (0, pq::proof::bad_shape);
+  if (cs.slice_bits() != pq::witness_bits) {
+    return (0, pq::witness::bad_shape);
   }
-  if (cs.slice_refs() != 2) {
-    return (0, pq::proof::bad_shape);
+  if (cs.slice_refs() != 0) {
+    return (0, pq::witness::bad_shape);
   }
-  if (cs~load_uint(5) != pq::state_init_shape) {
-    return (0, pq::proof::bad_shape);
+  int code_hash = cs~load_uint(256);
+  int code_depth = cs~load_uint(16);
+  int data_hash = cs~load_uint(256);
+  int data_depth = cs~load_uint(16);
+
+  ;; A child one below the ceiling, because the state-init root this builds adds a level
+  ;; of its own. Checked before anything is built, so a depth that could not be finalised
+  ;; is refused rather than thrown over.
+  if (code_depth > pq::max_child_depth) {
+    return (0, pq::witness::bad_shape);
   }
-  cell code = cs~load_ref();
-  cell data = cs~load_ref();
-  ;; Both children stand in for the real ones, so both must be pruned branches. A child
-  ;; carried whole would let a proof be built for an account nobody deployed.
-  if (pq::cell_level(code) != 1) {
-    return (0, pq::proof::bad_shape);
+  if (data_depth > pq::max_child_depth) {
+    return (0, pq::witness::bad_shape);
   }
-  if (pq::cell_level(data) != 1) {
-    return (0, pq::proof::bad_shape);
+
+  ;; Rebuild the state init this account would have been deployed with, standing the two
+  ;; children in as pruned branches. The branches exist only on the stack for the length
+  ;; of this call: a level-one cell cannot be stored or sent, and none of this is.
+  cell rebuilt = begin_cell()
+    .store_uint(pq::state_init_shape, 5)
+    .store_ref(pq::pruned_branch(code_hash, code_depth))
+    .store_ref(pq::pruned_branch(data_hash, data_depth))
+  .end_cell();
+
+  ;; An account exists at the hash of its state init and nowhere else, so a commitment
+  ;; that equals the sender's address is a state init the sender was deployed with. The
+  ;; four numbers are not believed; they are the only ones that produce this address.
+  if (pq::hash_level0(rebuilt) != expected_address) {
+    return (0, pq::witness::bad_address);
   }
-  if (pq::hash_level0(proof) != expected_address) {
-    return (0, pq::proof::bad_address);
-  }
-  return (pq::hash_level0(code), pq::proof::ok);
+
+  ;; The code hash is returned as it was carried rather than read back out of the branch
+  ;; that was just built from it: the two are the same value, and asking the branch would
+  ;; be a check that cannot fail.
+  return (code_hash, pq::witness::ok);
 }
 
 ;; The admitted controller codes, and whether the configuration states any. An absent

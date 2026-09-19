@@ -208,6 +208,13 @@ TEST(Fift, test_secp256k1) {
   run_fift("secp256k1.fif");
 }
 
+// The reconstruction a first stake rests on, run in this machine. The other executor
+// runs the same steps through the contract; a reconstruction they disagreed about would
+// admit a validator on one and refuse it on the other.
+TEST(Fift, birth_witness_reconstruction) {
+  run_fift("birth-witness-reconstruction.fif");
+}
+
 // A contract cannot leave a pruned branch behind. This decides whether an account can
 // prove its own birth code by forwarding a proof of its state init, so it is pinned here
 // rather than left as a property someone remembers.
