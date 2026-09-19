@@ -331,6 +331,10 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     ;; stake smaller than 1/4096 of the total accumulated stakes, return
     return return_stake(s_addr, query_id, 2);
   }
+  ;; The running total counts the money this message brings, and is taken before the
+  ;; stake already placed is merged below: a top-up that re-counted what it merges would
+  ;; let an election reach the minimum total stake on money nobody placed.
+  total_stake += msg_value;
   if (stake_at != elect_at) {
     return return_stake(s_addr, query_id, 3);
   }
@@ -355,7 +359,6 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     return return_stake(s_addr, query_id, 5);
   }
   throw_unless(44, msg_value);
-  total_stake += msg_value;
   accept_message();
 
   (pq_members, pq_key_owner) = pq::register_member(pq_members, pq_key_owner, validator_id, msg_value,

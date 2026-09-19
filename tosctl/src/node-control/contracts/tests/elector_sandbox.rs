@@ -299,6 +299,24 @@ fn stake_of(chain: &Chain, public_key: &[u8; 32]) -> u128 {
         .expect("a stake")
 }
 
+/// The running total the open election carries. It decides whether the election has
+/// enough stake to close and how small a further stake may be, so it must never exceed
+/// what the members actually placed.
+fn declared_total_stake(chain: &Chain) -> u128 {
+    let result = chain
+        .blockchain
+        .run_get_method(&chain.elector, "participant_list_extended", vec![])
+        .expect("the elector answers");
+    assert_eq!(result.exit_code, 0, "participant_list_extended failed");
+    assert_eq!(result.stack.len(), 7, "the election summary changed shape");
+    result.stack[3]
+        .as_integer()
+        .expect("an integer")
+        .to_string()
+        .parse()
+        .expect("a running total")
+}
+
 #[test]
 fn a_signed_stake_registers_the_validator() {
     let (mut chain, treasury, election) = open_election("validator-a", 20_000 * TOS);
@@ -424,6 +442,11 @@ fn a_second_stake_from_the_same_address_is_added_to_the_first() {
         stake_of(&chain, &validator.public_key),
         (23_000 * TOS - 2 * TOS) as u128,
         "two stakes from one address must accumulate, less the two confirmations"
+    );
+    assert_eq!(
+        declared_total_stake(&chain),
+        stake_of(&chain, &validator.public_key),
+        "a top-up brings new money once, so the election's total is the only member's stake"
     );
 }
 
@@ -1611,6 +1634,23 @@ fn pq_book(chain: &Chain) -> (chain_block::HashmapE, chain_block::HashmapE) {
     (members, key_owner)
 }
 
+/// What a post-quantum controller has placed, according to its own member record.
+fn pq_stake_of(chain: &Chain, controller: &tos_sandbox::Treasury) -> u128 {
+    let (members, _) = pq_book(chain);
+    let mut record = members
+        .get(controller.address().address().clone())
+        .expect("lookup")
+        .expect("the controller is registered");
+    let bytes = record.get_next_int(4).expect("a stake length") as usize;
+    let mut stake = 0u128;
+    if bytes > 0 {
+        for byte in record.get_next_bits(bytes * 8).expect("a stake") {
+            stake = (stake << 8) | u128::from(byte);
+        }
+    }
+    stake
+}
+
 fn pq_member_key_id(
     chain: &Chain,
     controller: &tos_sandbox::Treasury,
@@ -1811,6 +1851,38 @@ fn a_controller_rotates_its_key_and_releases_the_one_it_held() {
     assert!(
         rotation_gas >= registration_gas,
         "a rotation does strictly more work than a registration but cost less"
+    );
+}
+
+#[test]
+fn a_post_quantum_top_up_adds_only_the_money_it_brings_to_the_election_total() {
+    let (mut chain, treasury, election) = open_election("pq-validator-g", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(8);
+
+    let first = pq_stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
+    assert_eq!(reply(&first), (STAKE_ACCEPTED, 0), "the first stake was refused");
+    assert_eq!(
+        declared_total_stake(&chain),
+        pq_stake_of(&chain, &treasury),
+        "a single registration already disagrees with what the member holds"
+    );
+
+    let second = pq_stake(&mut chain, &treasury, &validator, election, 2, 12_000 * TOS);
+    assert_eq!(reply(&second), (STAKE_ACCEPTED, 0), "topping up an own stake was refused");
+    assert_eq!(
+        pq_stake_of(&chain, &treasury),
+        (23_000 * TOS - 2 * TOS) as u128,
+        "two stakes from one controller must accumulate, less the two confirmations"
+    );
+
+    // The election closes on this running total, so counting a top-up twice lets an
+    // election reach the minimum total stake on money nobody placed, and raises the
+    // floor under which a later stake from anyone else is refused as too small.
+    assert_eq!(
+        declared_total_stake(&chain),
+        pq_stake_of(&chain, &treasury),
+        "the election counts more stake than its only member placed"
     );
 }
 
