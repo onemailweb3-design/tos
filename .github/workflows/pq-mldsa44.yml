@@ -53,6 +53,7 @@ jobs:
           cmake --build build --target test-pq-mldsa44 test-pq-mldsa44-wrapper \
             test-pq-consensus test-pq-signer test-pq-bytes test-validator-descr-tags \
             test-validator-identity test-node-consensus-membership test-config43 test-n3-preimage \
+            test-n3-controller-auth \
             func fift tol -j2
       - name: Verify PQ consensus identity, signer and PQBytes codec
         id: n1
@@ -68,6 +69,7 @@ jobs:
           build/crypto/pq/test-validator-identity
           build/crypto/pq/test-config43
           build/crypto/pq/test-n3-preimage
+          build/crypto/pq/test-n3-controller-auth
           build/test-node-consensus-membership
       - name: Prepare pinned public vectors
         id: vectors

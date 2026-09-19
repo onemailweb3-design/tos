@@ -103,6 +103,18 @@ if(TARGET tos_crypto)
   target_compile_definitions(test-n3-preimage PRIVATE
     N3_PREIMAGE_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-preimage-vectors.tsv")
   add_test(NAME n3-preimage-vectors COMMAND test-n3-preimage)
+  # What a validator controller's post-quantum root signs.
+  add_executable(n3-controller-auth-vectors-gen
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-controller-auth-vectors-gen.cpp")
+  set_target_properties(n3-controller-auth-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(n3-controller-auth-vectors-gen PRIVATE tos_block tos_crypto)
+  add_executable(test-n3-controller-auth
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-controller-auth-test.cpp")
+  set_target_properties(test-n3-controller-auth PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-n3-controller-auth PRIVATE tos_block tos_crypto tos_mldsa44)
+  target_compile_definitions(test-n3-controller-auth PRIVATE
+    N3_CONTROLLER_AUTH_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-controller-auth-vectors.tsv")
+  add_test(NAME n3-controller-auth-vectors COMMAND test-n3-controller-auth)
   # Configuration parameter 43 encodings both implementations must read identically.
   add_executable(config43-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors-gen.cpp")
   set_target_properties(config43-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
