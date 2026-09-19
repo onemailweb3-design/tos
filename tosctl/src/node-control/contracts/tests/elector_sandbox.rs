@@ -784,3 +784,258 @@ fn the_next_set_replaces_the_current_one_and_the_current_becomes_the_previous() 
         "the set that was replaced was not kept as the previous one"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Configuration votes
+//
+// A validator votes by signing, and the configuration contract verifies that signature
+// against the descriptor at the index the vote names. The elected set from the tests
+// above is what makes this testable: these are keys this test holds.
+// ---------------------------------------------------------------------------
+
+const NEW_PROPOSAL: u32 = 0x6e565052;
+const PROPOSAL_ACCEPTED: u32 = 0xee565052;
+const VOTE: u32 = 0x566f7465;
+const VOTE_SIGN_TAG: u32 = 0x566f7445;
+/// `send_confirmation(.., res + 0xd6745240)` with status 2: the vote was registered.
+const VOTE_REGISTERED: u32 = 0xd6745240 + 2;
+/// `throw_unless(34, check_data_signature(..))`.
+const ERROR_BAD_VOTE_SIGNATURE: i32 = 34;
+
+/// A set elected by this test, rotated into place, so the current validators are keys the
+/// test holds and can sign with.
+fn elect_install_and_rotate() -> (Chain, Vec<Validator>) {
+    let (mut chain, election, validators) = elect_four();
+    let closes = election - chain.elect_end_before;
+    chain.blockchain.set_now(closes);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    let takes_over = chain
+        .blockchain
+        .config_params()
+        .next_validator_set()
+        .expect("the next set is installed")
+        .utime_since();
+    chain.blockchain.set_now(takes_over);
+    chain
+        .blockchain
+        .tick_tock(&chain.config_contract, TransactionTickTock::Tock)
+        .expect("tock runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the rotated set");
+    (chain, validators)
+}
+
+/// `cfg_proposal#f3 param_id:int32 param_value:(Maybe ^Cell) if_hash_equal:(Maybe uint256)`
+fn proposal_cell(param_id: i32, value: u32) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut payload = chain_block::BuilderData::new();
+    payload.append_u32(value).expect("proposed value");
+    let mut proposal = chain_block::BuilderData::new();
+    proposal.append_u8(0xf3).expect("tag");
+    proposal.append_i32(param_id).expect("parameter");
+    proposal.append_bit_one().expect("a value is present");
+    proposal.checked_append_reference(payload.into_cell().expect("value cell")).expect("value");
+    proposal.append_bit_zero().expect("no expected current value");
+    proposal.into_cell().expect("proposal")
+}
+
+/// The index of a validator in the current set, by its public key, because a vote names
+/// an index and the contract checks the key stored at it.
+fn index_of(chain: &Chain, public_key: &[u8; 32]) -> u16 {
+    let set = chain.blockchain.config_params().validator_set().expect("a current set");
+    for (index, descriptor) in set.list().iter().enumerate() {
+        if descriptor.public_key().expect("a classical descriptor").key_bytes() == public_key {
+            return index as u16;
+        }
+    }
+    panic!("the validator is not in the current set");
+}
+
+fn vote_body(
+    query_id: u64,
+    signature: &[u8; 64],
+    idx: u16,
+    proposal_hash: &[u8; 32],
+) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(VOTE).expect("operation");
+    body.append_u64(query_id).expect("query id");
+    body.append_raw(signature, 512).expect("signature");
+    body.append_u32(VOTE_SIGN_TAG).expect("signed tag");
+    body.append_u16(idx).expect("index");
+    body.append_raw(proposal_hash, 256).expect("proposal");
+    body.into_cell().expect("vote body")
+}
+
+/// Exactly the bytes the contract verifies: everything after the signature.
+fn vote_preimage(idx: u16, proposal_hash: &[u8; 32]) -> Vec<u8> {
+    let mut preimage = Vec::with_capacity(38);
+    preimage.extend_from_slice(&VOTE_SIGN_TAG.to_be_bytes());
+    preimage.extend_from_slice(&idx.to_be_bytes());
+    preimage.extend_from_slice(proposal_hash);
+    preimage
+}
+
+/// Register a proposal and return its hash, which is how every vote refers to it.
+fn propose(chain: &mut Chain, param_id: i32, value: u32) -> [u8; 32] {
+    use chain_block::{GetRepresentationHash, IBitstring};
+    let proposal = proposal_cell(param_id, value);
+    let hash: [u8; 32] =
+        proposal.hash(0).as_slice()[..32].try_into().expect("a proposal hash is 32 bytes");
+
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(NEW_PROPOSAL).expect("operation");
+    body.append_u64(1).expect("query id");
+    // Absolute times are converted to a duration by the contract, and the configuration
+    // requires a proposal to be stored for at least a million seconds.
+    body.append_u32(chain.blockchain.now() + 2_000_000).expect("expiry");
+    body.checked_append_reference(proposal).expect("proposal");
+    body.append_bit_zero().expect("not a critical parameter");
+
+    let proposer = chain.blockchain.treasury("proposer", 1_000 * TOS).expect("a funded account");
+    let result = chain
+        .blockchain
+        .send_message(proposer.build_message(
+            &chain.config_contract,
+            100 * TOS,
+            true,
+            Some(body.into_cell().expect("proposal body")),
+        ))
+        .expect("the proposal is delivered");
+    let tags = replies(&result);
+    assert!(
+        tags.contains(&PROPOSAL_ACCEPTED),
+        "the configuration contract refused the proposal: {tags:02x?}"
+    );
+    hash
+}
+
+#[test]
+fn a_validator_votes_for_a_proposal_with_the_key_in_the_current_set() {
+    let (mut chain, validators) = elect_install_and_rotate();
+    let proposal = propose(&mut chain, 42, 0xabcd);
+
+    let voter = &validators[0];
+    let idx = index_of(&chain, &voter.public_key);
+    let signature: [u8; 64] =
+        ed25519_dalek::Signer::sign(&voter.key, &vote_preimage(idx, &proposal)).to_bytes();
+    let sender = chain.blockchain.treasury("vote-relay", 100 * TOS).expect("a funded account");
+    let result = chain
+        .blockchain
+        .send_message(sender.build_message(
+            &chain.config_contract,
+            10 * TOS,
+            true,
+            Some(vote_body(2, &signature, idx, &proposal)),
+        ))
+        .expect("the vote is delivered");
+    result.expect_success();
+
+    let tags = replies(&result);
+    assert!(tags.contains(&VOTE_REGISTERED), "the vote was not registered: {tags:02x?}");
+}
+
+#[test]
+fn a_vote_signed_by_a_key_that_is_not_at_that_index_is_refused() {
+    let (mut chain, validators) = elect_install_and_rotate();
+    let proposal = propose(&mut chain, 42, 0xabcd);
+
+    let voter = &validators[0];
+    let other = &validators[1];
+    let idx = index_of(&chain, &voter.public_key);
+    assert_ne!(idx, index_of(&chain, &other.public_key), "the two validators share an index");
+    // A signature that is valid, over the right proposal and the right index, made by a
+    // validator who is not the one at that index.
+    let signature: [u8; 64] =
+        ed25519_dalek::Signer::sign(&other.key, &vote_preimage(idx, &proposal)).to_bytes();
+
+    let sender = chain.blockchain.treasury("vote-relay", 100 * TOS).expect("a funded account");
+    chain
+        .blockchain
+        .send_message(sender.build_message(
+            &chain.config_contract,
+            10 * TOS,
+            true,
+            Some(vote_body(3, &signature, idx, &proposal)),
+        ))
+        .expect("the vote is delivered")
+        .expect_aborted()
+        .expect_exit_code(ERROR_BAD_VOTE_SIGNATURE);
+}
+
+/// The configuration contract's stored sequence number, which its external path
+/// increments on every message it accepts.
+fn config_seqno(chain: &Chain) -> u64 {
+    let result = chain
+        .blockchain
+        .run_get_method(&chain.config_contract, "seqno", vec![])
+        .expect("the configuration contract answers");
+    assert_eq!(result.exit_code, 0, "seqno failed");
+    result
+        .stack
+        .last()
+        .expect("a sequence number")
+        .as_integer()
+        .expect("an integer")
+        .to_string()
+        .parse()
+        .expect("a sequence number")
+}
+
+/// The external vote path, which exists today and which the post-quantum design removes.
+///
+/// It verifies the signature before `accept_message`, so the check has to fit the
+/// ordinary external admission credit. A post-quantum verification costs five times that
+/// credit before it decodes an operand, which is why this path cannot survive the
+/// conversion and is recorded here as it stands rather than as it is remembered.
+#[test]
+fn a_validator_can_still_vote_through_an_external_message() {
+    let (mut chain, validators) = elect_install_and_rotate();
+    let proposal = propose(&mut chain, 43, 0x1234);
+
+    let voter = &validators[2];
+    let idx = index_of(&chain, &voter.public_key);
+    let seqno = config_seqno(&chain) as u32;
+    let valid_until = chain.blockchain.now() + 600;
+
+    let mut preimage = Vec::with_capacity(46);
+    preimage.extend_from_slice(&VOTE.to_be_bytes());
+    preimage.extend_from_slice(&seqno.to_be_bytes());
+    preimage.extend_from_slice(&valid_until.to_be_bytes());
+    preimage.extend_from_slice(&idx.to_be_bytes());
+    preimage.extend_from_slice(&proposal);
+    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&voter.key, &preimage).to_bytes();
+
+    use chain_block::IBitstring;
+    let mut body = chain_block::BuilderData::new();
+    body.append_raw(&signature, 512).expect("signature");
+    body.append_raw(&preimage, 46 * 8).expect("the signed fields follow the signature");
+
+    let result = chain
+        .blockchain
+        .send_message(
+            tos_sandbox::MessageBuilder::external(&chain.config_contract)
+                .body(body.into_cell().expect("external vote body"))
+                .build(),
+        )
+        .expect("the external vote is delivered");
+    result.expect_success().expect_exit_code(0);
+
+    assert_eq!(
+        config_seqno(&chain),
+        seqno as u64 + 1,
+        "the external path accepted a message without counting it"
+    );
+}
