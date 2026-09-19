@@ -83,6 +83,11 @@ if(TARGET tos_crypto)
   add_executable(validator-set-cases-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-set-cases-gen.cpp")
   set_target_properties(validator-set-cases-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(validator-set-cases-gen PRIVATE tos_block tos_crypto keys)
+  # What a post-quantum validator set and elector cost in masterchain account state,
+  # measured before contract storage is designed around a shape that may not fit.
+  add_executable(n3-state-measure "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-state-measure.cpp")
+  set_target_properties(n3-state-measure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(n3-state-measure PRIVATE tos_block tos_crypto keys)
   add_executable(test-validator-identity "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-identity-test.cpp")
   set_target_properties(test-validator-identity PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(test-validator-identity PRIVATE tos_block tos_crypto keys tl-utils)
