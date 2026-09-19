@@ -27,6 +27,7 @@
     Copyright 2025-2026 TOS Blockchain Teams
 */
 #include <algorithm>
+#include <set>
 #include <cstring>
 #include <mutex>
 #include <stack>
@@ -685,6 +686,10 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
   auto ptr = std::make_shared<TotalValidatorSet>(rec.utime_since, rec.utime_until, rec.total, rec.main);
 
   std::vector<bool> seen_keys(rec.total);
+  // Uniqueness is decided here, where a bad set can simply be refused. Doing it only
+  // when a ValidatorSet object is built would make a malformed set abort the process
+  // instead of being rejected as the untrusted input it is.
+  std::set<td::Bits256> seen_validator_ids, seen_key_ids;
   td::Status error;
 
   auto validator_set_check_fn = [&](Ref<vm::CellSlice> descr_cs, td::ConstBitPtr key, int n) -> bool {
@@ -781,6 +786,24 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
       weight = descr.weight;
     }
 
+    // One validator may appear once. A second entry for the same identity would let a
+    // single member be counted twice toward a quorum.
+    if (!seen_validator_ids.insert(validator_id.value).second) {
+      error = td::Status::Error(PSLICE() << "validator #" << i << " repeats a validator identity");
+      return false;
+    }
+    // A consensus key belongs to one validator. Two members sharing a key is a
+    // different fault from one member appearing twice, and collapsing the two checks
+    // into one would let whichever came second through. Since a key identity is bound
+    // to its key, this also refuses two members carrying the same public key.
+    if (!seen_key_ids.insert(key_id.value).second) {
+      error = td::Status::Error(PSLICE() << "validator #" << i << " repeats a consensus key identity");
+      return false;
+    }
+    // The accumulation below also refuses a zero weight, so this does not change what
+    // is accepted. It changes what the operator is told: without it a zero weight is
+    // reported as exceeding the protocol cap, which sends them looking in the wrong
+    // place entirely.
     if (!weight) {
       error = td::Status::Error(PSLICE() << "validator #" << i << " has zero weight");
       return false;

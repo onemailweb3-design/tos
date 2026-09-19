@@ -72,15 +72,13 @@ ValidatorSet::ValidatorSet(tos::CatchainSeqno cc_seqno, tos::ShardIdFull from, s
     key_id_map_.emplace_back(ids_[i].key_id, i);
   }
 
+  // Uniqueness is decided when a set is decoded, where a malformed one is refused
+  // rather than aborting. These remain as a last line for sets built directly by tests
+  // and tooling, which never pass through that path.
   std::sort(ids_map_.begin(), ids_map_.end());
   for (std::size_t i = 1; i < ids_map_.size(); i++) {
-    // Two entries for one validator would let a single member be counted twice.
     CHECK(ids_map_[i - 1].first != ids_map_[i].first);
   }
-
-  // Key identity is checked separately from membership: one validator holding two
-  // identities and two validators sharing one key are different faults, and collapsing
-  // them into a single check would let one of them through.
   std::sort(key_id_map_.begin(), key_id_map_.end());
   for (std::size_t i = 1; i < key_id_map_.size(); i++) {
     CHECK(key_id_map_[i - 1].first != key_id_map_[i].first);

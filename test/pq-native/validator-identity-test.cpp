@@ -119,21 +119,72 @@ int main() {
   assert(block::Config::unpack_validator_set(
              validator_set_cell({pq_descriptor(vid, 1, kid_a, key_b, 5, adnl)}, 5), false)
              .is_error());
-  // Nor an unknown algorithm, nor a key of the wrong length, nor a missing ADNL identity,
-  // nor a zero validator identity.
-  assert(block::Config::unpack_validator_set(
-             validator_set_cell({pq_descriptor(vid, 7, kid_a, key_a, 5, adnl)}, 5), false)
-             .is_error());
+  // An unknown algorithm and a wrong-length key are both refused by the derivation
+  // itself, which yields nothing rather than an identity. The diagnosis is asserted
+  // because that is this guard's whole contribution: without it the code would go on to
+  // read an identity that was never produced.
+  auto unknown_alg = block::Config::unpack_validator_set(
+      validator_set_cell({pq_descriptor(vid, 7, kid_a, key_a, 5, adnl)}, 5), false);
+  assert(unknown_alg.is_error());
+  assert(unknown_alg.error().message().str().find("unknown consensus algorithm") != std::string::npos);
   const std::string short_key(tos::pq::mldsa44_public_key_bytes - 1, '\x11');
-  assert(block::Config::unpack_validator_set(
-             validator_set_cell({pq_descriptor(vid, 1, key_id_of(key_a), short_key, 5, adnl)}, 5), false)
-             .is_error());
+  auto short_key_set = block::Config::unpack_validator_set(
+      validator_set_cell({pq_descriptor(vid, 1, key_id_of(key_a), short_key, 5, adnl)}, 5), false);
+  assert(short_key_set.is_error());
+  assert(short_key_set.error().message().str().find("unknown consensus algorithm") != std::string::npos);
   assert(block::Config::unpack_validator_set(
              validator_set_cell({pq_descriptor(vid, 1, kid_a, key_a, 5, fill(0))}, 5), false)
              .is_error());
   assert(block::Config::unpack_validator_set(
              validator_set_cell({pq_descriptor(fill(0), 1, kid_a, key_a, 5, adnl)}, 5), false)
              .is_error());
+
+  {  // Every structural rule gets an input that is valid apart from the one thing it
+     // breaks, so nothing can pass for the wrong reason. Uniqueness is refused when the
+     // set is decoded, not by aborting later.
+    const auto key_c = std::string(tos::pq::mldsa44_public_key_bytes, '\x33');
+    const auto kid_c = key_id_of(key_c);
+    auto ok = [&](const std::vector<td::Ref<vm::Cell>>& d, td::uint64 w) {
+      return block::Config::unpack_validator_set(validator_set_cell(d, w), false);
+    };
+    // the two-member baseline every case below is a single change away from
+    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
+               pq_descriptor(fill(0xa5), 1, kid_c, key_c, 7, fill(0xc5))},
+              12)
+               .is_ok());
+
+    // one validator appearing twice, under two different keys
+    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
+               pq_descriptor(vid, 1, kid_c, key_c, 7, fill(0xc5))},
+              12)
+               .is_error());
+    // two validators sharing one consensus key
+    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
+               pq_descriptor(fill(0xa5), 1, kid_a, key_a, 7, fill(0xc5))},
+              12)
+               .is_error());
+    // the same public key twice, which is refused because a key identity is bound to
+    // the key that produces it, so a repeated key is a repeated identity
+    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
+               pq_descriptor(fill(0xa5), 1, key_id_of(key_a), key_a, 7, fill(0xc5))},
+              12)
+               .is_error());
+    // A member with no stake at all. The weight accumulator refuses this too, so what
+    // is checked here is the diagnosis: reported as a zero weight, not as exceeding the
+    // protocol cap, which would send an operator looking in the wrong place.
+    auto zero_weight = ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
+                           pq_descriptor(fill(0xa5), 1, kid_c, key_c, 0, fill(0xc5))},
+                          5);
+    assert(zero_weight.is_error());
+    assert(zero_weight.error().message().str().find("zero weight") != std::string::npos);
+    // a declared total that does not match what the members add up to
+    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl)}, 6).is_error());
+    // weights that would overflow the accumulator the quorum maths depends on
+    assert(ok({pq_descriptor(vid, 1, kid_a, key_a, 0xffffffffffffffffULL, adnl),
+               pq_descriptor(fill(0xa5), 1, kid_c, key_c, 0xffffffffffffffffULL, fill(0xc5))},
+              0)
+               .is_error());
+  }
 
   {  // The recorded version 2 commitment vectors must still be what this code produces.
     std::ifstream f(SET_HASH_VECTORS_FILE);
