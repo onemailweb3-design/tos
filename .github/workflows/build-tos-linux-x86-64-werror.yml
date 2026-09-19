@@ -2,10 +2,10 @@ name: Lint
 
 on:
   pull_request:
-    branches: [master, testnet]
+    branches: [main, master, testnet]
     types: [opened, reopened, synchronize, ready_for_review]
   push:
-    branches: [master, testnet]
+    branches: [main, master, testnet]
   workflow_dispatch:
   workflow_call:
 

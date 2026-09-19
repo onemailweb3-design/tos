@@ -30,7 +30,9 @@ int main() {
       if (line.empty() || line[0] == '#') continue;
       auto tab = line.find('\t');
       assert(tab != std::string::npos);
-      const unsigned tag = std::stoul(line.substr(0, tab), nullptr, 16);
+      const auto parsed = std::stoul(line.substr(0, tab), nullptr, 16);
+      assert(parsed <= 0xff);  // a constructor tag is one byte
+      const auto tag = static_cast<unsigned>(parsed);
       const auto verdict = line.substr(tab + 1, line.find('\t', tab + 1) - tab - 1);
       if (verdict == "accept") {
         shared_accept.insert(tag);

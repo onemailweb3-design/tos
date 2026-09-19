@@ -1,7 +1,9 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
 #include "pq-consensus.h"
 
-#include <openssl/sha.h>
+#include <openssl/evp.h>
+
+#include <memory>
 
 namespace tos::pq {
 namespace {
@@ -20,16 +22,26 @@ std::optional<std::array<std::uint8_t, 32>> derive_key_id(PQAlgorithmId algorith
   if (!valid_public_key(algorithm_id, public_key)) {
     return std::nullopt;
   }
-  SHA256_CTX ctx;
-  SHA256_Init(&ctx);
-  SHA256_Update(&ctx, key_id_domain.data(), key_id_domain.size());
+  // The SHA256_* context functions are deprecated; EVP is the supported interface and
+  // digests the same preimage to the same bytes, which the exact key-id vector proves.
+  // Every step is checked: an identity derived from a failed hash would be an identity
+  // nothing stands behind.
+  const std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> ctx{EVP_MD_CTX_new(), &EVP_MD_CTX_free};
+  if (!ctx) {
+    return std::nullopt;
+  }
   const auto id = static_cast<std::uint16_t>(algorithm_id);
   const unsigned char id_le[2] = {static_cast<unsigned char>(id & 0xff),
                                   static_cast<unsigned char>((id >> 8) & 0xff)};
-  SHA256_Update(&ctx, id_le, sizeof id_le);
-  SHA256_Update(&ctx, public_key.data(), public_key.size());
   std::array<std::uint8_t, 32> out{};
-  SHA256_Final(out.data(), &ctx);
+  unsigned int out_len = 0;
+  if (EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr) != 1 ||
+      EVP_DigestUpdate(ctx.get(), key_id_domain.data(), key_id_domain.size()) != 1 ||
+      EVP_DigestUpdate(ctx.get(), id_le, sizeof id_le) != 1 ||
+      EVP_DigestUpdate(ctx.get(), public_key.data(), public_key.size()) != 1 ||
+      EVP_DigestFinal_ex(ctx.get(), out.data(), &out_len) != 1 || out_len != out.size()) {
+    return std::nullopt;
+  }
   return out;
 }
 
