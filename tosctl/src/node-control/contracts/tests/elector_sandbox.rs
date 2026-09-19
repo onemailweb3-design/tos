@@ -1854,14 +1854,16 @@ fn a_controller_rotates_its_key_and_releases_the_one_it_held() {
     );
 }
 
-/// Rewrite the open election the way the elector stored it before it carried a
-/// post-quantum book: seven fields, and nothing after them.
+/// Rewrite the open election with `book_fields` of the post-quantum book still present,
+/// each of them an empty dictionary.
 ///
-/// This is the storage an upgrade leaves behind. The configuration contract may replace
+/// Zero is the storage an upgrade leaves behind: the configuration contract may replace
 /// the elector's code while an election is open, and the upgrade hook sets the new code
 /// without migrating a single cell, so the first thing the new code reads is an election
-/// the old code wrote.
-fn drop_the_post_quantum_book_from_storage(chain: &mut Chain) {
+/// the old code wrote. One is a shape no version has ever written, and is here to show
+/// that the election is read as one of the two shapes that exist and never as something
+/// in between.
+fn rewrite_election_with_book_fields(chain: &mut Chain, book_fields: usize) {
     use chain_block::IBitstring;
     let mut account =
         chain.blockchain.get_account(&chain.elector).expect("the elector is deployed").clone();
@@ -1893,6 +1895,9 @@ fn drop_the_post_quantum_book_from_storage(chain: &mut Chain) {
             legacy.append_bit_zero().expect(field);
         }
     }
+    for _ in 0..book_fields {
+        legacy.append_bit_zero().expect("an empty book dictionary");
+    }
 
     let mut rebuilt = chain_block::BuilderData::new();
     rebuilt.append_bit_one().expect("an active election");
@@ -1913,7 +1918,7 @@ fn an_election_opened_before_the_upgrade_is_read_and_written_again() {
     let opening = stake(&mut chain, &treasury, &classical, election, 1, 11_000 * TOS);
     assert_eq!(reply(&opening), (STAKE_ACCEPTED, 0), "the fixture needs a member");
     let placed = stake_of(&chain, &classical.public_key);
-    drop_the_post_quantum_book_from_storage(&mut chain);
+    rewrite_election_with_book_fields(&mut chain, 0);
 
     // Every entry point reads the election first, so an unreadable one stops the elector
     // altogether: no stake is accepted and no election ever closes.
@@ -1934,6 +1939,27 @@ fn an_election_opened_before_the_upgrade_is_read_and_written_again() {
         pq_member_key_id(&chain, &treasury),
         Some(validator.key_id()),
         "the book was not created for an election that was opened without one"
+    );
+}
+
+#[test]
+fn half_a_post_quantum_book_is_refused_rather_than_read_as_empty() {
+    let (mut chain, treasury, election) = open_election("legacy-partial", 40_000 * TOS);
+    let classical = Validator::new(0xf3);
+    let opening = stake(&mut chain, &treasury, &classical, election, 1, 11_000 * TOS);
+    assert_eq!(reply(&opening), (STAKE_ACCEPTED, 0), "the fixture needs a member");
+
+    // Neither version of the elector ever wrote one dictionary of the book. Reading such
+    // an election as though the book were absent would hide the half that is there, so it
+    // must throw instead: the two shapes that exist are the only ones accepted.
+    rewrite_election_with_book_fields(&mut chain, 1);
+    let result = chain
+        .blockchain
+        .run_get_method(&chain.elector, "participant_list_extended", vec![])
+        .expect("the elector answers");
+    assert_ne!(
+        result.exit_code, 0,
+        "an election in a shape no version ever wrote was read as a valid one"
     );
 }
 
