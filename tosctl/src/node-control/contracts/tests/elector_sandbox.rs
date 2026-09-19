@@ -1424,6 +1424,8 @@ const PQ_STAKE_SIGN_TAG: u32 = 0x5051_5354;
 const ELECTION_CONTEXT: &[u8] = b"TOS-VALIDATOR-ELECTION-v1";
 const MLDSA44_PUBLIC_KEY_BYTES: usize = 1312;
 /// `return_stake` reason 7: no transport address was stated.
+const REASON_BELOW_MINIMUM: u32 = 5;
+const REASON_FACTOR_BELOW_ONE: u32 = 6;
 const REASON_NO_ADNL: u32 = 7;
 
 /// The key tool from `crypto/pq/tools`. Signing is deliberately absent from the node's
@@ -1572,11 +1574,26 @@ fn pq_stake_from(
     query_id: u64,
     value: u64,
 ) -> tos_sandbox::SendResult {
+    pq_stake_with_max_factor(chain, from, signed_for, validator, election, query_id, value, 0x10000)
+}
+
+/// The same stake, signed and sent with a stated maximum stake factor, so a request that
+/// is well formed apart from that factor can be built.
+#[allow(clippy::too_many_arguments)]
+fn pq_stake_with_max_factor(
+    chain: &mut Chain,
+    from: &tos_sandbox::Treasury,
+    signed_for: &tos_sandbox::Treasury,
+    validator: &PqValidator,
+    election: u32,
+    query_id: u64,
+    value: u64,
+    max_factor: u32,
+) -> tos_sandbox::SendResult {
     let global_id = match chain.blockchain.config_params().config(19).expect("parameter 19") {
         Some(chain_block::ConfigParamEnum::ConfigParam19(id)) => id as i32,
         _ => panic!("the chain states no network id, so nothing can sign for it"),
     };
-    let max_factor = 0x10000;
     let validator_id =
         chain_block::UInt256::from_slice(&signed_for.address().address().get_bytestring(0));
     let preimage = pq_stake_preimage(
@@ -2086,6 +2103,48 @@ fn a_post_quantum_top_up_adds_only_the_money_it_brings_to_the_election_total() {
         pq_stake_of(&chain, &treasury),
         "the election counts more stake than its only member placed"
     );
+}
+
+/// The refusals that the cheap checks are responsible for, now that they run before the
+/// verification. A reordering that made one of them unreachable would leave a request the
+/// contract intends to refuse being refused by something else, or not at all.
+#[test]
+fn a_stake_stating_a_factor_below_one_is_returned() {
+    let (mut chain, treasury, election) = open_election("pq-factor", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(14);
+
+    let result = pq_stake_with_max_factor(
+        &mut chain,
+        &treasury,
+        &treasury,
+        &validator,
+        election,
+        1,
+        11_000 * TOS,
+        0x10000 - 1,
+    );
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_FACTOR_BELOW_ONE),
+        "a validator asked to be weighted below the stake it placed"
+    );
+    assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered anyway");
+}
+
+#[test]
+fn a_stake_below_the_minimum_is_returned() {
+    let (mut chain, treasury, election) = open_election("pq-minimum", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(15);
+
+    let result = pq_stake(&mut chain, &treasury, &validator, election, 1, 2 * TOS);
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_BELOW_MINIMUM),
+        "a stake under the minimum was registered"
+    );
+    assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered anyway");
 }
 
 #[test]
