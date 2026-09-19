@@ -105,5 +105,11 @@ jobs:
       - name: Every controller rule is held by a test
         run: python3 test/pq-native/n3-3a-mutations.py --out mutations.json
 
+      # The cutover deleted several validator-authority paths rather than refusing them
+      # by name, so nothing in the contracts announces their return. This fails if one
+      # comes back.
+      - name: No removed validator-authority path has returned
+        run: ./scripts/check-removed-validator-authority.sh .
+
       - name: Frozen BOCs match their sources
         run: git diff --exit-code

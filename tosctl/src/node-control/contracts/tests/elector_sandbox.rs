@@ -1140,6 +1140,17 @@ fn govern_install(
     value: chain_block::Cell,
     query_base: u64,
 ) -> Governed {
+    let keys: Vec<&PqValidator> = validators.iter().collect();
+    govern_install_with(chain, &keys, param_id, value, query_base)
+}
+
+fn govern_install_with(
+    chain: &mut Chain,
+    validators: &[&PqValidator],
+    param_id: i32,
+    value: chain_block::Cell,
+    query_base: u64,
+) -> Governed {
     let proposal = propose_cell(chain, param_id, value, query_base);
     let sender =
         chain.blockchain.treasury(&format!("govern-{query_base}"), 500 * TOS).expect("an account");
@@ -1455,6 +1466,352 @@ fn a_retired_profile_cannot_make_an_election_look_ready() {
         parameter_present(&configuration_from_contract(&chain), 36),
         "re-admitting the profile did not revive the election, so it had been given up on"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The cutover, end to end
+//
+// Every rule above is tested where it lives. This is the one run that puts them in a
+// row: a controller whose authority is post-quantum places a stake, the election that
+// selects it emits post-quantum descriptors, the configuration contract validates and
+// installs them, and the set that results is the only thing that can govern the chain
+// afterwards.
+//
+// It exists because the parts can each be right while the whole does not compose -- an
+// identity that changes shape between the book and the descriptor, a set hash the vote
+// is bound to that is not the one installed. Nothing here uses a fixture that writes a
+// validator set or a configuration parameter directly.
+// ---------------------------------------------------------------------------
+
+/// A validator controller deployed into the elector's own chain, holding a
+/// post-quantum root key.
+struct RootedValidator {
+    address: MsgAddressInt,
+    root: PqValidator,
+    consensus: PqValidator,
+}
+
+/// The domain a controller root signs under, distinct from the election domain so that
+/// a signature made for one can never be replayed as the other.
+const CONTROLLER_CONTEXT: &[u8] = b"TOS-VALIDATOR-CONTROLLER-v1";
+const CONTROLLER_OP: u32 = 0x50516361;
+const CONTROLLER_SIGN_TAG: u32 = 0x50514341;
+const CONTROLLER_KIND_SEND: u8 = 1;
+
+fn controller_code() -> chain_block::Cell {
+    let root = std::env::var("TOS_ROOT").map(std::path::PathBuf::from).unwrap_or_else(|_| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(4)
+            .expect("repository root above the contracts crate")
+            .to_path_buf()
+    });
+    tos_sandbox::compile_func_with_stdlib(&[
+        root.join("crypto/smartcont/validator-controller-v1.fc")
+    ])
+    .expect("the controller compiles")
+}
+
+/// Deploy a controller, its authority rooted in a key only this test holds.
+fn deploy_rooted_validator(chain: &mut Chain, index: u8) -> RootedValidator {
+    use chain_block::{GetRepresentationHash, IBitstring, Serializable};
+    let root = PqValidator::new(0x80 + index);
+    let consensus = PqValidator::new(0x90 + index);
+
+    let mut data = chain_block::BuilderData::new();
+    data.append_u64(0).expect("epoch");
+    data.append_u64(0).expect("nonce");
+    data.checked_append_reference(stored_bytes(&root.public_key)).expect("root key");
+    let state = chain_block::StateInit::with_code_and_data(
+        controller_code(),
+        data.into_cell().expect("controller data"),
+    );
+    let address = MsgAddressInt::with_params(
+        -1,
+        state.write_to_new_cell().expect("state").into_cell().expect("state cell").hash(0),
+    )
+    .expect("address");
+
+    let funder = chain
+        .blockchain
+        .treasury(&format!("controller-funder-{index}"), 100_000 * TOS)
+        .expect("a funded account");
+    chain
+        .blockchain
+        .send_message(
+            tos_sandbox::MessageBuilder::internal(funder.address(), &address, 40_000 * TOS)
+                .bounce(false)
+                .state_init(state)
+                .body(chain_block::Cell::default())
+                .build(),
+        )
+        .expect("the controller is deployed")
+        .expect_success();
+
+    RootedValidator { address, root, consensus }
+}
+
+/// The 93 bytes a controller root signs to authorise one action.
+fn controller_preimage(
+    global_id: i32,
+    controller: &chain_block::UInt256,
+    epoch: u64,
+    nonce: u64,
+    valid_until: u32,
+    kind: u8,
+    payload: &chain_block::Cell,
+) -> Vec<u8> {
+    use chain_block::GetRepresentationHash;
+    let mut preimage = Vec::with_capacity(93);
+    preimage.extend_from_slice(&CONTROLLER_SIGN_TAG.to_be_bytes());
+    preimage.extend_from_slice(&global_id.to_be_bytes());
+    preimage.extend_from_slice(controller.as_slice());
+    preimage.extend_from_slice(&epoch.to_be_bytes());
+    preimage.extend_from_slice(&nonce.to_be_bytes());
+    preimage.extend_from_slice(&valid_until.to_be_bytes());
+    preimage.push(kind);
+    preimage.extend_from_slice(payload.hash(0).as_slice());
+    assert_eq!(preimage.len(), 93, "the controller preimage changed shape");
+    preimage
+}
+
+impl RootedValidator {
+    fn id(&self) -> chain_block::UInt256 {
+        chain_block::UInt256::from_slice(&self.address.address().get_bytestring(0))
+    }
+
+    /// The nonce the controller will accept next.
+    fn stored_nonce(&self, chain: &Chain) -> u64 {
+        let result = chain
+            .blockchain
+            .run_get_method(&self.address, "controller_state", vec![])
+            .expect("the controller answers");
+        assert_eq!(result.exit_code, 0, "controller_state failed");
+        result.stack[1].as_integer().expect("a nonce").to_string().parse().expect("a nonce")
+    }
+
+    /// Have the controller send a body to the elector, authorised by its root key.
+    ///
+    /// This is what makes the run an authority test rather than a message test: the
+    /// stake arrives from an account whose right to place it is a post-quantum
+    /// signature, and the elector reads the sender as the validator identity.
+    fn send_to_elector(
+        &mut self,
+        chain: &mut Chain,
+        value: u64,
+        body: chain_block::Cell,
+    ) -> tos_sandbox::SendResult {
+        use chain_block::{IBitstring, Serializable};
+        let global_id = global_id(chain);
+
+        // The message is built the way a contract builds one to send: no source, because
+        // the sender is filled in by the chain, and the body behind a reference. A body
+        // written into the header instead overflows the cell the send instruction has to
+        // build, which is a failure in the compute phase and reads like a broken
+        // contract rather than a message that does not fit.
+        let mut message = chain_block::BuilderData::new();
+        message.append_bits(0x18, 6).expect("int_msg_info, bounceable, no source");
+        message.append_bits(0b100, 3).expect("addr_std, no anycast");
+        message.append_i8(-1).expect("the masterchain");
+        message
+            .append_raw(&chain.elector.address().get_bytestring(0), 256)
+            .expect("the elector's address");
+        chain_block::Coins::new(value).write_to(&mut message).expect("the value it carries");
+        // other:ExtraCurrencyCollection (empty), ihr_fee and fwd_fee (zero Grams).
+        message.append_bits(0, 1 + 4 + 4).expect("no other currencies and no fees");
+        message.append_u64(0).expect("created_lt, filled in by the chain");
+        message.append_u32(0).expect("created_at, filled in by the chain");
+        message.append_bit_zero().expect("no state init");
+        message.append_bit_one().expect("the body is a reference");
+        message.checked_append_reference(body).expect("the body");
+
+        let mut payload = chain_block::BuilderData::new();
+        payload.append_u8(3).expect("mode");
+        payload
+            .checked_append_reference(message.into_cell().expect("an outbound message"))
+            .expect("the message");
+        let payload = payload.into_cell().expect("a send payload");
+
+        // Read the nonce the controller actually holds rather than counting sends. A
+        // refused action leaves the nonce where it was, so a counter kept out here goes
+        // out of step with the contract the first time one is refused.
+        let nonce = self.stored_nonce(chain);
+        let valid_until = chain.blockchain.now() + 600;
+        let signature = self.root.sign_under(
+            &controller_preimage(
+                global_id,
+                &self.id(),
+                0,
+                nonce,
+                valid_until,
+                CONTROLLER_KIND_SEND,
+                &payload,
+            ),
+            CONTROLLER_CONTEXT,
+        );
+
+        let mut authorisation = chain_block::BuilderData::new();
+        authorisation.append_u32(CONTROLLER_OP).expect("operation");
+        authorisation.append_u64(1).expect("query id");
+        authorisation.append_i32(global_id).expect("network");
+        authorisation.append_u64(0).expect("epoch");
+        authorisation.append_u64(nonce).expect("nonce");
+        authorisation.append_u32(valid_until).expect("expiry");
+        authorisation.append_u8(CONTROLLER_KIND_SEND).expect("kind");
+        authorisation.checked_append_reference(payload).expect("payload");
+        authorisation.checked_append_reference(stored_bytes(&signature)).expect("signature");
+        authorisation.append_bit_zero().expect("no cosignature");
+
+        let relayer = chain
+            .blockchain
+            .treasury(&format!("relayer-{}", hex::encode(&self.id().as_slice()[..4])), 10_000 * TOS)
+            .expect("a relayer");
+        chain
+            .blockchain
+            .send_message(relayer.build_message(
+                &self.address,
+                100 * TOS,
+                true,
+                Some(authorisation.into_cell().expect("an authorisation")),
+            ))
+            .expect("the authorisation is delivered")
+    }
+}
+/// The index of a validator in the current set, by the consensus key it holds.
+fn index_of_pq(chain: &Chain, consensus: &PqValidator) -> u16 {
+    index_of(chain, consensus)
+}
+
+/// Admit the code an account was deployed with, and nothing else.
+fn admit_code_of(chain: &mut Chain, address: &MsgAddressInt) {
+    use chain_block::{GetRepresentationHash, IBitstring};
+    let account = chain.blockchain.get_account(address).expect("the account exists");
+    let code_hash = account.state_init().expect("a state init").code().expect("code").repr_hash();
+
+    let mut dict = chain_block::HashmapE::with_bit_len(256);
+    dict.set(
+        chain_block::SliceData::load_builder(
+            chain_block::BuilderData::with_raw(code_hash.as_slice().to_vec(), 256).expect("a key"),
+        )
+        .expect("a key slice"),
+        &chain_block::SliceData::default(),
+    )
+    .expect("insert");
+    let mut value = chain_block::BuilderData::new();
+    value.append_bit_one().expect("a non-empty policy");
+    value
+        .checked_append_reference(
+            chain_block::HashmapType::data(&dict).expect("a non-empty dictionary").clone(),
+        )
+        .expect("the codes");
+    set_contract_parameter(chain, 47, value.into_cell().expect("a controller policy"));
+}
+
+/// `govern_install`, for validators whose consensus keys are held by controllers.
+fn govern_install_pq(
+    chain: &mut Chain,
+    validators: &[RootedValidator],
+    param_id: i32,
+    value: chain_block::Cell,
+    query_base: u64,
+) -> Governed {
+    let keys: Vec<&PqValidator> = validators.iter().map(|v| &v.consensus).collect();
+    govern_install_with(chain, &keys, param_id, value, query_base)
+}
+
+/// A contract cannot forward a proof of its own birth code.
+///
+/// The first stake is supposed to carry a pruned proof of the sender's state init, and
+/// the sender is supposed to be the controller, because the elector reads the validator
+/// identity from the message source. Those two requirements are in conflict: an outbound
+/// message a contract builds may not carry a cell of level greater than zero, and a
+/// pruned branch has level one.
+///
+/// Nothing caught this before because every test that carries a proof sends it from a
+/// sandbox treasury, whose messages are injected rather than sent by a contract, so the
+/// rule was never reached. This test sends the same body the same way twice, changing
+/// only whether the proof's children are pruned, and pins both answers.
+#[test]
+fn a_contract_cannot_send_a_message_carrying_a_pruned_proof() {
+    use chain_block::IBitstring;
+    let (mut chain, _treasury, election) = open_election("pruned-proof-limit", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let mut validator = deploy_rooted_validator(&mut chain, 9);
+    admit_code_of(&mut chain, &validator.address);
+
+    let preimage = pq_stake_preimage(
+        global_id(&chain),
+        election,
+        0x10000,
+        &validator.id(),
+        &validator.consensus.key_id(),
+        &validator.consensus.adnl,
+    );
+    let signature = validator.consensus.sign(&preimage);
+    let proof = proof_of_birth_code(&chain, &validator.address.clone());
+    assert_eq!(proof.level(), 1, "a state-init proof is a level-one cell");
+
+    // The same bits and the same number of children, every child ordinary. If the two
+    // answers differ, the difference is the level and not the size.
+    let mut twin = chain_block::BuilderData::with_raw(proof.data().to_vec(), proof.bit_length())
+        .expect("the proof's own bits");
+    for _ in 0..proof.references_count() {
+        let mut ordinary = chain_block::BuilderData::new();
+        ordinary.append_raw(&[0u8; 32], 256).expect("filler");
+        twin.checked_append_reference(ordinary.into_cell().expect("a child")).expect("a child");
+    }
+    let twin = twin.into_cell().expect("a twin of the proof");
+    assert_eq!(twin.level(), 0, "the twin is here to be the ordinary one");
+
+    let send = |chain: &mut Chain, validator: &mut RootedValidator, carried, query| {
+        let body = pq_stake_body(
+            query,
+            &validator.consensus,
+            election,
+            0x10000,
+            &signature,
+            Some(carried),
+        );
+        let result = validator.send_to_elector(chain, 11_000 * TOS, body);
+        let (_, transaction) = result.transactions.first().expect("a transaction");
+        match transaction.read_description().expect("description") {
+            chain_block::TransactionDescr::Ordinary(descr) => match descr.compute_ph {
+                chain_block::TrComputePhase::Vm(vm) => vm.exit_code,
+                _ => panic!("the controller did not run"),
+            },
+            _ => panic!("not an ordinary transaction"),
+        }
+    };
+
+    assert_eq!(
+        send(&mut chain, &mut validator, twin, 1),
+        0,
+        "a controller cannot send a stake at all, so this test measures nothing"
+    );
+    assert_eq!(
+        send(&mut chain, &mut validator, proof.clone(), 2),
+        8,
+        "a controller can now forward a pruned proof, and the registration path that was \
+         blocked on this should be reconsidered"
+    );
+
+    // Not the size and not the depth of the message: a body carrying nothing but the
+    // proof, two cells deep against the twenty-one of a stake, is refused the same way.
+    let mut alone = chain_block::BuilderData::new();
+    alone.append_u32(1).expect("something to read as an operation");
+    alone.checked_append_reference(proof).expect("the proof alone");
+    let alone = alone.into_cell().expect("a body carrying only the proof");
+    assert!(alone.repr_depth() < 5, "the small case has to be small");
+    let result = validator.send_to_elector(&mut chain, TOS, alone);
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    let exit = match transaction.read_description().expect("description") {
+        chain_block::TransactionDescr::Ordinary(descr) => match descr.compute_ph {
+            chain_block::TrComputePhase::Vm(vm) => vm.exit_code,
+            _ => panic!("the controller did not run"),
+        },
+        _ => panic!("not an ordinary transaction"),
+    };
+    assert_eq!(exit, 8, "the small case was allowed, so size is part of the rule after all");
 }
 
 /// A controller policy holding `count` distinct code hashes.
@@ -1959,8 +2316,12 @@ fn pq_stake_preimage_for(
 /// A proof of what a sender was deployed as: the state init's own bits, with a pruned
 /// branch in place of each child.
 fn controller_proof(chain: &Chain, who: &tos_sandbox::Treasury) -> chain_block::Cell {
+    proof_of_birth_code(chain, who.address())
+}
+
+fn proof_of_birth_code(chain: &Chain, address: &MsgAddressInt) -> chain_block::Cell {
     use chain_block::{GetRepresentationHash, IBitstring, Serializable};
-    let account = chain.blockchain.get_account(who.address()).expect("the sender exists");
+    let account = chain.blockchain.get_account(address).expect("the sender exists");
     let state_init = account.state_init().expect("the sender was deployed with a state init");
     let root = state_init.write_to_new_cell().expect("state init").into_cell().expect("cell");
     let mut partial = chain_block::BuilderData::with_raw(root.data().to_vec(), root.bit_length())
