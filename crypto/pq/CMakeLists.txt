@@ -88,7 +88,8 @@ if(TARGET tos_crypto)
   target_link_libraries(test-validator-identity PRIVATE tos_block tos_crypto keys tl-utils)
   target_compile_definitions(test-validator-identity PRIVATE
     SET_HASH_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-set-hash-vectors.txt"
-    SET_CASES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-set-cases.txt")
+    SET_CASES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-set-cases.txt"
+    FROZEN_CONSTANTS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/frozen-constants.tsv")
   add_test(NAME validator-identity COMMAND test-validator-identity)
   add_executable(validator-descr-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-descr-vectors-gen.cpp")
   set_target_properties(validator-descr-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

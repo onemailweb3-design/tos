@@ -737,7 +737,7 @@ impl ValidatorSet {
     /// not the inherited value, so a preimage from either version can never be mistaken
     /// for the other: SHA-256("TOS-VALIDATOR-SET-v2")[0..4) = 0x79ae62d2.
     /// Must stay equal to `validator_set_hash_magic_v2` in crypto/block/block.h.
-    const HASH_SHORT_MAGIC_V2: u32 = 0x79AE62D2;
+    pub const HASH_SHORT_MAGIC_V2: u32 = 0x79AE62D2;
 
     /// Version 2 of the validator-set commitment, the exact counterpart of
     /// `compute_validator_set_hash` in crypto/block/block.cpp.

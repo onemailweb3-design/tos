@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "block/block-auto.h"
 #include "block/mc-config.h"
 #include "block/validator-set.h"
 #include "block/validator-session-members.h"
@@ -19,7 +20,9 @@
 #include "crypto/pq/pq-consensus.h"
 #include "vm/cells/CellBuilder.h"
 #include "vm/dict.h"
+#include <algorithm>
 #include <fstream>
+#include <map>
 #include "block/block.h"
 #include "td/utils/misc.h"
 
@@ -382,6 +385,39 @@ int main() {
     // no member help.
     assert(block::authorise_collate_request(vset, tos::ValidatorId{fill(0xee)}, adnl).is_error());
     assert(block::authorise_collate_request(vset, tos::ValidatorId{vid}, fill(0xee)).is_error());
+  }
+
+  {  // Constants that exist once per language. Each side checks its own against the
+     // shared file, so a value changed on one side alone fails here instead of leaving
+     // two implementations that disagree about the wire.
+    std::map<std::string, unsigned long long> frozen;
+    std::ifstream f(FROZEN_CONSTANTS_FILE);
+    assert(f);
+    std::string line;
+    while (std::getline(f, line)) {
+      if (line.empty() || line[0] == '#') {
+        continue;
+      }
+      auto tab = line.find('\t');
+      assert(tab != std::string::npos);
+      frozen[line.substr(0, tab)] = std::stoull(line.substr(tab + 1));
+    }
+    auto frozen_value = [&](const char* name) {
+      auto it = frozen.find(name);
+      assert(it != frozen.end());
+      return it->second;
+    };
+    assert(frozen.size() == 7);
+    assert(tos::pq::pq_bytes_chunk == frozen_value("pq_bytes_chunk"));
+    assert(tos::pq::pq_bytes_hard_max == frozen_value("pq_bytes_hard_max"));
+    assert(tos::pq::mldsa44_public_key_bytes == frozen_value("mldsa44_public_key_bytes"));
+    assert(tos::pq::mldsa44_signature_bytes == frozen_value("mldsa44_signature_bytes"));
+    assert(static_cast<unsigned long long>(tos::pq::PQAlgorithmId::mldsa44) ==
+           frozen_value("mldsa44_algorithm_id"));
+    assert(block::validator_set_hash_magic_v2 == frozen_value("validator_set_hash_magic_v2"));
+    // The descriptor tag comes from the schema itself rather than a copy of it.
+    const auto& tags = block::gen::ValidatorDescr::cons_tag;
+    assert(std::find(std::begin(tags), std::end(tags), frozen_value("validator_descr_pq_tag")) != std::end(tags));
   }
 
   printf("VALIDATOR_IDENTITY_OK rotation keeps validator_id, changes key_id; bindings enforced; session binds both\n");

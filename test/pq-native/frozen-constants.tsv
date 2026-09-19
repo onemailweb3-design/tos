@@ -1,0 +1,14 @@
+# Constants that exist once per language and must never drift apart. Each side asserts
+# its own definition against this file, so changing one without the other fails rather
+# than producing two implementations that quietly disagree about the wire.
+#
+# Values are decimal so both readers stay trivial.
+#
+# name	value
+pq_bytes_chunk	127
+pq_bytes_hard_max	8192
+mldsa44_public_key_bytes	1312
+mldsa44_signature_bytes	2420
+mldsa44_algorithm_id	1
+validator_descr_pq_tag	179
+validator_set_hash_magic_v2	2041471698
