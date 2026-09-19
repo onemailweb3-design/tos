@@ -712,3 +712,75 @@ fn a_finished_election_is_kept_without_any_key_material() {
     .expect("frozen stakes");
     assert_eq!(counted, validators.len(), "every elected validator should be frozen");
 }
+
+// ---------------------------------------------------------------------------
+// Rotation
+//
+// The configuration contract moves the next set into place on a tock, and keeps the set
+// it replaced. Three validator sets exist at once during this, which is the shape any
+// sizing of these accounts has to account for.
+// ---------------------------------------------------------------------------
+
+/// Elect a set, install it, and let the chain adopt it. Returns the moment the elected
+/// set takes over.
+fn elect_and_install() -> (Chain, u32) {
+    let (mut chain, election, _validators) = elect_four();
+    let closes = election - chain.elect_end_before;
+    chain.blockchain.set_now(closes);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    let next =
+        chain.blockchain.config_params().next_validator_set().expect("the next set is installed");
+    (chain, next.utime_since())
+}
+
+#[test]
+fn the_next_set_replaces_the_current_one_and_the_current_becomes_the_previous() {
+    let (mut chain, takes_over) = elect_and_install();
+    let before = chain.blockchain.config_params().clone();
+    let replaced = before.validator_set().expect("a current set").utime_since();
+    let arriving = before.next_validator_set().expect("a next set").utime_since();
+    assert_ne!(replaced, arriving, "the fixture needs two distinguishable sets");
+
+    // Before the moment it takes over, a tock must leave the sets alone.
+    chain.blockchain.set_now(takes_over - 1);
+    chain
+        .blockchain
+        .tick_tock(&chain.config_contract, TransactionTickTock::Tock)
+        .expect("tock runs")
+        .expect_success();
+    let early = configuration_from_contract(&chain);
+    assert!(parameter_present(&early, 36), "the next set was consumed before its time");
+    assert_eq!(
+        early.validator_set().expect("a current set").utime_since(),
+        replaced,
+        "the current set changed before the next one was due"
+    );
+
+    chain.blockchain.set_now(takes_over);
+    chain
+        .blockchain
+        .tick_tock(&chain.config_contract, TransactionTickTock::Tock)
+        .expect("tock runs")
+        .expect_success();
+
+    let after = configuration_from_contract(&chain);
+    assert!(!parameter_present(&after, 36), "the next set is still there after taking over");
+    assert_eq!(
+        after.validator_set().expect("a current set").utime_since(),
+        arriving,
+        "the elected set did not become the current one"
+    );
+    assert_eq!(
+        after.prev_validator_set().expect("a previous set").utime_since(),
+        replaced,
+        "the set that was replaced was not kept as the previous one"
+    );
+}
