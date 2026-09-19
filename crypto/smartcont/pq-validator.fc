@@ -53,15 +53,23 @@ slice pq::parse_ordinary(cell c) inline {
   return cs;
 }
 
-;; Walks a stored chain and returns the bytes it carries, refusing anything that is not
-;; the canonical shape: byte-aligned cells, at most one continuation each, every chunk but
-;; the last exactly full, and a last chunk that is neither empty nor oversized.
+;; Walks a stored chain and requires it to carry exactly `expected` bytes in the canonical
+;; shape: byte-aligned cells, at most one continuation each, every chunk but the last
+;; exactly full, and a last chunk that is neither empty nor oversized.
 ;;
-;; This matters beyond tidiness. The hash does not depend on where the boundaries fall, so
-;; a non-canonical chain would derive the same identity while serialising to different
-;; bytes -- and the node refuses those bytes.
-int pq::chain_bytes(cell chain) {
-  int total = 0;
+;; The canonical shape matters beyond tidiness. The hash does not depend on where the
+;; boundaries fall, so a non-canonical chain would derive the same identity while
+;; serialising to different bytes -- and the node refuses those bytes.
+;;
+;; The walk is bounded by the length that was declared rather than by the chain that was
+;; sent: a chunk that would carry the total past `expected` ends it. A sender that declares
+;; the length of a key and attaches a chain of any size therefore pays for about as many
+;; cells as the key itself has, not for the chain it chose to build.
+;; `impure`, because it is called for what it refuses and not for what it returns: FunC
+;; drops a call whose result is unused unless the function is marked so, and a dropped
+;; call here is every rule above silently gone.
+() pq::check_chain_bytes(cell chain, int expected) impure {
+  int remaining = expected;
   int walking = -1;
   while (walking) {
     slice cs = chain.pq::parse_ordinary();
@@ -70,6 +78,7 @@ int pq::chain_bytes(cell chain) {
     throw_if(pq::error::malformed_key, bits & 7);
     throw_if(pq::error::malformed_key, refs > 1);
     int bytes = bits >> 3;
+    throw_if(pq::error::malformed_key, bytes > remaining);
     if (refs == 1) {
       throw_unless(pq::error::malformed_key, bytes == pq::bytes_chunk);
       chain = cs~load_ref();
@@ -77,9 +86,9 @@ int pq::chain_bytes(cell chain) {
       throw_unless(pq::error::malformed_key, (bytes > 0) & (bytes <= pq::bytes_chunk));
       walking = 0;
     }
-    total += bytes;
+    remaining -= bytes;
   }
-  return total;
+  throw_unless(pq::error::malformed_key, remaining == 0);
 }
 
 ;; The stored form of a key: a length in its own cell, and a reference to the chain that
@@ -91,7 +100,7 @@ int pq::chain_bytes(cell chain) {
   cell chain = cs~load_ref();
   cs.end_parse();
   throw_unless(pq::error::key_length, declared == pq::public_key_bytes(algorithm_id));
-  throw_unless(pq::error::malformed_key, pq::chain_bytes(chain) == declared);
+  pq::check_chain_bytes(chain, declared);
   return (declared, chain);
 }
 
@@ -107,7 +116,7 @@ cell pq::stored_signature(int algorithm_id, cell stored) {
   cell chain = cs~load_ref();
   cs.end_parse();
   throw_unless(pq::error::key_length, declared == pq::mldsa44_signature_bytes);
-  throw_unless(pq::error::malformed_key, pq::chain_bytes(chain) == declared);
+  pq::check_chain_bytes(chain, declared);
   return chain;
 }
 

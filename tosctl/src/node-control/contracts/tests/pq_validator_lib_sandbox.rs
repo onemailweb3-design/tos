@@ -180,6 +180,74 @@ fn the_library_reaches_the_same_verdict_as_the_node_on_every_descriptor() {
     assert!(accepted >= 2 && refused >= 8, "the vectors lost coverage: {accepted}/{refused}");
 }
 
+/// A stored key that declares `declared` bytes but attaches a chain carrying `carried`.
+///
+/// Both numbers are the sender's to choose, and only the walk can find out that they
+/// disagree, so how long that walk runs is a cost the sender would otherwise pick.
+fn overlong_stored_key(declared: u32, carried: usize) -> Cell {
+    use chain_block::IBitstring;
+    let chunks = carried.div_ceil(127);
+    let mut chain: Option<Cell> = None;
+    for index in (0..chunks).rev() {
+        let bytes = if index + 1 == chunks { carried - index * 127 } else { 127 };
+        let mut cell = chain_block::BuilderData::new();
+        cell.append_raw(&vec![0xab; bytes], bytes * 8).expect("a chunk");
+        if let Some(next) = chain.take() {
+            cell.checked_append_reference(next).expect("the continuation");
+        }
+        chain = Some(cell.into_cell().expect("a chunk cell"));
+    }
+    let mut root = chain_block::BuilderData::new();
+    root.append_u32(declared).expect("the declared length");
+    root.checked_append_reference(chain.expect("a chain")).expect("the chain");
+    root.into_cell().expect("a stored key")
+}
+
+/// What it costs to refuse a key is decided by the length it declares, not by the chain
+/// it carries.
+///
+/// A key states its length in one cell and carries it in another, so a request may
+/// declare the length of a real key and attach a chain of any size. If the walk ran to
+/// the end of that chain before noticing, the work of refusing would be the sender's to
+/// choose, and it would be paid for out of the block the request lands in.
+#[test]
+fn refusing_an_overlong_key_costs_what_the_declared_length_costs() {
+    let mut chain = Blockchain::with_global_version(16).expect("a chain");
+    chain.set_workchain(-1);
+    let probe = deploy(&mut chain);
+
+    let cost = |carried: usize| -> i64 {
+        let result = chain
+            .run_get_method_with_gas(
+                &probe,
+                "probe_key_id",
+                vec![
+                    StackItem::int(1),
+                    StackItem::Cell(overlong_stored_key(
+                        MLDSA44_PUBLIC_KEY_BYTES as u32,
+                        carried,
+                    )),
+                ],
+                1_000_000_000,
+            )
+            .expect("the probe answers");
+        assert_eq!(
+            result.exit_code, ERROR_MALFORMED_KEY,
+            "a key carrying {carried} bytes while declaring {MLDSA44_PUBLIC_KEY_BYTES} was not \
+             refused as malformed"
+        );
+        result.gas_used
+    };
+
+    let barely = cost(12 * 127);
+    let enormous = cost(2_000 * 127);
+    assert!(
+        enormous <= barely + 200,
+        "refusing the same key cost {barely} gas over a chain of twelve chunks and {enormous} \
+         over one of two thousand, so the walk runs to the end of what was attached"
+    );
+}
+
 /// The same cell, presented as a reference into the library collection instead of as
 /// itself. The virtual machine resolves it and parses what it finds; the node's decoder
 /// has no library context and sees a special cell.
