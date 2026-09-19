@@ -83,6 +83,16 @@ if(TARGET tos_crypto)
   add_executable(validator-set-cases-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-set-cases-gen.cpp")
   set_target_properties(validator-set-cases-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(validator-set-cases-gen PRIVATE tos_block tos_crypto keys)
+  add_executable(test-config43 "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-test.cpp")
+  set_target_properties(test-config43 PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-config43 PRIVATE tos_block tos_crypto)
+  target_compile_definitions(test-config43 PRIVATE
+    CONFIG43_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors.tsv")
+  add_test(NAME config43-vectors COMMAND test-config43)
+  # Configuration parameter 43 encodings both implementations must read identically.
+  add_executable(config43-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors-gen.cpp")
+  set_target_properties(config43-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(config43-vectors-gen PRIVATE tos_block tos_crypto)
   # What a post-quantum validator set and elector cost in masterchain account state,
   # measured before contract storage is designed around a shape that may not fit.
   add_executable(n3-state-measure "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-state-measure.cpp")

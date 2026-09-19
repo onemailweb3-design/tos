@@ -1035,6 +1035,13 @@ fn serialize_limits(limits: &SizeLimitsConfig) -> Result<Value> {
         "acc_state_cells_for_storage_dict",
         limits.acc_state_cells_for_storage_dict,
     );
+    // Version 3 fields. An absent library-load limit means unlimited, so it is left out
+    // rather than written as a number that would read as a bound.
+    if let Some(loads) = limits.max_transaction_library_loads {
+        serialize_field(&mut map, "max_transaction_library_loads", loads);
+    }
+    serialize_field(&mut map, "max_total_msg_bits", limits.max_total_msg_bits);
+    serialize_field(&mut map, "max_total_msg_cells", limits.max_total_msg_cells);
     Ok(map.into())
 }
 
