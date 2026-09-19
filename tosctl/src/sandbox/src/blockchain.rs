@@ -43,6 +43,11 @@ const DEFAULT_BLOCK_LT: u64 = 2_000_000_000;
 /// Default maximum message routing depth (BFS iterations).
 const DEFAULT_MAX_MESSAGE_DEPTH: usize = 256;
 
+/// Generous for reading a value out of a contract, and the same figure an ordinary
+/// masterchain transaction is allowed. Work that a special account would pay for needs
+/// `run_get_method_with_gas`.
+const DEFAULT_GET_METHOD_GAS: i64 = 1_000_000;
+
 /// A local, single-process blockchain simulator.
 ///
 /// [`Blockchain`] holds all account states and configuration needed to execute
@@ -469,6 +474,21 @@ impl Blockchain {
         method: &str,
         args: Vec<StackItem>,
     ) -> SandboxResult<GetMethodResult> {
+        self.run_get_method_with_gas(address, method, args, DEFAULT_GET_METHOD_GAS)
+    }
+
+    /// Run a get-method under a stated gas limit.
+    ///
+    /// The default is generous for reading a value out of a contract and far below what
+    /// a special account may spend in a transaction, so measuring the cost of real work
+    /// with it reports the limit rather than the work.
+    pub fn run_get_method_with_gas(
+        &self,
+        address: &MsgAddressInt,
+        method: &str,
+        args: Vec<StackItem>,
+        gas_limit: i64,
+    ) -> SandboxResult<GetMethodResult> {
         let account = self
             .get_account(address)
             .ok_or_else(|| SandboxError::AccountNotFound(address.to_string()))?;
@@ -504,8 +524,7 @@ impl Blockchain {
             .map_err(|e| SandboxError::ExecutionFailed(e.into()))?;
         ctrls.put(4, StackItem::Cell(data)).map_err(|e| SandboxError::ExecutionFailed(e.into()))?;
 
-        // Gas: generous limit for get-methods.
-        let gas = Gas::new(1_000_000, 0, 1_000_000, 1_000_000);
+        let gas = Gas::new(gas_limit, 0, gas_limit, gas_limit);
 
         // Libraries from the account and mc state.
         let mc_state = ShardStateUnsplit::construct_from_cell(mc_state_root)
