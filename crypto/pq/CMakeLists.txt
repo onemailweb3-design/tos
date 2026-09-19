@@ -57,6 +57,10 @@ target_link_libraries(tos_pq_consensus_signer PUBLIC tos_pq_consensus PRIVATE to
 add_executable(tos-pq-consensus-key "${CMAKE_CURRENT_SOURCE_DIR}/consensus-key-tool.cpp")
 set_target_properties(tos-pq-consensus-key PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 target_link_libraries(tos-pq-consensus-key PRIVATE tos_pq_consensus_signer tos_pq_consensus)
+add_test(NAME consensus-key-tool
+         COMMAND "${CMAKE_COMMAND}" -E env python3
+                 "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-mldsa44/consensus_key_tool_test.py"
+                 --tool "$<TARGET_FILE:tos-pq-consensus-key>")
 
 set(PQ_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-mldsa44")
 add_executable(test-pq-mldsa44-wrapper "${PQ_TEST_DIR}/test.cpp")

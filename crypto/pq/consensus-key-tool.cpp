@@ -47,20 +47,30 @@ int refuse(tos::pq::ConsensusKeyFileError error, std::string_view path) {
 
 // A seed arrives as hexadecimal on standard input, never as an argument: an argument is
 // visible to every process on the host for as long as this one runs.
+//
+// Whitespace is allowed around the digits and nowhere else. Allowing it between them
+// would mean a seed could be written in more than one way, and two operators comparing
+// what they typed against what a key derives would have no reason to expect the same
+// answer.
 bool read_seed_hex(std::string& seed) {
+  constexpr std::size_t digits = 2 * tos::pq::consensus_seed_bytes;
+  auto is_space = [](int c) { return c == '\n' || c == '\r' || c == ' ' || c == '\t'; };
+
   std::string text;
+  bool ended = false;  // whitespace after the digits: nothing may follow it
   int c;
   while ((c = std::fgetc(stdin)) != EOF) {
-    if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+    if (is_space(c)) {
+      ended = !text.empty();
       continue;
     }
-    if (text.size() > 2 * tos::pq::consensus_seed_bytes) {
+    if (ended || text.size() >= digits) {
       OPENSSL_cleanse(text.data(), text.size());
       return false;
     }
     text.push_back(static_cast<char>(c));
   }
-  if (text.size() != 2 * tos::pq::consensus_seed_bytes) {
+  if (text.size() != digits) {
     OPENSSL_cleanse(text.data(), text.size());
     return false;
   }
@@ -124,7 +134,7 @@ int main(int argc, char** argv) {
   if (command == "import") {
     std::string seed;
     if (!read_seed_hex(seed)) {
-      std::fputs("a consensus key is 64 hexadecimal characters, and nothing else\n", stderr);
+      std::fputs("a consensus key is 64 hexadecimal characters, and nothing but space around them\n", stderr);
       return 1;
     }
     auto placed = tos::pq::import_consensus_key(path, seed);

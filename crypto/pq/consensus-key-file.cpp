@@ -161,7 +161,7 @@ std::variant<ConsensusPQKey, ConsensusKeyFileError> place_seed(std::string_view 
     return ConsensusKeyFileError::derivation_failed;
   }
 
-  // Written under a name of its own and renamed into place, so a key that is there is a
+  // Written under a name of its own and linked into place, so a key that is there is a
   // whole one: an interrupted write leaves the temporary behind rather than a half key
   // the node would refuse on every later start.
   const std::string temporary = name + ".new";
@@ -187,12 +187,18 @@ std::variant<ConsensusPQKey, ConsensusKeyFileError> place_seed(std::string_view 
       return ConsensusKeyFileError::write_failed;
     }
   }
-  if (::rename(temporary.c_str(), name.c_str()) != 0) {
+  // A link, not a rename. A rename replaces whatever is at the name, so the check that
+  // nothing is there and the moment the file arrives are two separate instants, and a
+  // key written between them is destroyed by this one. A link refuses to create a name
+  // that exists, in the same operation that creates it, so there is no interval.
+  if (::link(temporary.c_str(), name.c_str()) != 0) {
+    const int failure = errno;
     ::unlink(temporary.c_str());
-    return ConsensusKeyFileError::write_failed;
+    return failure == EEXIST ? ConsensusKeyFileError::already_exists : ConsensusKeyFileError::write_failed;
   }
-  // The rename itself has to reach the disk, or a crash leaves the directory pointing at
-  // a name that is no longer there. This is the failure the flush exists for, so it is
+  ::unlink(temporary.c_str());
+  // The new name has to reach the disk, or a crash leaves the directory pointing at a
+  // name that is no longer there. This is the failure the flush exists for, so it is
   // reported rather than ignored: a key that could not be made durable must not be
   // reported as created, or an operator provisions a validator that comes back without
   // its key.
@@ -206,6 +212,8 @@ std::variant<ConsensusPQKey, ConsensusKeyFileError> place_seed(std::string_view 
 }
 
 // A key is created, never replaced: rotating one is removing the old file deliberately.
+// This answers the ordinary case before any work is done; the one that actually decides
+// it is the link in `place_seed`, which cannot be raced.
 ConsensusKeyFileError* nothing_is_there(std::string_view path, ConsensusKeyFileError& slot) noexcept {
   const std::string name(path);
   struct stat existing{};
