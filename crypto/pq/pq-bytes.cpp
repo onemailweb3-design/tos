@@ -10,7 +10,8 @@ namespace tos::pq {
 
 td::Result<td::Ref<vm::Cell>> pack_pq_bytes(td::Slice data, std::size_t max_bytes) {
   const std::size_t len = data.size();
-  if (len > max_bytes || max_bytes > 0xffffffffULL) {
+  // Both bounds apply: the caller's limit and the absolute ceiling. Never just the caller's.
+  if (len > max_bytes || len > pq_bytes_hard_max || max_bytes > 0xffffffffULL) {
     return td::Status::Error("pq-bytes: oversize");
   }
   vm::Ref<vm::Cell> next;  // null tail
@@ -45,8 +46,10 @@ td::Result<td::BufferSlice> unpack_pq_bytes(td::Ref<vm::Cell> root, std::size_t 
   if (cs.size() != 32) {
     return td::Status::Error("pq-bytes: root bits");
   }
+  // The declared length is attacker-controlled: bound it against BOTH the caller limit
+  // and the absolute ceiling before allocating or walking a single cell.
   const std::size_t len = static_cast<std::size_t>(cs.fetch_ulong(32));
-  if (len > max_bytes) {
+  if (len > max_bytes || len > pq_bytes_hard_max) {
     return td::Status::Error("pq-bytes: oversize");
   }
   if (len == 0) {

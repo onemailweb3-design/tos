@@ -11,6 +11,7 @@
 #include "vm/boc.h"
 #include "td/utils/misc.h"
 #include <fstream>
+#include <vector>
 
 using namespace tos::pq;
 
@@ -73,6 +74,86 @@ int main() {
     assert(seen >= 8);
   }
 #endif
-  printf("PQ_BYTES_N1_OK roundtrips+oversize+canonical-negatives+shared-vectors\n");
+  {  // canonicality battery: every structural rule gets its own attacking tree.
+     // A rule no test can break is not an enforced rule.
+    auto data_cell = [](const std::string& bytes, std::vector<vm::Ref<vm::Cell>> refs) {
+      vm::CellBuilder cb;
+      cb.store_bytes_bool(td::Slice(bytes));
+      for (auto& r : refs) cb.store_ref(r);
+      return cb.finalize();
+    };
+    auto root_cell = [](unsigned long long len, int bits, std::vector<vm::Ref<vm::Cell>> refs) {
+      vm::CellBuilder cb;
+      cb.store_long(static_cast<long long>(len), bits);
+      for (auto& r : refs) cb.store_ref(r);
+      return cb.finalize();
+    };
+    const std::string b127(127, '\x01'), b100(100, '\x01'), b73(73, '\x01'), b10(10, '\x01');
+    auto tail = data_cell(b73, {});
+
+    // A well-formed snake of arbitrary length: otherwise perfectly canonical, so the
+    // ONLY thing that can reject it is the absolute ceiling. Built here rather than via
+    // pack_pq_bytes because pack itself refuses to exceed the ceiling.
+    auto snake = [&](std::size_t len) {
+      vm::Ref<vm::Cell> next;
+      const std::size_t nchunks = (len + pq_bytes_chunk - 1) / pq_bytes_chunk;
+      for (std::size_t i = nchunks; i-- > 0;) {
+        const std::size_t off = i * pq_bytes_chunk;
+        const std::size_t n = std::min(pq_bytes_chunk, len - off);
+        vm::CellBuilder cb;
+        cb.store_bytes_bool(td::Slice(std::string(n, '\x05')));
+        if (next.not_null()) cb.store_ref(next);
+        next = cb.finalize();
+      }
+      vm::CellBuilder rb;
+      rb.store_long(static_cast<long long>(len), 32);
+      if (next.not_null()) rb.store_ref(next);
+      return rb.finalize();
+    };
+    // absolute ceiling: a permissive caller limit must NOT unlock it
+    assert(pack_pq_bytes(td::Slice(std::string(pq_bytes_hard_max + 1, 'x')), 0xffffffffULL).is_error());
+    assert(pack_pq_bytes(td::Slice(std::string(pq_bytes_hard_max, 'x')), 0xffffffffULL).is_ok());
+    assert(unpack_pq_bytes(snake(pq_bytes_hard_max), 0xffffffffULL).is_ok());       // canonical at the ceiling
+    assert(unpack_pq_bytes(snake(pq_bytes_hard_max + 1), 0xffffffffULL).is_error());  // only the ceiling rejects it
+    // a 4 GiB declaration is refused by the same length gate, before any allocation
+    assert(unpack_pq_bytes(root_cell(0xffffffffULL, 32, {}), 0xffffffffULL).is_error());
+
+    // root bit-width: 31 and 33 are both non-canonical
+    assert(unpack_pq_bytes(root_cell(0, 31, {}), 2420).is_error());
+    assert(unpack_pq_bytes(root_cell(0, 33, {}), 2420).is_error());
+
+    // zero length must carry no ref
+    assert(unpack_pq_bytes(root_cell(0, 32, {data_cell(b10, {})}), 2420).is_error());
+    assert(unpack_pq_bytes(root_cell(0, 32, {}), 2420).is_ok());
+
+    // root ref count must be exactly 1 when len > 0
+    assert(unpack_pq_bytes(root_cell(10, 32, {}), 2420).is_error());
+    assert(unpack_pq_bytes(root_cell(10, 32, {data_cell(b10, {}), data_cell(b10, {})}), 2420).is_error());
+
+    // middle cell must have exactly 1 ref (0 and 2 both rejected)
+    assert(unpack_pq_bytes(root_cell(200, 32, {data_cell(b127, {})}), 2420).is_error());
+    assert(unpack_pq_bytes(root_cell(200, 32, {data_cell(b127, {tail, tail})}), 2420).is_error());
+
+    // final cell must carry no trailing ref
+    assert(unpack_pq_bytes(root_cell(127, 32, {data_cell(b127, {tail})}), 2420).is_error());
+
+    // non-full middle chunk (100 instead of 127)
+    assert(unpack_pq_bytes(root_cell(227, 32, {data_cell(b100, {data_cell(b127, {})})}), 2420).is_error());
+
+    // declared length > actual, and < actual
+    assert(unpack_pq_bytes(root_cell(300, 32, {data_cell(b127, {tail})}), 2420).is_error());
+    assert(unpack_pq_bytes(root_cell(100, 32, {data_cell(b127, {})}), 2420).is_error());
+
+    // final chunk longer than the remaining declared bytes
+    assert(unpack_pq_bytes(root_cell(130, 32, {data_cell(b127, {data_cell(b10, {})})}), 2420).is_error());
+
+    // non-byte-aligned payload: 100 bits where 12 whole bytes are required
+    vm::CellBuilder odd;
+    odd.store_long(0, 100 - 64);
+    odd.store_long(0, 64);
+    assert(unpack_pq_bytes(root_cell(12, 32, {odd.finalize()}), 2420).is_error());
+  }
+
+  printf("PQ_BYTES_N1_OK roundtrips+hard-max+canonicality-battery+shared-vectors\n");
   return 0;
 }

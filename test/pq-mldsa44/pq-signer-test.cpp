@@ -43,14 +43,24 @@ int main() {
   const std::string& sig = sig_opt->signature;
 
   // production signer -> production verifier, under the consensus context: VALID
-  assert(verify_mldsa44(msg, consensus_sign_context, sig, key.public_key) == VerifyResult::valid);
+  assert(verify_mldsa44(msg, simplex_sign_context, sig, key.public_key) == VerifyResult::valid);
   // context substitution (the frozen boundary): a consensus sig must NOT verify under a wallet context
   assert(verify_mldsa44(msg, "tos.pq.wallet.v1", sig, key.public_key) == VerifyResult::invalid);
+  // nor under any OTHER frozen authority surface: each context is its own domain, so a
+  // Simplex/finality signature can never be replayed as an election, config-vote or admin act
+  assert(verify_mldsa44(msg, validator_election_context, sig, key.public_key) == VerifyResult::invalid);
+  assert(verify_mldsa44(msg, validator_config_vote_context, sig, key.public_key) == VerifyResult::invalid);
+  assert(verify_mldsa44(msg, config_admin_context, sig, key.public_key) == VerifyResult::invalid);
+  // the four frozen contexts are distinct strings (a collision would merge two authorities)
+  assert(simplex_sign_context != validator_election_context &&
+         validator_election_context != validator_config_vote_context &&
+         validator_config_vote_context != config_admin_context &&
+         simplex_sign_context != config_admin_context);
   // tampered signature: invalid
   { std::string bad = sig; bad[0] ^= 1;
-    assert(verify_mldsa44(msg, consensus_sign_context, bad, key.public_key) == VerifyResult::invalid); }
+    assert(verify_mldsa44(msg, simplex_sign_context, bad, key.public_key) == VerifyResult::invalid); }
   // wrong message: invalid
-  assert(verify_mldsa44("different message", consensus_sign_context, sig, key.public_key) == VerifyResult::invalid);
+  assert(verify_mldsa44("different message", simplex_sign_context, sig, key.public_key) == VerifyResult::invalid);
 
   // Independent known-answer test: the backend must reproduce a published
   // FIPS-204 ML-DSA-44 KeyGen vector (an external authority, not self-generated).
@@ -74,6 +84,6 @@ int main() {
   assert(a->consensus_key().key_id == b->consensus_key().key_id);
   assert(!ValidatorPQKeyStore::from_seed(std::string(31, 'x')).has_value());  // bad seed length refused
 
-  printf("PQ_SIGNER_N1_OK signer->verifier valid; context-substitution+tamper+wrongmsg rejected; seed deterministic; NIST FIPS-204 KeyGen KAT matched\n");
+  printf("PQ_SIGNER_N1_OK signer->verifier valid; context-substitution(all 4 frozen surfaces)+tamper+wrongmsg rejected; seed deterministic; NIST FIPS-204 KeyGen KAT matched\n");
   return 0;
 }

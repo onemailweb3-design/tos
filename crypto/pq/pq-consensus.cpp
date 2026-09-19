@@ -13,7 +13,13 @@ std::size_t suite_signature_bytes(PQAlgorithmId a) noexcept {
 }
 }  // namespace
 
-std::array<std::uint8_t, 32> derive_key_id(PQAlgorithmId algorithm_id, std::string_view public_key) {
+std::optional<std::array<std::uint8_t, 32>> derive_key_id(PQAlgorithmId algorithm_id,
+                                                          std::string_view public_key) {
+  // Fail closed before hashing: an unadmitted algorithm, or a public key that is not
+  // exactly the suite length, must not be able to produce an identity at all.
+  if (!valid_public_key(algorithm_id, public_key)) {
+    return std::nullopt;
+  }
   SHA256_CTX ctx;
   SHA256_Init(&ctx);
   SHA256_Update(&ctx, key_id_domain.data(), key_id_domain.size());

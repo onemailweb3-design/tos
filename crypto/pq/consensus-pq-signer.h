@@ -26,7 +26,8 @@ class ValidatorPQKeyStore {
 
   const ConsensusPQKey& consensus_key() const noexcept { return key_; }
 
-  // Sign under consensus_sign_context (domain-separated from wallet/agent ML-DSA use).
+  // Sign under the frozen simplex_sign_context (domain-separated from wallet/agent
+  // ML-DSA use and from the other frozen consensus authority surfaces).
   // nullopt on backend failure; the returned signature is always signature_bytes long.
   std::optional<ConsensusPQSignature> sign_consensus(std::string_view message) const noexcept;
 

@@ -6,6 +6,8 @@
 // the signer live in separate units; this header carries no backend dependency.
 #include <array>
 #include <cstddef>
+#include <limits>
+#include <optional>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -36,14 +38,27 @@ struct PQConsensusLimits {
   PQAlgorithmId algorithm_id = PQAlgorithmId::mldsa44;
   std::size_t public_key_bytes = mldsa44_public_key_bytes;   // 1312
   std::size_t signature_bytes = mldsa44_signature_bytes;     // 2420
-  std::size_t max_certificate_signers = 400;                 // protocol max (ConfigParam16 max_validators)
-  std::size_t max_main_validators = 100;                     // recommended masterchain committee ceiling
-  // framing allowance per signer (validator_id + algorithm_id + cell overhead), generous.
+  // Provisional structural ceiling for N1 sizing only: 21 is the launch committee,
+  // 100/400 are the provisional main/total ceilings. Not a frozen protocol maximum;
+  // the binding value comes from ConfigParam16 once N2 lands.
+  std::size_t max_certificate_signers = 400;
+  std::size_t max_main_validators = 100;
+  // Framing allowance per signer (validator_id + algorithm_id + cell overhead). This is
+  // a generous guess, NOT a measurement of the final encoding.
   std::size_t framing_bytes_per_signer = 64;
-  std::size_t certificate_bytes(std::size_t signers) const noexcept {
-    return signers * (signature_bytes + framing_bytes_per_signer);
+  // ESTIMATE ONLY. The real consensus bound must be computed from the final
+  // TL-B/PQBytes/BOC encoding in N5/N6; nothing may treat this as the frozen bound.
+  // Saturates instead of overflowing so a hostile signer count can never wrap.
+  std::size_t estimated_certificate_bytes(std::size_t signers) const noexcept {
+    const std::size_t per = signature_bytes + framing_bytes_per_signer;
+    if (per != 0 && signers > std::numeric_limits<std::size_t>::max() / per) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    return signers * per;
   }
-  std::size_t max_certificate_bytes() const noexcept { return certificate_bytes(max_certificate_signers); }
+  std::size_t estimated_max_certificate_bytes() const noexcept {
+    return estimated_certificate_bytes(max_certificate_signers);
+  }
 };
 
 // A validator's consensus public key. key_id is stable-per-key (rotating the PQ key
@@ -62,16 +77,27 @@ struct ConsensusPQSignature {
   bool operator==(const ConsensusPQSignature&) const = default;
 };
 
-// Domain-separation constants. The key-id domain binds the algorithm and public key;
-// the consensus signature context separates consensus finality from every other
-// ML-DSA use (wallet/agent), so a signature from one domain never verifies in another.
-inline constexpr std::string_view key_id_domain = "tos.pq.consensus.key-id.v1";
-inline constexpr std::string_view consensus_sign_context = "tos.pq.consensus.finality.v1";
+// Frozen domain-separation constants. These exact strings are normative: they are
+// the signing-domain identity of the network and cannot change without a consensus
+// format change. The key-id domain binds the algorithm and public key; each signature
+// context separates one authority surface from every other ML-DSA use (wallet/agent),
+// so a signature produced for one surface never verifies under another.
+inline constexpr std::string_view key_id_domain = "TOS-PQ-CONSENSUS-KEY-v1";
 
-// key_id = SHA-256(key_id_domain || u16_le(algorithm_id) || public_key). Stable for a
-// given (algorithm, key); independent of validator_id.
-std::array<std::uint8_t, 32> derive_key_id(PQAlgorithmId algorithm_id,
-                                           std::string_view public_key);
+// One context per authority surface. N1 freezes all four so N3/N4 cannot invent a
+// new domain later; only the Simplex/finality one has a signer implementation yet.
+inline constexpr std::string_view simplex_sign_context = "TOS-CONSENSUS-SIMPLEX-v1";
+inline constexpr std::string_view validator_election_context = "TOS-VALIDATOR-ELECTION-v1";
+inline constexpr std::string_view validator_config_vote_context = "TOS-VALIDATOR-CONFIG-VOTE-v1";
+inline constexpr std::string_view config_admin_context = "TOS-CONFIG-ADMIN-v1";
+
+// key_id = SHA-256(key_id_domain || u16_le(algorithm_id) || public_key), where the
+// algorithm id is encoded as exactly two little-endian bytes. Stable for a given
+// (algorithm, key) and independent of validator_id.
+// Fails closed: an unadmitted algorithm or a public key of the wrong length yields
+// no id at all, so an unknown suite can never be given a usable identity.
+std::optional<std::array<std::uint8_t, 32>> derive_key_id(PQAlgorithmId algorithm_id,
+                                                          std::string_view public_key);
 
 // Structural validation (size + admitted algorithm). Returns false, never throws, on
 // any malformed input; callers fail closed.
