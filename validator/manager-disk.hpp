@@ -22,6 +22,7 @@
 #include <map>
 #include <set>
 
+#include "validator/node-consensus-status.h"
 #include "interfaces/db.h"
 #include "interfaces/validator-manager.h"
 
@@ -42,6 +43,9 @@ class WaitBlockDataDisk;
 
 class ValidatorManagerImpl : public ValidatorManager {
  private:
+  // Offline and hardfork managers take no part in consensus, but they implement the
+  // same interface, so the custody they are handed is recorded and simply unused.
+  PqConsensusCustody pq_custody_;
   std::vector<td::Ref<ExtMessage>> ext_messages_;
   std::vector<td::Ref<IhrMessage>> ihr_messages_;
   struct Compare {
@@ -92,6 +96,15 @@ class ValidatorManagerImpl : public ValidatorManager {
   }
   void del_temp_key(PublicKeyHash key, td::Promise<td::Unit> promise) override {
     UNREACHABLE();
+  }
+  void add_pq_consensus_key(tos::ValidatorId validator_id, tos::ConsensusKeyId key_id,
+                            td::Promise<td::Unit> promise) override {
+    pq_custody_[validator_id] = key_id;
+    promise.set_value(td::Unit());
+  }
+  void del_pq_consensus_key(tos::ValidatorId validator_id, td::Promise<td::Unit> promise) override {
+    pq_custody_.erase(validator_id);
+    promise.set_value(td::Unit());
   }
 
   void validate_block_is_next_proof(BlockIdExt prev_block_id, BlockIdExt next_block_id, td::BufferSlice proof,

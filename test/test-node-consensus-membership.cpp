@@ -74,22 +74,57 @@ int main() {
 
   {
     std::set<PublicKeyHash> temp{member_key};
-    expect("member_temp_key_in_set", validator::node_validator_membership(set, temp, {}), true, true);
+    expect("member_temp_key_in_set", validator::node_validator_membership(set, temp, {}, {}), true, true);
   }
   {
     std::set<PublicKeyHash> temp{outsider_key};
-    expect("configured_non_member_not_in_set", validator::node_validator_membership(set, temp, {}), true, false);
+    expect("configured_non_member_not_in_set", validator::node_validator_membership(set, temp, {}, {}), true, false);
   }
   {
-    expect("no_local_keys_unknown", validator::node_validator_membership(set, {}, {}), false, false);
+    expect("no_local_keys_unknown", validator::node_validator_membership(set, {}, {}, {}), false, false);
   }
   {
     std::set<PublicKeyHash> perm{member_key};
-    expect("member_permanent_key_in_set", validator::node_validator_membership(set, {}, perm), true, true);
+    expect("member_permanent_key_in_set", validator::node_validator_membership(set, {}, perm, {}), true, true);
+  }
+
+  // A post-quantum validator: its identity has nothing to do with any Ed25519 key, and
+  // membership follows what this node custodies for it.
+  {
+    const auto pq_id = tos::ValidatorId{bits_with_first_byte(0xa0)};
+    const auto held_key = tos::ConsensusKeyId{bits_with_first_byte(0xb0)};
+    const auto rotated_key = tos::ConsensusKeyId{bits_with_first_byte(0xb1)};
+    std::vector<ValidatorDescr> pq_nodes;
+    pq_nodes.emplace_back(pq_id, /*algorithm_id=*/1, held_key, std::string(1312, '\x01'), /*weight=*/1,
+                          bits_with_first_byte(0xc0));
+    block::ValidatorSet pq_set(/*cc_seqno=*/0, ShardIdFull{masterchainId}, std::move(pq_nodes));
+
+    // Holding the key the set records for that validator is what makes this node it.
+    validator::PqConsensusCustody holding{{pq_id, held_key}};
+    expect("pq_custodied_key_is_member", validator::node_validator_membership(pq_set, {}, {}, holding), true, true);
+
+    // Holding a key that is no longer the one recorded does not: a validator that has
+    // rotated away from this key is not us any more.
+    validator::PqConsensusCustody stale{{pq_id, rotated_key}};
+    expect("pq_stale_key_is_not_member", validator::node_validator_membership(pq_set, {}, {}, stale), true, false);
+
+    // The back door this phase exists to close: every Ed25519 key in the world, and no
+    // custody, must not make this node a post-quantum consensus validator. The keys
+    // offered here include one whose identity is the validator's own identity, which is
+    // exactly what the old membership rule would have accepted.
+    std::set<PublicKeyHash> every_ed25519{member_key, outsider_key, PublicKeyHash{pq_id.value},
+                                          PublicKeyHash{held_key.value}};
+    expect("ed25519_keys_alone_are_not_pq_membership",
+           validator::node_validator_membership(pq_set, every_ed25519, every_ed25519, {}), true, false);
+
+    // And custody for some other validator is not custody for this one.
+    validator::PqConsensusCustody elsewhere{{tos::ValidatorId{bits_with_first_byte(0xa9)}, held_key}};
+    expect("custody_of_another_validator_is_not_membership",
+           validator::node_validator_membership(pq_set, {}, {}, elsewhere), true, false);
   }
 
   if (failures == 0) {
-    std::printf("test-node-consensus-membership: 4/4 scenarios OK\n");
+    std::printf("test-node-consensus-membership: 9/9 scenarios OK\n");
     return 0;
   }
   std::printf("test-node-consensus-membership: %d scenario(s) FAILED\n", failures);

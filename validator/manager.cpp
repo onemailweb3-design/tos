@@ -2050,11 +2050,11 @@ void ValidatorManagerImpl::get_node_consensus_status(td::Promise<NodeConsensusSt
     status.validator_set_hash = val_set->get_validator_set_hash();
     status.validator_set_total_weight = val_set->get_total_weight();
     status.validator_set_count = static_cast<td::uint32>(val_set->export_vector().size());
-    auto membership = node_validator_membership(*val_set, temp_keys_, permanent_keys_);
+    auto membership = node_validator_membership(*val_set, temp_keys_, permanent_keys_, pq_custody_);
     status.has_local_validator_keys = membership.first;
     status.is_validator = membership.second;
   } else {
-    status.has_local_validator_keys = !temp_keys_.empty() || !permanent_keys_.empty();
+    status.has_local_validator_keys = !temp_keys_.empty() || !permanent_keys_.empty() || !pq_custody_.empty();
   }
   promise.set_result(std::move(status));
 }
@@ -3778,7 +3778,7 @@ void ValidatorManagerImpl::get_archive_slice(td::uint64 archive_id, td::uint64 o
 }
 
 bool ValidatorManagerImpl::is_validator() {
-  return temp_keys_.size() > 0 || permanent_keys_.size() > 0;
+  return temp_keys_.size() > 0 || permanent_keys_.size() > 0 || !pq_custody_.empty();
 }
 
 bool ValidatorManagerImpl::validating_masterchain() {
@@ -3788,12 +3788,14 @@ bool ValidatorManagerImpl::validating_masterchain() {
 }
 
 PublicKeyHash ValidatorManagerImpl::get_validator(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set) {
-  for (auto &key : temp_keys_) {
-    if (val_set->is_validator(tos::ValidatorId{key.bits256_value()})) {
-      return key;
-    }
+  // Membership is decided by what this node custodies for a validator identity, not by
+  // which Ed25519 keys happen to be installed. A node holding network or operator keys
+  // and nothing else is not a consensus validator.
+  auto member = local_consensus_member(*val_set, temp_keys_, permanent_keys_, pq_custody_);
+  if (!member) {
+    return PublicKeyHash::zero();
   }
-  return PublicKeyHash::zero();
+  return PublicKeyHash{member->value};
 }
 
 bool ValidatorManagerImpl::is_shard_collator(ShardIdFull shard) {

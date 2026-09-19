@@ -319,10 +319,12 @@ int main() {
     assert(seen >= 13);
   }
 
-  {  // Five different 32-byte values meet on one validator, and substituting any of them
-     // for another is the mistake this whole phase is about. They are asserted to be
-     // pairwise different, because a test written where two of them coincide would keep
-     // passing after exactly that substitution.
+  {  // Several 32-byte values meet on one validator, and substituting one for another is
+     // the mistake this whole phase is about. The ones that are required to differ are
+     // deliberately distinct here, because a test written where two of them happened to
+     // coincide would keep passing after exactly that substitution. Note that a
+     // classical validator's membership identity and key identity are the same value by
+     // design; only a post-quantum one separates them.
     auto classical = tos::ValidatorDescr{tos::Ed25519_PublicKey{fill(0x11)}, 5, fill(0xc0)};
     block::ValidatorSet classical_set{1, tos::ShardIdFull{tos::masterchainId}, {classical}};
     const auto* c = classical_set.get_validator(

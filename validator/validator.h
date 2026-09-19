@@ -347,6 +347,12 @@ class ValidatorManagerInterface : public td::actor::Actor {
   virtual void install_callback(std::unique_ptr<Callback> new_callback, td::Promise<td::Unit> promise) = 0;
   virtual void add_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
   virtual void add_temp_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
+  // Post-quantum consensus custody: which validator identity this node holds a
+  // consensus key for, and which key. Consensus membership follows this, not the
+  // Ed25519 keys above, which serve network and operator duties only.
+  virtual void add_pq_consensus_key(tos::ValidatorId validator_id, tos::ConsensusKeyId key_id,
+                                    td::Promise<td::Unit> promise) = 0;
+  virtual void del_pq_consensus_key(tos::ValidatorId validator_id, td::Promise<td::Unit> promise) = 0;
   virtual void del_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
   virtual void del_temp_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
 

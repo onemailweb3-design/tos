@@ -372,6 +372,19 @@ class ValidatorManagerImpl : public ValidatorManager {
     temp_keys_.erase(key);
     promise.set_value(td::Unit());
   }
+  // Declaring that this node holds the consensus key for a validator identity. This is
+  // what makes it that validator; the Ed25519 setters above cannot. The key identity is
+  // recorded so membership lapses on its own once the set records a different one,
+  // rather than a node continuing to act for a validator that has rotated away from it.
+  void add_pq_consensus_key(tos::ValidatorId validator_id, tos::ConsensusKeyId key_id,
+                            td::Promise<td::Unit> promise) override {
+    pq_custody_[validator_id] = key_id;
+    promise.set_value(td::Unit());
+  }
+  void del_pq_consensus_key(tos::ValidatorId validator_id, td::Promise<td::Unit> promise) override {
+    pq_custody_.erase(validator_id);
+    promise.set_value(td::Unit());
+  }
 
   void validate_block_is_next_proof(BlockIdExt prev_block_id, BlockIdExt next_block_id, td::BufferSlice proof,
                                     td::Promise<td::Unit> promise) override;
@@ -751,6 +764,10 @@ class ValidatorManagerImpl : public ValidatorManager {
  private:
   std::set<PublicKeyHash> permanent_keys_;
   std::set<PublicKeyHash> temp_keys_;
+  // Which post-quantum consensus keys this node actually holds, by the validator
+  // identity each belongs to. Consensus membership is decided from this; the Ed25519
+  // sets above are for network and operator duties and cannot confer it.
+  PqConsensusCustody pq_custody_;
 
  private:
   td::Ref<ValidatorManagerOptions> opts_;
