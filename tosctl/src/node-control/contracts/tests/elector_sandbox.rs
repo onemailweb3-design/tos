@@ -804,7 +804,7 @@ const ERROR_BAD_VOTE_SIGNATURE: i32 = 34;
 
 /// A set elected by this test, rotated into place, so the current validators are keys the
 /// test holds and can sign with.
-fn elect_install_and_rotate() -> (Chain, Vec<Validator>) {
+fn elect_install_and_rotate() -> (Chain, Vec<Validator>, u32) {
     let (mut chain, election, validators) = elect_four();
     let closes = election - chain.elect_end_before;
     chain.blockchain.set_now(closes);
@@ -833,7 +833,7 @@ fn elect_install_and_rotate() -> (Chain, Vec<Validator>) {
         .blockchain
         .set_config(configuration_from_contract(&chain))
         .expect("the chain adopts the rotated set");
-    (chain, validators)
+    (chain, validators, election)
 }
 
 /// `cfg_proposal#f3 param_id:int32 param_value:(Maybe ^Cell) if_hash_equal:(Maybe uint256)`
@@ -924,7 +924,7 @@ fn propose(chain: &mut Chain, param_id: i32, value: u32) -> [u8; 32] {
 
 #[test]
 fn a_validator_votes_for_a_proposal_with_the_key_in_the_current_set() {
-    let (mut chain, validators) = elect_install_and_rotate();
+    let (mut chain, validators, _election) = elect_install_and_rotate();
     let proposal = propose(&mut chain, 42, 0xabcd);
 
     let voter = &validators[0];
@@ -949,7 +949,7 @@ fn a_validator_votes_for_a_proposal_with_the_key_in_the_current_set() {
 
 #[test]
 fn a_vote_signed_by_a_key_that_is_not_at_that_index_is_refused() {
-    let (mut chain, validators) = elect_install_and_rotate();
+    let (mut chain, validators, _election) = elect_install_and_rotate();
     let proposal = propose(&mut chain, 42, 0xabcd);
 
     let voter = &validators[0];
@@ -1002,7 +1002,7 @@ fn config_seqno(chain: &Chain) -> u64 {
 /// conversion and is recorded here as it stands rather than as it is remembered.
 #[test]
 fn a_validator_can_still_vote_through_an_external_message() {
-    let (mut chain, validators) = elect_install_and_rotate();
+    let (mut chain, validators, _election) = elect_install_and_rotate();
     let proposal = propose(&mut chain, 43, 0x1234);
 
     let voter = &validators[2];
@@ -1080,7 +1080,7 @@ fn install_admin_key(chain: &mut Chain, public_key: &[u8; 32]) {
 
 #[test]
 fn the_administrator_key_alone_can_change_a_configuration_parameter() {
-    let (mut chain, _validators) = elect_install_and_rotate();
+    let (mut chain, _validators, _election) = elect_install_and_rotate();
     let admin = ed25519_dalek::SigningKey::from_bytes(&[0x5a; 32]);
     install_admin_key(&mut chain, &admin.verifying_key().to_bytes());
 
@@ -1129,4 +1129,258 @@ fn the_administrator_key_alone_can_change_a_configuration_parameter() {
         parameter_present(&configuration_from_contract(&chain), parameter as u32),
         "one key changed nothing, or the path this test exists to record has already gone"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Complaints
+//
+// A validator of the current set votes, by signature, to punish a validator of a past
+// one. The same authority as a configuration vote, in the other contract, and the same
+// conversion ahead of it.
+// ---------------------------------------------------------------------------
+
+const NEW_COMPLAINT: u32 = 0x52674370;
+const COMPLAINT_VOTE: u32 = 0x56744370;
+const COMPLAINT_VOTE_SIGN_TAG: u32 = 0x56744350;
+const COMPLAINT_ACCEPTED: u32 = 0xf2676350;
+/// `send_message_back(.., res + 0xd6745240, ..)`: 1 is a vote counted and not yet
+/// decisive, 2 is the vote that carries the complaint and applies the fine.
+const COMPLAINT_VOTE_COUNTED: u32 = 0xd6745240 + 1;
+const COMPLAINT_CARRIED: u32 = 0xd6745240 + 2;
+
+/// `validator_complaint#bc validator_pubkey:uint256 description:^ComplaintDescr
+/// created_at:uint32 severity:uint8 reward_addr:uint256 paid:Tomis suggested_fine:Tomis
+/// suggested_fine_part:uint32`
+///
+/// The elector rewrites the reward address, the creation time and the amount paid before
+/// storing it, so the hash a vote refers to is not the hash of what was sent. The test
+/// reads that hash out of the contract's own storage rather than recomputing it.
+fn complaint_body(query_id: u64, election: u32, accused: &[u8; 32]) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut description = chain_block::BuilderData::new();
+    description.append_u32(0).expect("an empty description");
+
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(NEW_COMPLAINT).expect("operation");
+    body.append_u64(query_id).expect("query id");
+    body.append_u32(election).expect("the election complained about");
+    body.append_i8(0xbcu8 as i8).expect("complaint tag");
+    body.append_raw(accused, 256).expect("the accused validator");
+    body.checked_append_reference(description.into_cell().expect("description"))
+        .expect("description");
+    body.append_u32(0).expect("created at, rewritten by the contract");
+    body.append_u8(1).expect("severity");
+    body.append_raw(&[0u8; 32], 256).expect("reward address, rewritten by the contract");
+    body.append_bits(0, 4).expect("paid, rewritten by the contract");
+    // The fine has to exceed what the complaint costs to file, or the elector refuses it
+    // as not worth hearing, and it has to stay within the stake it would be taken from.
+    body.append_bits(8, 4).expect("the length of the suggested fine");
+    body.append_u64(500 * TOS).expect("suggested fine");
+    body.append_u32(0).expect("suggested fine part");
+    body.into_cell().expect("complaint body")
+}
+
+/// The hashes of the complaints the elector is holding for an election, which is how a
+/// vote names the one it is for.
+///
+/// `unfreeze_at:uint32 stake_held:uint32 vset_hash:uint256 frozen:HashmapE total:Tomis
+/// bonuses:Tomis complaints:HashmapE`, read in that order because the dictionary is at
+/// the end of it.
+fn complaint_hashes(chain: &Chain, election: u32) -> Vec<[u8; 32]> {
+    let past = past_elections(chain);
+    let key = chain_block::SliceData::load_builder(
+        chain_block::BuilderData::with_raw(election.to_be_bytes().to_vec(), 32).expect("key"),
+    )
+    .expect("key slice");
+    let mut record = past.get(key).expect("lookup").expect("a record for that election");
+    record.get_next_u32().expect("unfreeze time");
+    record.get_next_u32().expect("hold time");
+    record.get_next_bits(256).expect("the set this election produced");
+    next_dictionary(&mut record, 256);
+    for _ in 0..2 {
+        // An amount is a length in bytes followed by that many bytes, and a zero amount
+        // is a length of zero followed by nothing.
+        let bytes = record.get_next_int(4).expect("the length of an amount") as usize;
+        if bytes > 0 {
+            record.get_next_bits(bytes * 8).expect("an amount");
+        }
+    }
+    let complaints = next_dictionary(&mut record, 256);
+
+    let mut hashes = Vec::new();
+    chain_block::HashmapType::iterate_slices(&complaints, |key, _value| {
+        let bytes = key.get_bytestring(0);
+        hashes.push(bytes[..32].try_into().expect("a complaint hash is 32 bytes"));
+        Ok(true)
+    })
+    .expect("complaints");
+    hashes
+}
+
+/// What a past election still holds frozen for a validator, which is what a fine is taken
+/// from.
+fn frozen_stake(chain: &Chain, election: u32, validator: &[u8; 32]) -> u128 {
+    let past = past_elections(chain);
+    let key = chain_block::SliceData::load_builder(
+        chain_block::BuilderData::with_raw(election.to_be_bytes().to_vec(), 32).expect("key"),
+    )
+    .expect("key slice");
+    let mut record = past.get(key).expect("lookup").expect("a record for that election");
+    record.get_next_u32().expect("unfreeze time");
+    record.get_next_u32().expect("hold time");
+    record.get_next_bits(256).expect("the set this election produced");
+    let frozen = next_dictionary(&mut record, 256);
+    let entry = frozen
+        .get(
+            chain_block::SliceData::load_builder(
+                chain_block::BuilderData::with_raw(validator.to_vec(), 256).expect("key"),
+            )
+            .expect("key slice"),
+        )
+        .expect("lookup")
+        .expect("the validator is frozen in that election");
+    let mut entry = entry;
+    entry.get_next_bits(256).expect("controller");
+    entry.get_next_u64().expect("weight");
+    let bytes = entry.get_next_int(4).expect("the length of the stake") as usize;
+    if bytes == 0 {
+        return 0;
+    }
+    let mut stake: u128 = 0;
+    for byte in entry.get_next_bits(bytes * 8).expect("the stake") {
+        stake = (stake << 8) | byte as u128;
+    }
+    stake
+}
+
+#[test]
+fn a_validator_votes_to_punish_a_validator_of_a_past_election() {
+    let (mut chain, validators, election) = elect_install_and_rotate();
+    let accused = &validators[3];
+    let complainant =
+        chain.blockchain.treasury("complainant", 1_000 * TOS).expect("a funded account");
+
+    let result = chain
+        .blockchain
+        .send_message(complainant.build_message(
+            &chain.elector,
+            300 * TOS,
+            true,
+            Some(complaint_body(1, election, &accused.public_key)),
+        ))
+        .expect("the complaint is delivered");
+    let tags = replies(&result);
+    assert!(tags.contains(&COMPLAINT_ACCEPTED), "the elector refused the complaint: {tags:02x?}");
+
+    let hashes = complaint_hashes(&chain, election);
+    assert_eq!(hashes.len(), 1, "exactly one complaint should be registered");
+    let complaint = hashes[0];
+
+    let before = frozen_stake(&chain, election, &accused.public_key);
+    assert_ne!(before, 0, "the accused should have a frozen stake to be fined from");
+
+    // One vote is counted and decides nothing; the complaint carries once enough weight
+    // has voted for it. Both answers are checked, because a contract that accepted the
+    // first vote as decisive would be a very different contract.
+    let sender = chain.blockchain.treasury("complaint-relay", 100 * TOS).expect("an account");
+    let mut carried = false;
+    for (round, voter) in validators.iter().take(3).enumerate() {
+        let idx = index_of(&chain, &voter.public_key);
+        let mut preimage = Vec::with_capacity(42);
+        preimage.extend_from_slice(&COMPLAINT_VOTE_SIGN_TAG.to_be_bytes());
+        preimage.extend_from_slice(&idx.to_be_bytes());
+        preimage.extend_from_slice(&election.to_be_bytes());
+        preimage.extend_from_slice(&complaint);
+        let signature: [u8; 64] = ed25519_dalek::Signer::sign(&voter.key, &preimage).to_bytes();
+
+        use chain_block::IBitstring;
+        let mut body = chain_block::BuilderData::new();
+        body.append_u32(COMPLAINT_VOTE).expect("operation");
+        body.append_u64(10 + round as u64).expect("query id");
+        body.append_raw(&signature, 512).expect("signature");
+        body.append_raw(&preimage, 42 * 8).expect("the signed fields");
+
+        let result = chain
+            .blockchain
+            .send_message(sender.build_message(
+                &chain.elector,
+                10 * TOS,
+                true,
+                Some(body.into_cell().expect("vote body")),
+            ))
+            .expect("the vote is delivered");
+        result.expect_success();
+        let tags = replies(&result);
+        if round == 0 {
+            assert!(
+                tags.contains(&COMPLAINT_VOTE_COUNTED),
+                "the first vote was not counted, or decided on its own: {tags:02x?}"
+            );
+            assert_eq!(
+                frozen_stake(&chain, election, &accused.public_key),
+                before,
+                "a fine was taken before the complaint carried"
+            );
+        }
+        carried |= tags.contains(&COMPLAINT_CARRIED);
+    }
+
+    assert!(carried, "three of four validators voted and the complaint did not carry");
+    let after = frozen_stake(&chain, election, &accused.public_key);
+    assert_eq!(
+        before - after,
+        (500 * TOS) as u128,
+        "the fine the complaint asked for was not taken from the frozen stake"
+    );
+}
+
+#[test]
+fn a_complaint_vote_signed_by_another_validator_is_refused() {
+    let (mut chain, validators, election) = elect_install_and_rotate();
+    let accused = &validators[3];
+    let complainant =
+        chain.blockchain.treasury("complainant-b", 1_000 * TOS).expect("a funded account");
+    let result = chain
+        .blockchain
+        .send_message(complainant.build_message(
+            &chain.elector,
+            300 * TOS,
+            true,
+            Some(complaint_body(1, election, &accused.public_key)),
+        ))
+        .expect("the complaint is delivered");
+    assert!(replies(&result).contains(&COMPLAINT_ACCEPTED), "the complaint was refused");
+    let complaint = complaint_hashes(&chain, election)[0];
+
+    let voter = &validators[0];
+    let other = &validators[1];
+    let idx = index_of(&chain, &voter.public_key);
+    assert_ne!(idx, index_of(&chain, &other.public_key), "the two validators share an index");
+    let mut preimage = Vec::with_capacity(42);
+    preimage.extend_from_slice(&COMPLAINT_VOTE_SIGN_TAG.to_be_bytes());
+    preimage.extend_from_slice(&idx.to_be_bytes());
+    preimage.extend_from_slice(&election.to_be_bytes());
+    preimage.extend_from_slice(&complaint);
+    // Valid, over the right complaint and the right index, by the wrong validator.
+    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&other.key, &preimage).to_bytes();
+
+    use chain_block::IBitstring;
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(COMPLAINT_VOTE).expect("operation");
+    body.append_u64(20).expect("query id");
+    body.append_raw(&signature, 512).expect("signature");
+    body.append_raw(&preimage, 42 * 8).expect("the signed fields");
+
+    let sender = chain.blockchain.treasury("complaint-relay-b", 100 * TOS).expect("an account");
+    chain
+        .blockchain
+        .send_message(sender.build_message(
+            &chain.elector,
+            10 * TOS,
+            true,
+            Some(body.into_cell().expect("vote body")),
+        ))
+        .expect("the vote is delivered")
+        .expect_aborted()
+        .expect_exit_code(ERROR_BAD_VOTE_SIGNATURE);
 }
