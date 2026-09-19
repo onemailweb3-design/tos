@@ -1,0 +1,112 @@
+[
+  {
+    "guard": "controller-network",
+    "killed": true,
+    "test": "validator_controller_sandbox::every_field_of_an_authorisation"
+  },
+  {
+    "guard": "controller-epoch",
+    "killed": true,
+    "test": "validator_controller_sandbox::every_field_of_an_authorisation"
+  },
+  {
+    "guard": "controller-nonce",
+    "killed": true,
+    "test": "validator_controller_sandbox::an_authorised_send_happens_once"
+  },
+  {
+    "guard": "controller-expiry-past",
+    "killed": true,
+    "test": "validator_controller_sandbox::every_field_of_an_authorisation"
+  },
+  {
+    "guard": "controller-expiry-window",
+    "killed": true,
+    "test": "validator_controller_sandbox::every_field_of_an_authorisation"
+  },
+  {
+    "guard": "controller-kind",
+    "killed": true,
+    "test": "validator_controller_sandbox::every_field_of_an_authorisation"
+  },
+  {
+    "guard": "controller-stray-cosignature",
+    "killed": true,
+    "test": "validator_controller_sandbox::every_field_of_an_authorisation"
+  },
+  {
+    "guard": "controller-destroy-mode",
+    "killed": true,
+    "test": "validator_controller_sandbox::every_field_of_an_authorisation"
+  },
+  {
+    "guard": "controller-root-signature",
+    "killed": true,
+    "test": "validator_controller_sandbox::every_field_of_an_authorisation"
+  },
+  {
+    "guard": "controller-successor-proof",
+    "killed": true,
+    "test": "validator_controller_sandbox::a_root_rotation_needs_both"
+  },
+  {
+    "guard": "proof-shape-bits",
+    "killed": true,
+    "test": "controller_admission_sandbox::each_refusal_is_reachable"
+  },
+  {
+    "guard": "proof-shape-refs",
+    "killed": true,
+    "test": "controller_admission_sandbox::each_refusal_is_reachable"
+  },
+  {
+    "guard": "proof-shape-tag",
+    "killed": true,
+    "test": "controller_admission_sandbox::each_refusal_is_reachable"
+  },
+  {
+    "guard": "proof-pruned-code",
+    "killed": true,
+    "test": "controller_admission_sandbox::each_refusal_is_reachable"
+  },
+  {
+    "guard": "proof-address-binding",
+    "killed": true,
+    "test": "elector_sandbox::a_stake_carrying_another_accounts_proof"
+  },
+  {
+    "guard": "policy-absent-fails-closed",
+    "killed": true,
+    "test": "elector_sandbox::a_stake_from_an_unadmitted_controller"
+  },
+  {
+    "guard": "policy-lookup",
+    "killed": true,
+    "test": "elector_sandbox::a_stake_from_an_unadmitted_controller"
+  },
+  {
+    "guard": "elector-proof-required",
+    "killed": true,
+    "test": "elector_sandbox::a_stake_carrying_another_accounts_proof"
+  },
+  {
+    "guard": "elector-retirement",
+    "killed": true,
+    "test": "elector_sandbox::retiring_a_controller_code"
+  },
+  {
+    "guard": "elector-effective-floor",
+    "killed": true,
+    "test": "elector_sandbox::a_retired_profile_stops_raising"
+  },
+  {
+    "guard": "config-ceiling",
+    "killed": true,
+    "test": "elector_sandbox::the_controller_policy_cannot_grow"
+  },
+  {
+    "guard": "config-ceiling-refusal",
+    "killed": true,
+    "test": "elector_sandbox::the_controller_policy_cannot_grow"
+  }
+]

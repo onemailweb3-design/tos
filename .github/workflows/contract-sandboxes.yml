@@ -99,5 +99,11 @@ jobs:
         # hash assertions and nothing else.
         run: cargo test --manifest-path tosctl/src/Cargo.toml -p contracts --locked --no-fail-fast
 
+      # A guard nothing reaches is decoration. This removes each rule the validator
+      # controller work added and requires a test to go red for it; a mutation that
+      # survives fails the job.
+      - name: Every controller rule is held by a test
+        run: python3 test/pq-native/n3-3a-mutations.py --out mutations.json
+
       - name: Frozen BOCs match their sources
         run: git diff --exit-code

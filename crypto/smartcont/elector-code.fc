@@ -406,8 +406,10 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     if (cell_null?(controller_proof)) {
       return return_stake(s_addr, query_id, 8);
     }
-    (int proved_code, int proved) = pq::controller_code_hash?(controller_proof, validator_id);
-    ifnot (proved) {
+    (int proved_code, int proof_status) = pq::controller_code_hash?(controller_proof, validator_id);
+    if (proof_status != pq::proof::ok) {
+      ;; The sender is told its proof did not establish it; which rule refused is a
+      ;; distinction the library keeps for the tests that hold each of them.
       return return_stake(s_addr, query_id, 9);
     }
     ifnot (pq::controller_admitted?(admitted_codes, proved_code)) {

@@ -111,6 +111,11 @@ _ get_vote_config(int critical?) inline {
 const int config::validator_controller_policy = 47;
 const int config::max_controller_codes = 8;
 
+;; Installing a parameter goes through here, from the administrator action and from an
+;; accepted proposal alike, so the rules about what may be installed live once. A rule
+;; each path carries its own copy of is a rule one of them will eventually be missing.
+(cell, int) install_param(cell cfg_dict, int param_id, cell param_val) inline_ref;
+
 int valid_controller_policy?(cell value) inline_ref {
   if (cell_null?(value)) {
     ;; Removing the parameter is allowed by this check; admission then fails closed,
@@ -143,16 +148,24 @@ int valid_controller_policy?(cell value) inline_ref {
   return true;
 }
 
+(cell, int) install_param(cell cfg_dict, int param_id, cell param_val) inline_ref {
+  if (param_id == config::validator_controller_policy) {
+    ifnot (valid_controller_policy?(param_val)) {
+      return (cfg_dict, false);
+    }
+  }
+  cfg_dict~idict_set_ref(32, param_id, param_val);
+  return (cfg_dict, true);
+}
+
 _ perform_action(cfg_dict, public_key, action, cs) inline_ref {
   if (action == 0x43665021) {
     ;; change one configuration parameter
     var param_index = cs~load_int(32);
     var param_value = cs~load_ref();
     cs.end_parse();
-    if (param_index == config::validator_controller_policy) {
-      throw_unless(45, valid_controller_policy?(param_value));
-    }
-    cfg_dict~idict_set_ref(32, param_index, param_value);
+    (cfg_dict, int installed) = install_param(cfg_dict, param_index, param_value);
+    throw_unless(45, installed);
     return (cfg_dict, public_key);
   } elseif (action == 0x4e436f64) {
     ;; change configuration smart contract code
@@ -241,15 +254,13 @@ _ perform_action(cfg_dict, public_key, action, cs) inline_ref {
     ;; trying to set a critical parameter after a non-critical voting
     return (cfg_dict, 0, null());
   }
-  if (param_id == config::validator_controller_policy) {
-    ifnot (valid_controller_policy?(param_val)) {
-      ;; A policy past its ceiling is refused the way every other rejected proposal is:
-      ;; the configuration is returned unchanged.
-      return (cfg_dict, 0, null());
-    }
-  }
   ;; CHANGE ONE CONFIGURATION PARAMETER (!)
-  cfg_dict~idict_set_ref(32, param_id, param_val);
+  (cfg_dict, int installed) = install_param(cfg_dict, param_id, param_val);
+  ifnot (installed) {
+    ;; A value the rules refuse is returned unchanged, the way every other rejected
+    ;; proposal is.
+    return (cfg_dict, 0, null());
+  }
   return (cfg_dict, param_id, param_val);
 }
 

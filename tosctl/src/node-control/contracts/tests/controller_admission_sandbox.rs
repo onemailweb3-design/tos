@@ -28,40 +28,34 @@ const ERROR_ADDRESS_MISMATCH: i32 = 81;
 const ERROR_CODE_NOT_ADMITTED: i32 = 82;
 const ERROR_POLICY_ABSENT: i32 = 83;
 
+fn repo_root() -> std::path::PathBuf {
+    std::env::var("TOS_ROOT").map(std::path::PathBuf::from).unwrap_or_else(|_| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(4)
+            .expect("repository root")
+            .to_path_buf()
+    })
+}
+
 fn probe_code() -> Cell {
     let probe = std::env::temp_dir().join("tos_controller_admission_probe.fc");
     std::fs::write(
         &probe,
         r#"
-(slice, int) parse_maybe_special(cell c) asm "XCTOS";
-int level(cell c) asm "CLEVEL";
-int hash_level0(cell c) asm "0 CHASHI";
-
 const int ctl::error::proof_shape = 80;
 const int ctl::error::address_mismatch = 81;
 const int ctl::error::code_not_admitted = 82;
 const int ctl::error::policy_absent = 83;
 
-;; The four steps the design freezes, in the order it freezes them.
+;; The four steps the design freezes, in the order it freezes them, taken from the
+;; library the elector uses rather than from a copy of it.
 int probe_admit(cell proof, int expected_address, cell policy) method_id {
-  (slice cs, int special) = parse_maybe_special(proof);
-  throw_if(ctl::error::proof_shape, special);
-  throw_if(ctl::error::proof_shape, cs~load_uint(1));      ;; split_depth must be absent
-  throw_if(ctl::error::proof_shape, cs~load_uint(1));      ;; special must be absent
-  throw_unless(ctl::error::proof_shape, cs~load_uint(1));  ;; code must be present
-  cell code = cs~load_ref();
-  throw_unless(ctl::error::proof_shape, cs~load_uint(1));  ;; data must be present
-  cell data = cs~load_ref();
-  throw_if(ctl::error::proof_shape, cs~load_uint(1));      ;; library must be empty
-  cs.end_parse();
-  ;; Both children stand in for the real ones, so both must be pruned branches.
-  throw_unless(ctl::error::proof_shape, level(code) == 1);
-  throw_unless(ctl::error::proof_shape, level(data) == 1);
-  throw_unless(ctl::error::address_mismatch, hash_level0(proof) == expected_address);
-  int code_hash = hash_level0(code);
+  (int code_hash, int status) = pq::controller_code_hash?(proof, expected_address);
+  throw_if(ctl::error::proof_shape, status == pq::proof::bad_shape);
+  throw_if(ctl::error::address_mismatch, status == pq::proof::bad_address);
   throw_if(ctl::error::policy_absent, cell_null?(policy));
-  (_, int admitted) = policy.udict_get?(256, code_hash);
-  throw_unless(ctl::error::code_not_admitted, admitted);
+  throw_unless(ctl::error::code_not_admitted, pq::controller_admitted?(policy, code_hash));
   return code_hash;
 }
 () recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
@@ -69,7 +63,12 @@ int probe_admit(cell proof, int expected_address, cell policy) method_id {
 "#,
     )
     .expect("probe source");
-    compile_func_with_stdlib(&[probe]).expect("the probe compiles")
+    compile_func_with_stdlib(&[
+        repo_root().join("crypto/smartcont/pq-bytes.fc"),
+        repo_root().join("crypto/smartcont/pq-validator.fc"),
+        probe,
+    ])
+    .expect("the probe compiles")
 }
 
 fn deploy(chain: &mut Blockchain) -> MsgAddressInt {
@@ -353,6 +352,31 @@ fn each_refusal_is_reachable_and_cheap() {
         policy(&admitted),
     );
     assert_eq!(exit, ERROR_PROOF_SHAPE, "a proof carrying a whole subtree was accepted");
+
+    // Each rule about the proof's shape needs an input only it refuses, or removing it
+    // changes no verdict and the rule is held by its neighbours rather than by a test.
+    let branches = |bits: usize, value: u8, refs: usize| -> Cell {
+        let mut root = chain_block::BuilderData::new();
+        root.append_bits(value as usize, bits).expect("the shape bits");
+        for index in 0..refs {
+            let child = state_init.reference(index.min(1)).expect("a child");
+            root.checked_append_reference(pruned_branch(&child.repr_hash(), child.repr_depth()))
+                .expect("a pruned child");
+        }
+        root.into_cell().expect("a shaped root")
+    };
+
+    // Two references and the right tag, but a bit too many: only the bit count refuses it.
+    let (exit, _) = admit(&chain, &probe, branches(6, 0b001100, 2), &address, policy(&admitted));
+    assert_eq!(exit, ERROR_PROOF_SHAPE, "a root with the wrong bit count was accepted");
+
+    // The right bits, one reference short: only the reference count refuses it.
+    let (exit, _) = admit(&chain, &probe, branches(5, 0b00110, 1), &address, policy(&admitted));
+    assert_eq!(exit, ERROR_PROOF_SHAPE, "a root missing a child was accepted");
+
+    // The right size, the wrong tag: a state init that says it carries no code.
+    let (exit, _) = admit(&chain, &probe, branches(5, 0b00000, 2), &address, policy(&admitted));
+    assert_eq!(exit, ERROR_PROOF_SHAPE, "a root claiming no code was accepted");
 
     // A root that is not a state init shape at all.
     let mut nonsense = chain_block::BuilderData::new();

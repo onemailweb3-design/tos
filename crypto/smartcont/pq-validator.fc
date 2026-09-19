@@ -43,36 +43,43 @@ int pq::cell_level(cell c) asm "CLEVEL";
 ;; present, library empty. Five bits and two references, and nothing else.
 const int pq::state_init_shape = 0x06;  ;; 0b00110
 
-;; Returns the controller code hash the proof establishes, and whether it established
-;; one. Never throws: a malformed proof is a stake to refuse, not a transaction to bounce.
+;; What a proof failed at, so a caller can say which rule refused it. The elector refuses
+;; the stake either way, but a rule nobody can tell apart from another is a rule nobody
+;; can test.
+const int pq::proof::ok = 0;
+const int pq::proof::bad_shape = 1;
+const int pq::proof::bad_address = 2;
+
+;; Returns the controller code hash the proof establishes, and what it failed at. Never
+;; throws: a malformed proof is a stake to refuse, not a transaction to bounce.
 (int, int) pq::controller_code_hash?(cell proof, int expected_address) {
   (slice cs, int special) = pq::parse_maybe_special(proof);
   if (special) {
-    return (0, false);
+    return (0, pq::proof::bad_shape);
   }
   if (cs.slice_bits() != 5) {
-    return (0, false);
+    return (0, pq::proof::bad_shape);
   }
   if (cs.slice_refs() != 2) {
-    return (0, false);
+    return (0, pq::proof::bad_shape);
   }
   if (cs~load_uint(5) != pq::state_init_shape) {
-    return (0, false);
+    return (0, pq::proof::bad_shape);
   }
   cell code = cs~load_ref();
   cell data = cs~load_ref();
   ;; Both children stand in for the real ones, so both must be pruned branches. A child
   ;; carried whole would let a proof be built for an account nobody deployed.
   if (pq::cell_level(code) != 1) {
-    return (0, false);
+    return (0, pq::proof::bad_shape);
   }
   if (pq::cell_level(data) != 1) {
-    return (0, false);
+    return (0, pq::proof::bad_shape);
   }
   if (pq::hash_level0(proof) != expected_address) {
-    return (0, false);
+    return (0, pq::proof::bad_address);
   }
-  return (pq::hash_level0(code), true);
+  return (pq::hash_level0(code), pq::proof::ok);
 }
 
 ;; The admitted controller codes, and whether the configuration states any. An absent
