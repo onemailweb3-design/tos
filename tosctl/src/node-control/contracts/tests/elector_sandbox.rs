@@ -1422,8 +1422,12 @@ fn a_complaint_vote_signed_by_another_validator_is_refused() {
 const PQ_STAKE_OP: u32 = 0x5051_7374;
 const PQ_STAKE_SIGN_TAG: u32 = 0x5051_5354;
 const ELECTION_CONTEXT: &[u8] = b"TOS-VALIDATOR-ELECTION-v1";
+/// A different authorisation's context, used to show a signature cannot cross between them.
+const CONFIG_VOTE_CONTEXT: &[u8] = b"TOS-VALIDATOR-CONFIG-VOTE-v1";
 const MLDSA44_PUBLIC_KEY_BYTES: usize = 1312;
 /// `return_stake` reason 7: no transport address was stated.
+/// No election is taking stakes: none is open, it is finished, or it has closed.
+const REASON_NO_ELECTION: u32 = 0;
 const REASON_BELOW_MINIMUM: u32 = 5;
 const REASON_FACTOR_BELOW_ONE: u32 = 6;
 const REASON_NO_ADNL: u32 = 7;
@@ -1482,12 +1486,16 @@ impl PqValidator {
     }
 
     fn sign(&self, message: &[u8]) -> Vec<u8> {
+        self.sign_under(message, ELECTION_CONTEXT)
+    }
+
+    fn sign_under(&self, message: &[u8], context: &[u8]) -> Vec<u8> {
         let signature = hex::decode(
             &run_key_tool(&[
                 "sign",
                 self.key_file.to_str().expect("path"),
                 &hex::encode(message),
-                &hex::encode(ELECTION_CONTEXT),
+                &hex::encode(context),
             ])[0],
         )
         .expect("hex");
@@ -2143,6 +2151,235 @@ fn a_stake_below_the_minimum_is_returned() {
         reply(&result),
         (STAKE_RETURNED, REASON_BELOW_MINIMUM),
         "a stake under the minimum was registered"
+    );
+    assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered anyway");
+}
+
+/// The window between an election's closing time and the tick that conducts it.
+///
+/// Nothing runs the elector on a schedule of its own: it is ticked, and the tick that
+/// finds `now() >= elect_close` is what conducts the election and marks it finished.
+/// Admitting a stake, or a rotation, for as long as that tick has not landed would make
+/// membership depend on scheduling rather than on the election's own boundary.
+/// The weight factor a member registered with, as its own record holds it.
+fn pq_member_max_factor(chain: &Chain, controller: &tos_sandbox::Treasury) -> u32 {
+    let (members, _) = pq_book(chain);
+    let mut record = members
+        .get(controller.address().address().clone())
+        .expect("lookup")
+        .expect("the controller is registered");
+    let bytes = record.get_next_int(4).expect("a stake length") as usize;
+    if bytes > 0 {
+        record.get_next_bits(bytes * 8).expect("a stake");
+    }
+    record.get_next_u32().expect("registered at");
+    record.get_next_u32().expect("max factor")
+}
+
+/// A stake states the weight factor it wants, and that statement is both what the
+/// signature covers and what the book records.
+///
+/// Signing a field is not the same as committing the request's value of it: a contract
+/// that built its preimage from a constant would still refuse every signature made over a
+/// different one, and every negative case would pass. Only a request carrying a value
+/// other than the default can tell the two apart.
+#[test]
+fn a_stake_registers_the_weight_factor_it_asked_for() {
+    let (mut chain, treasury, election) = open_election("pq-factor-kept", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(19);
+    let asked = 0x2_5000;
+
+    let result = pq_stake_with_max_factor(
+        &mut chain,
+        &treasury,
+        &treasury,
+        &validator,
+        election,
+        1,
+        11_000 * TOS,
+        asked,
+    );
+    assert_eq!(
+        reply(&result),
+        (STAKE_ACCEPTED, 0),
+        "a stake asking for a weight factor other than the default was refused"
+    );
+    assert_eq!(
+        pq_member_max_factor(&chain, &treasury),
+        asked,
+        "the book recorded a weight factor the request did not ask for"
+    );
+}
+
+/// The fields the preimage commits to, so that what is signed can be made to differ from
+/// what is sent while everything else stays valid.
+#[derive(Clone)]
+struct SignedFields {
+    global_id: i32,
+    stake_at: u32,
+    max_factor: u32,
+    adnl: [u8; 32],
+    key_id: chain_block::UInt256,
+}
+
+/// Send a well-formed stake whose signature was made over `signed` and under `context`.
+///
+/// The request itself is always the valid one, so the contract reaches the verification
+/// with nothing else to object to, and each case isolates one field of the preimage.
+fn pq_stake_signed_over(
+    chain: &mut Chain,
+    from: &tos_sandbox::Treasury,
+    validator: &PqValidator,
+    election: u32,
+    signed: &SignedFields,
+    context: &[u8],
+) -> tos_sandbox::SendResult {
+    let validator_id =
+        chain_block::UInt256::from_slice(&from.address().address().get_bytestring(0));
+    let preimage = pq_stake_preimage(
+        signed.global_id,
+        signed.stake_at,
+        signed.max_factor,
+        &validator_id,
+        &signed.key_id,
+        &signed.adnl,
+    );
+    let signature = validator.sign_under(&preimage, context);
+    chain
+        .blockchain
+        .send_message(from.build_message(
+            &chain.elector,
+            11_000 * TOS,
+            true,
+            Some(pq_stake_body(1, validator, election, 0x10000, &signature)),
+        ))
+        .expect("the stake is delivered")
+}
+
+/// Each field of the preimage, changed on its own, must cost the signature its validity.
+///
+/// The request is valid in every case; only what was signed differs. A field the contract
+/// reads from the request but leaves out of the bytes it verifies would be a field an
+/// authorised signature does not actually authorise, and this is the test that says which
+/// fields those bytes cover.
+#[test]
+fn every_signed_field_of_a_stake_is_covered_by_its_signature() {
+    let (mut chain, treasury, election) = open_election("pq-binding", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(17);
+    let other = PqValidator::new(18);
+
+    let global_id = match chain.blockchain.config_params().config(19).expect("parameter 19") {
+        Some(chain_block::ConfigParamEnum::ConfigParam19(id)) => id as i32,
+        _ => panic!("the chain states no network id"),
+    };
+    let honest = SignedFields {
+        global_id,
+        stake_at: election,
+        max_factor: 0x10000,
+        adnl: validator.adnl,
+        key_id: validator.key_id(),
+    };
+
+    // The fixture has to be able to succeed, or every case below would pass for nothing.
+    let accepted =
+        pq_stake_signed_over(&mut chain, &treasury, &validator, election, &honest, ELECTION_CONTEXT);
+    assert_eq!(reply(&accepted), (STAKE_ACCEPTED, 0), "the honest fixture was refused");
+
+    let cases: Vec<(&str, SignedFields, &[u8])> = vec![
+        ("another network", SignedFields { global_id: global_id ^ 1, ..honest.clone() },
+            ELECTION_CONTEXT),
+        ("another election", SignedFields { stake_at: election - 1, ..honest.clone() },
+            ELECTION_CONTEXT),
+        ("another weight factor", SignedFields { max_factor: 0x20000, ..honest.clone() },
+            ELECTION_CONTEXT),
+        ("another transport address", SignedFields { adnl: [0x5e; 32], ..honest.clone() },
+            ELECTION_CONTEXT),
+        ("another key", SignedFields { key_id: other.key_id(), ..honest.clone() },
+            ELECTION_CONTEXT),
+        ("another purpose", honest.clone(), CONFIG_VOTE_CONTEXT),
+    ];
+
+    for (what, signed, context) in cases {
+        let result =
+            pq_stake_signed_over(&mut chain, &treasury, &validator, election, &signed, context);
+        assert_eq!(
+            reply(&result),
+            (STAKE_RETURNED, REASON_BAD_SIGNATURE),
+            "a stake signed for {what} was accepted, so that field is not covered"
+        );
+    }
+}
+
+/// A rotation that is refused leaves the controller exactly as it was.
+///
+/// The refusal happens between reading the book and writing it, so the question is
+/// whether anything was released on the way to it: a controller left holding neither its
+/// old key nor the new one would be a validator nobody can reach, and a key released
+/// without being replaced is one another controller may take.
+#[test]
+fn a_refused_rotation_leaves_both_controllers_as_they_were() {
+    let (mut chain, mine, election) = open_election("pq-atomic", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let theirs = chain.blockchain.treasury("pq-atomic-other", 60_000 * TOS).expect("an account");
+    let held = PqValidator::new(20);
+    let wanted = PqValidator::new(21);
+
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &mine, &held, election, 1, 11_000 * TOS)),
+        (STAKE_ACCEPTED, 0)
+    );
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &theirs, &wanted, election, 2, 11_000 * TOS)),
+        (STAKE_ACCEPTED, 0)
+    );
+    let total_before = declared_total_stake(&chain);
+
+    // A rotation to a key the other controller holds. It cannot be granted.
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &mine, &wanted, election, 3, 11_000 * TOS)),
+        (STAKE_RETURNED, REASON_ANOTHER_ADDRESS),
+        "a controller rotated onto a key another one holds"
+    );
+
+    let mine_id = chain_block::UInt256::from_slice(&mine.address().address().get_bytestring(0));
+    let theirs_id = chain_block::UInt256::from_slice(&theirs.address().address().get_bytestring(0));
+    assert_eq!(
+        pq_member_key_id(&chain, &mine),
+        Some(held.key_id()),
+        "the refused rotation moved the controller off the key it held"
+    );
+    assert_eq!(
+        pq_key_holder(&chain, &held.key_id()),
+        Some(mine_id),
+        "the refused rotation released the key it was rotating away from"
+    );
+    assert_eq!(
+        pq_key_holder(&chain, &wanted.key_id()),
+        Some(theirs_id),
+        "the refused rotation took the key from the controller that holds it"
+    );
+    assert_eq!(
+        declared_total_stake(&chain),
+        total_before,
+        "the refused rotation was counted into the election total"
+    );
+}
+
+#[test]
+fn a_stake_after_the_election_closes_is_returned_before_the_tick_conducts_it() {
+    let (mut chain, treasury, election) = open_election("pq-after-close", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(16);
+
+    chain.blockchain.set_now(election - chain.elect_end_before);
+    // Deliberately no tick: the election is closed by the clock and not yet by its state.
+    let result = pq_stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_NO_ELECTION),
+        "a stake was admitted to an election that may already be conducted"
     );
     assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered anyway");
 }

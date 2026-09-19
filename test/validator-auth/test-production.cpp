@@ -185,7 +185,11 @@ void candidate_producer_identity(Fixture& f) {
 
   auto restored = c::Candidate::deserialize(candidate->serialize(), f.bus, c::PeerValidatorId{0}, 7);
   expect(restored.is_ok(), "full-candidate-accepted");
-  const auto& produced = std::get<tos::BlockCandidate>(restored.move_as_ok()->block);
+  // The candidate has to outlive the reference taken into it: lifetime extension does not
+  // reach through a reference-counted pointer, so binding to a temporary's pointee leaves
+  // `produced` dangling for every check below.
+  auto accepted = restored.move_as_ok();
+  const auto& produced = std::get<tos::BlockCandidate>(accepted->block);
   expect(produced.producer == set_identity, "full-candidate-producer-from-set");
   expect(produced.producer.value != f.bus.validator_set[0].key.ed25519_value().raw(),
          "full-candidate-producer-not-raw-key");

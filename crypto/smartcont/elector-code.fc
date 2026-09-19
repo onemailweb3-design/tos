@@ -349,6 +349,19 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   if (finished) {
     return return_stake(s_addr, query_id, 0);
   }
+  ;; An election is closed from the moment it may be conducted, which is the condition
+  ;; `conduct_elections` itself uses. Admitting a stake until the tick that happens to
+  ;; run afterwards would make membership depend on when that tick lands rather than on
+  ;; the election's own boundary, and a rotation is a membership change like any other.
+  ;; The classical path keeps its own behaviour: that rule is already in use.
+  ;; An election is closed from the moment it may be conducted, which is the condition
+  ;; `conduct_elections` itself uses. Admitting a stake until the tick that happens to
+  ;; run afterwards would make membership depend on when that tick lands rather than on
+  ;; the election's own boundary, and a rotation is a membership change like any other.
+  ;; The classical path keeps its own behaviour: that rule is already in use.
+  if (now() >= elect_close) {
+    return return_stake(s_addr, query_id, 0);
+  }
   (_, cell key_chain) = pq::stored_key(algorithm_id, public_key);
   int key_id = pq::key_id(algorithm_id, public_key);
   ;; A key another controller registered is refused here rather than thrown, so the stake
