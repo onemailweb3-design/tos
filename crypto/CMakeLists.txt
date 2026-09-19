@@ -531,7 +531,8 @@ if (NOT CMAKE_CROSSCOMPILING OR USE_EMSCRIPTEN)
     add_dependencies(gen_fif gen_fif_${ID})
   endfunction()
 
-  GenFif(DEST smartcont/auto/config-code SOURCE smartcont/config-code.fc NAME config)
+  GenFif(DEST smartcont/auto/config-code SOURCE smartcont/config-code.fc NAME config
+    EXTRA_DEPS smartcont/pq.fc smartcont/pq-validator.fc smartcont/pq-bytes.fc)
   GenFif(DEST smartcont/auto/wallet-code SOURCE smartcont/wallet-code.fc NAME wallet)
   GenFif(DEST smartcont/auto/wallet3-code SOURCE smartcont/wallet3-code.fc NAME wallet3)
   GenFif(DEST smartcont/auto/wallet-v4-code SOURCE smartcont/wallet-v4-code.fc NAME wallet_v4)

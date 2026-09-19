@@ -228,6 +228,58 @@ cell pq::stake_preimage(int stake_at, int max_factor, int validator_id, int algo
   .end_cell();
 }
 
+;; What one ML-DSA-44 verification costs the chain, as the instruction charges it.
+;;
+;; A path that verifies a signature for an unauthorised sender is a path that sender can
+;; make the chain pay for at will, so every such path requires the message to bring at
+;; least this much before it verifies anything. The value is derived from the configured
+;; gas price rather than frozen as an amount, because an amount would be a claim about a
+;; price that changes without this line changing with it.
+const int pq::mldsa44_verify_gas = 50000;
+
+int pq::verification_value(int workchain) inline {
+  return get_compute_fee(workchain, pq::mldsa44_verify_gas);
+}
+
+;; TAG u32 | global_id i32 | validator_set_id u256 | validator_id u256 | idx u16 |
+;; proposal_hash u256   -- 106 bytes, one cell.
+;;
+;; The set identity is the hash of the validator set the vote is counted against, so a
+;; signature made under one set cannot be replayed under the next: the same validator at
+;; the same index signs different bytes once the set changes. The validator identity is
+;; read from the descriptor at `idx` rather than from the message, so a vote cannot name
+;; one validator and be counted for another.
+cell pq::config_vote_preimage(int validator_set_id, int validator_id, int idx,
+                              int proposal_hash) inline {
+  return begin_cell()
+    .store_uint(pq::tag::config_vote_sign, 32)
+    .store_int(pq::global_id(), 32)
+    .store_uint(validator_set_id, 256)
+    .store_uint(validator_id, 256)
+    .store_uint(idx, 16)
+    .store_uint(proposal_hash, 256)
+  .end_cell();
+}
+
+;; TAG u32 | global_id i32 | validator_set_id u256 | validator_id u256 | idx u16 |
+;; election_id u32 | complaint_hash u256   -- 110 bytes, one cell.
+;;
+;; A complaint belongs to the election it was made against, so the election identity is
+;; signed as well: the same complaint hash against a different election is different
+;; bytes.
+cell pq::complaint_vote_preimage(int validator_set_id, int validator_id, int idx,
+                                 int election_id, int complaint_hash) inline {
+  return begin_cell()
+    .store_uint(pq::tag::complaint_sign, 32)
+    .store_int(pq::global_id(), 32)
+    .store_uint(validator_set_id, 256)
+    .store_uint(validator_id, 256)
+    .store_uint(idx, 16)
+    .store_uint(election_id, 32)
+    .store_uint(complaint_hash, 256)
+  .end_cell();
+}
+
 const int pq::error::key_owned = 68;
 const int pq::error::index_disagrees = 69;
 

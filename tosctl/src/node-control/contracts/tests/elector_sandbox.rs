@@ -179,52 +179,6 @@ const ELECT_REQUEST: u32 = 0x654c5074;
 
 const TOS: u64 = 1_000_000_000;
 
-/// Exactly what the contract signs over: its own tag, the terms, the sender it saw, and
-/// the transport identity being claimed. Built here independently of the contract, so a
-/// change to either side's field order stops the signature verifying.
-///
-/// The bytes are signed as they are. `check_data_signature` verifies Ed25519 over the
-/// slice's raw bytes and does not hash them first, unlike the variant that takes a hash,
-/// so signing a digest here would produce a signature the contract cannot accept.
-fn election_request(
-    stake_at: u32,
-    max_factor: u32,
-    source: &chain_block::AccountId,
-    adnl: &[u8; 32],
-) -> Vec<u8> {
-    let mut preimage = Vec::with_capacity(76);
-    preimage.extend_from_slice(&ELECT_REQUEST.to_be_bytes());
-    preimage.extend_from_slice(&stake_at.to_be_bytes());
-    preimage.extend_from_slice(&max_factor.to_be_bytes());
-    preimage.extend_from_slice(&source.get_bytestring(0));
-    preimage.extend_from_slice(adnl);
-    assert_eq!(preimage.len(), 76, "the signed preimage is four words and two addresses");
-    preimage
-}
-
-fn stake_body(
-    query_id: u64,
-    public_key: &[u8; 32],
-    stake_at: u32,
-    max_factor: u32,
-    adnl: &[u8; 32],
-    signature: &[u8; 64],
-) -> chain_block::Cell {
-    use chain_block::IBitstring;
-    let mut signature_cell = chain_block::BuilderData::new();
-    signature_cell.append_raw(signature, 512).expect("signature bits");
-    let mut body = chain_block::BuilderData::new();
-    body.append_u32(NEW_STAKE).expect("operation");
-    body.append_u64(query_id).expect("query id");
-    body.append_raw(public_key, 256).expect("public key");
-    body.append_u32(stake_at).expect("election");
-    body.append_u32(max_factor).expect("max factor");
-    body.append_raw(adnl, 256).expect("adnl address");
-    body.checked_append_reference(signature_cell.into_cell().expect("signature cell"))
-        .expect("signature reference");
-    body.into_cell().expect("stake body")
-}
-
 /// The tag and reason of the first reply the elector sent back. A refusal carries the
 /// reason it refused for, and a test that only read the tag would report every refusal as
 /// the one it was looking for.
@@ -247,20 +201,6 @@ fn reply(result: &tos_sandbox::SendResult) -> (u32, u32) {
     answer.expect("the elector always answers a stake")
 }
 
-struct Validator {
-    key: ed25519_dalek::SigningKey,
-    public_key: [u8; 32],
-    adnl: [u8; 32],
-}
-
-impl Validator {
-    fn new(seed: u8) -> Self {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
-        let public_key = key.verifying_key().to_bytes();
-        Self { key, public_key, adnl: [seed ^ 0xff; 32] }
-    }
-}
-
 /// An open election, plus a funded masterchain account to stake from.
 fn open_election(name: &str, balance: u64) -> (Chain, tos_sandbox::Treasury, u32) {
     let mut chain = launch();
@@ -277,29 +217,6 @@ fn open_election(name: &str, balance: u64) -> (Chain, tos_sandbox::Treasury, u32
     (chain, treasury, election)
 }
 
-fn stake_of(chain: &Chain, public_key: &[u8; 32]) -> u128 {
-    let result = chain
-        .blockchain
-        .run_get_method(
-            &chain.elector,
-            "participates_in",
-            vec![tos_vm::stack::StackItem::integer(
-                tos_vm::stack::integer::IntegerData::from_unsigned_bytes_be(public_key),
-            )],
-        )
-        .expect("the elector answers");
-    assert_eq!(result.exit_code, 0, "participates_in failed");
-    result
-        .stack
-        .last()
-        .expect("a stake")
-        .as_integer()
-        .expect("an integer")
-        .to_string()
-        .parse()
-        .expect("a stake")
-}
-
 /// The running total the open election carries. It decides whether the election has
 /// enough stake to close and how small a further stake may be, so it must never exceed
 /// what the members actually placed.
@@ -313,164 +230,8 @@ fn declared_total_stake(chain: &Chain) -> u128 {
     result.stack[3].as_integer().expect("an integer").to_string().parse().expect("a running total")
 }
 
-#[test]
-fn a_signed_stake_registers_the_validator() {
-    let (mut chain, treasury, election) = open_election("validator-a", 20_000 * TOS);
-    let validator = Validator::new(0xa1);
-    let max_factor = 0x10000;
-    let request =
-        election_request(election, max_factor, &treasury.address().address(), &validator.adnl);
-    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&validator.key, &request).to_bytes();
-
-    let body =
-        stake_body(1, &validator.public_key, election, max_factor, &validator.adnl, &signature);
-    let result = chain
-        .blockchain
-        .send_message(treasury.build_message(&chain.elector, 11_000 * TOS, true, Some(body)))
-        .expect("the stake is delivered");
-    result.expect_success();
-
-    assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "the elector refused a correctly signed stake");
-    assert_eq!(
-        stake_of(&chain, &validator.public_key),
-        (11_000 * TOS - TOS) as u128,
-        "the registered stake is what was sent, less the confirmation the elector returns"
-    );
-}
-
-#[test]
-fn a_stake_signed_by_a_different_key_is_returned() {
-    let (mut chain, treasury, election) = open_election("validator-b", 20_000 * TOS);
-    let validator = Validator::new(0xb2);
-    let impostor = Validator::new(0xb3);
-    let max_factor = 0x10000;
-    let request =
-        election_request(election, max_factor, &treasury.address().address(), &validator.adnl);
-    // Signed by a key that is not the one being registered, which is the whole of the
-    // difference between this and the accepted case.
-    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&impostor.key, &request).to_bytes();
-
-    let body =
-        stake_body(2, &validator.public_key, election, max_factor, &validator.adnl, &signature);
-    let result = chain
-        .blockchain
-        .send_message(treasury.build_message(&chain.elector, 11_000 * TOS, true, Some(body)))
-        .expect("the stake is delivered");
-
-    assert_eq!(
-        reply(&result),
-        (STAKE_RETURNED, REASON_BAD_SIGNATURE),
-        "a stake signed by another key was accepted, or refused for another reason"
-    );
-    assert_eq!(stake_of(&chain, &validator.public_key), 0, "a refused stake was registered anyway");
-}
-
-#[test]
-fn a_stake_signed_for_another_sender_is_returned() {
-    let (mut chain, treasury, election) = open_election("validator-c", 20_000 * TOS);
-    let elsewhere =
-        chain.blockchain.treasury("validator-c-elsewhere", TOS).expect("another account");
-    let validator = Validator::new(0xc4);
-    let max_factor = 0x10000;
-    // A signature that is valid, for the same key and the same election, but made for a
-    // different sender. Without the source address in the preimage this would be
-    // replayable from any account.
-    let request =
-        election_request(election, max_factor, &elsewhere.address().address(), &validator.adnl);
-    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&validator.key, &request).to_bytes();
-
-    let body =
-        stake_body(3, &validator.public_key, election, max_factor, &validator.adnl, &signature);
-    let result = chain
-        .blockchain
-        .send_message(treasury.build_message(&chain.elector, 11_000 * TOS, true, Some(body)))
-        .expect("the stake is delivered");
-
-    assert_eq!(
-        reply(&result),
-        (STAKE_RETURNED, REASON_BAD_SIGNATURE),
-        "a stake signed for another sender was accepted, or refused for another reason"
-    );
-    assert_eq!(stake_of(&chain, &validator.public_key), 0, "a refused stake was registered anyway");
-}
-
 /// `return_stake` reason 4: a key already staked from a different address.
 const REASON_ANOTHER_ADDRESS: u32 = 4;
-
-/// Sign and send a stake, returning what the elector answered.
-fn stake(
-    chain: &mut Chain,
-    from: &tos_sandbox::Treasury,
-    validator: &Validator,
-    election: u32,
-    query_id: u64,
-    value: u64,
-) -> tos_sandbox::SendResult {
-    let max_factor = 0x10000;
-    let request =
-        election_request(election, max_factor, &from.address().address(), &validator.adnl);
-    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&validator.key, &request).to_bytes();
-    let body = stake_body(
-        query_id,
-        &validator.public_key,
-        election,
-        max_factor,
-        &validator.adnl,
-        &signature,
-    );
-    chain
-        .blockchain
-        .send_message(from.build_message(&chain.elector, value, true, Some(body)))
-        .expect("the stake is delivered")
-}
-
-#[test]
-fn a_second_stake_from_the_same_address_is_added_to_the_first() {
-    let (mut chain, treasury, election) = open_election("validator-d", 40_000 * TOS);
-    let validator = Validator::new(0xd5);
-
-    let first = stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
-    assert_eq!(reply(&first), (STAKE_ACCEPTED, 0), "the first stake was refused");
-    let second = stake(&mut chain, &treasury, &validator, election, 2, 12_000 * TOS);
-    assert_eq!(reply(&second), (STAKE_ACCEPTED, 0), "topping up an own stake was refused");
-
-    assert_eq!(
-        stake_of(&chain, &validator.public_key),
-        (23_000 * TOS - 2 * TOS) as u128,
-        "two stakes from one address must accumulate, less the two confirmations"
-    );
-    assert_eq!(
-        declared_total_stake(&chain),
-        stake_of(&chain, &validator.public_key),
-        "a top-up brings new money once, so the election's total is the only member's stake"
-    );
-}
-
-#[test]
-fn the_same_key_cannot_be_staked_from_a_second_address() {
-    let (mut chain, treasury, election) = open_election("validator-e", 40_000 * TOS);
-    let elsewhere =
-        chain.blockchain.treasury("validator-e-second", 40_000 * TOS).expect("an account");
-    let validator = Validator::new(0xe6);
-
-    let first = stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
-    assert_eq!(reply(&first), (STAKE_ACCEPTED, 0), "the first stake was refused");
-    let registered = stake_of(&chain, &validator.public_key);
-
-    // Correctly signed for its own sender, so only the rule that a key belongs to one
-    // controlling address can refuse it.
-    let second = stake(&mut chain, &elsewhere, &validator, election, 2, 11_000 * TOS);
-    assert_eq!(
-        reply(&second),
-        (STAKE_RETURNED, REASON_ANOTHER_ADDRESS),
-        "a key was staked from a second address, or refused for another reason"
-    );
-    assert_eq!(
-        stake_of(&chain, &validator.public_key),
-        registered,
-        "a refused stake changed the registration it was refused for"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Closing an election
@@ -528,22 +289,128 @@ fn replies(result: &tos_sandbox::SendResult) -> Vec<u32> {
 
 /// An election with enough validators and enough total stake to succeed: the
 /// configuration requires four participants and forty thousand TOS between them.
-fn elect_four() -> (Chain, u32, Vec<Validator>) {
+fn elect_four() -> (Chain, u32, Vec<PqValidator>) {
     let (mut chain, treasury, election) = open_election("validator-set-a", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
     let mut validators = Vec::new();
     for index in 0..4u8 {
-        let validator = Validator::new(0x40 + index);
+        let validator = PqValidator::new(0x40 + index);
         let account = chain
             .blockchain
             .treasury(&format!("validator-set-{index}"), 40_000 * TOS)
             .expect("a funded account");
         let result =
-            stake(&mut chain, &account, &validator, election, 10 + index as u64, 11_000 * TOS);
+            pq_stake(&mut chain, &account, &validator, election, 10 + index as u64, 11_000 * TOS);
         assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "validator {index} could not stake");
         validators.push(validator);
     }
     let _ = treasury;
     (chain, election, validators)
+}
+
+/// The answer the elector gives a query it does not recognise.
+const UNKNOWN_QUERY: u32 = 0xffffffff;
+
+/// A stake in the shape the classical operation took, signed correctly over the terms it
+/// used to be checked against. Built here rather than by a shared helper: nothing in the
+/// contract reads this encoding any more, and a helper would suggest something still
+/// produces it.
+fn legacy_stake_body(
+    query_id: u64,
+    election: u32,
+    source: &chain_block::AccountId,
+) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x5a; 32]);
+    let adnl = [0xa5u8; 32];
+    let max_factor = 0x10000u32;
+
+    let mut preimage = Vec::with_capacity(76);
+    preimage.extend_from_slice(&ELECT_REQUEST.to_be_bytes());
+    preimage.extend_from_slice(&election.to_be_bytes());
+    preimage.extend_from_slice(&max_factor.to_be_bytes());
+    preimage.extend_from_slice(&source.get_bytestring(0));
+    preimage.extend_from_slice(&adnl);
+    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&key, &preimage).to_bytes();
+
+    let mut signature_cell = chain_block::BuilderData::new();
+    signature_cell.append_raw(&signature, 512).expect("signature bits");
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(NEW_STAKE).expect("operation");
+    body.append_u64(query_id).expect("query id");
+    body.append_raw(&key.verifying_key().to_bytes(), 256).expect("public key");
+    body.append_u32(election).expect("election");
+    body.append_u32(max_factor).expect("max factor");
+    body.append_raw(&adnl, 256).expect("adnl address");
+    body.checked_append_reference(signature_cell.into_cell().expect("signature cell"))
+        .expect("signature reference");
+    body.into_cell().expect("stake body")
+}
+
+/// What the first reply carried back, in nanotomis.
+fn returned_value(result: &tos_sandbox::SendResult) -> u128 {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    let mut value = None;
+    transaction
+        .iterate_out_msgs(|message| {
+            if value.is_none() {
+                value = message.get_value().map(|v| v.coins.as_u128());
+            }
+            Ok(true)
+        })
+        .expect("out messages");
+    value.expect("the elector answers, and its answer carries what it did not keep")
+}
+
+/// A correctly signed stake in the operation the chain used before validator authority
+/// was post-quantum buys nothing: the elector does not know that opcode, so it is
+/// answered as an unknown query and the money it carried goes back.
+///
+/// This is the test that fails if the operation is ever restored. It asserts the absence
+/// of an effect and not merely an error, because an error that still registered a member
+/// would look the same from the reply alone.
+#[test]
+fn the_legacy_stake_operation_has_no_authority_and_returns_the_money() {
+    let (mut chain, treasury, election) = open_election("legacy-stake-op", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let sent = 11_000 * TOS;
+
+    let result = chain
+        .blockchain
+        .send_message(treasury.build_message(
+            &chain.elector,
+            sent,
+            true,
+            Some(legacy_stake_body(1, election, &treasury.address().address())),
+        ))
+        .expect("the message is delivered");
+
+    let (tag, _) = reply(&result);
+    assert_eq!(tag, UNKNOWN_QUERY, "the elector still recognises the classical stake operation");
+
+    // Nothing was kept: the refusal carries the stake back rather than stranding it.
+    let returned = returned_value(&result);
+    assert!(
+        returned > u128::from(sent) * 9 / 10,
+        "a refused legacy stake returned only {returned} of {sent} nanotomis"
+    );
+
+    // And nothing was recorded. The election is exactly as it was before the message.
+    assert_eq!(
+        declared_total_stake(&chain),
+        0,
+        "a classical stake moved the election's running total"
+    );
+    let list = chain
+        .blockchain
+        .run_get_method(&chain.elector, "participant_list", vec![])
+        .expect("the elector answers");
+    assert_eq!(list.exit_code, 0, "participant_list failed");
+    // An empty FunC list is null on the stack; a registered member would make it a pair.
+    assert!(
+        matches!(list.stack.last().expect("a list"), tos_vm::stack::StackItem::None),
+        "a classical stake registered a member"
+    );
 }
 
 #[test]
@@ -624,32 +491,6 @@ fn the_election_is_forgotten_only_once_the_set_is_installed() {
 // ---------------------------------------------------------------------------
 // What the elector keeps, and for how long
 // ---------------------------------------------------------------------------
-
-#[test]
-fn one_address_may_register_two_separate_keys() {
-    let (mut chain, treasury, election) = open_election("validator-f", 60_000 * TOS);
-    let first = Validator::new(0xf1);
-    let second = Validator::new(0xf2);
-
-    assert_eq!(
-        reply(&stake(&mut chain, &treasury, &first, election, 1, 11_000 * TOS)),
-        (STAKE_ACCEPTED, 0)
-    );
-    assert_eq!(
-        reply(&stake(&mut chain, &treasury, &second, election, 2, 11_000 * TOS)),
-        (STAKE_ACCEPTED, 0)
-    );
-
-    // Two members, because membership is a property of the key here and one account may
-    // hold several. A design that identifies a member by its controlling account instead
-    // has to answer this case differently, which is why it is pinned rather than assumed.
-    assert_ne!(stake_of(&chain, &first.public_key), 0, "the first key is not registered");
-    assert_ne!(stake_of(&chain, &second.public_key), 0, "the second key is not registered");
-    assert_ne!(
-        first.public_key, second.public_key,
-        "the fixture must use two keys for this to mean anything"
-    );
-}
 
 /// `HashmapE n X` is a bit saying whether anything is stored, and a reference to the tree
 /// if there is. Read that way rather than through a helper, so the field order below is
@@ -814,16 +655,21 @@ fn the_next_set_replaces_the_current_one_and_the_current_becomes_the_previous() 
 
 const NEW_PROPOSAL: u32 = 0x6e565052;
 const PROPOSAL_ACCEPTED: u32 = 0xee565052;
-const VOTE: u32 = 0x566f7465;
-const VOTE_SIGN_TAG: u32 = 0x566f7445;
+/// The operation and the signed-domain tag of a post-quantum configuration vote.
+const PQ_CONFIG_VOTE_OP: u32 = 0x5051766f;
+const PQ_CONFIG_VOTE_SIGN_TAG: u32 = 0x5051564f;
 /// `send_confirmation(.., res + 0xd6745240)` with status 2: the vote was registered.
 const VOTE_REGISTERED: u32 = 0xd6745240 + 2;
-/// `throw_unless(34, check_data_signature(..))`.
+/// `throw_unless(34, pq_check_mldsa44(..))`.
 const ERROR_BAD_VOTE_SIGNATURE: i32 = 34;
+/// `throw_unless(47, msg_value >= pq::verification_value(-1))`.
+const ERROR_VOTE_UNDERFUNDED: i32 = 47;
+/// What a vote must carry to pay for the verification it asks for, with room to spare.
+const VOTE_VALUE: u64 = 10 * TOS;
 
 /// A set elected by this test, rotated into place, so the current validators are keys the
 /// test holds and can sign with.
-fn elect_install_and_rotate() -> (Chain, Vec<Validator>, u32) {
+fn elect_install_and_rotate() -> (Chain, Vec<PqValidator>, u32) {
     let (mut chain, election, validators) = elect_four();
     let closes = election - chain.elect_end_before;
     chain.blockchain.set_now(closes);
@@ -856,59 +702,119 @@ fn elect_install_and_rotate() -> (Chain, Vec<Validator>, u32) {
 }
 
 /// `cfg_proposal#f3 param_id:int32 param_value:(Maybe ^Cell) if_hash_equal:(Maybe uint256)`
-fn proposal_cell(param_id: i32, value: u32) -> chain_block::Cell {
+fn proposal_cell(param_id: i32, value: chain_block::Cell) -> chain_block::Cell {
     use chain_block::IBitstring;
-    let mut payload = chain_block::BuilderData::new();
-    payload.append_u32(value).expect("proposed value");
     let mut proposal = chain_block::BuilderData::new();
     proposal.append_u8(0xf3).expect("tag");
     proposal.append_i32(param_id).expect("parameter");
     proposal.append_bit_one().expect("a value is present");
-    proposal.checked_append_reference(payload.into_cell().expect("value cell")).expect("value");
+    proposal.checked_append_reference(value).expect("value");
     proposal.append_bit_zero().expect("no expected current value");
     proposal.into_cell().expect("proposal")
 }
 
-/// The index of a validator in the current set, by its public key, because a vote names
-/// an index and the contract checks the key stored at it.
-fn index_of(chain: &Chain, public_key: &[u8; 32]) -> u16 {
+/// The index of a validator in the current set, found by the consensus key it holds,
+/// because a vote names an index and the contract reads the descriptor stored at it.
+fn index_of(chain: &Chain, validator: &PqValidator) -> u16 {
+    let wanted = validator.key_id();
     let set = chain.blockchain.config_params().validator_set().expect("a current set");
     for (index, descriptor) in set.list().iter().enumerate() {
-        if descriptor.public_key().expect("a classical descriptor").key_bytes() == public_key {
+        if descriptor.consensus_key_id().expect("a key identity") == wanted {
             return index as u16;
         }
     }
     panic!("the validator is not in the current set");
 }
 
+/// The stable identity the set records at an index. The contract reads it from the same
+/// place, so a test that built it from the sender instead would still pass if the
+/// contract started trusting the message.
+fn validator_id_at(chain: &Chain, idx: u16) -> [u8; 32] {
+    let set = chain.blockchain.config_params().validator_set().expect("a current set");
+    let descriptor = set.list().get(idx as usize).expect("a descriptor at that index");
+    descriptor.validator_id().expect("a validator identity").as_slice()[..32]
+        .try_into()
+        .expect("an identity is 32 bytes")
+}
+
+/// The hash of the current validator set, which every vote signs over so that a
+/// signature cannot be replayed once the set has changed.
+fn current_set_id(chain: &Chain) -> [u8; 32] {
+    use chain_block::{GetRepresentationHash, IBitstring};
+    let mut key = chain_block::BuilderData::new();
+    key.append_u32(34).expect("the parameter index");
+    let stored = chain
+        .blockchain
+        .config_params()
+        .config_params
+        .get(chain_block::SliceData::load_builder(key).expect("a key slice"))
+        .expect("lookup")
+        .expect("the chain has a current validator set");
+    let cell = stored.reference(0).expect("the parameter value is stored behind a reference");
+    cell.hash(0).as_slice()[..32].try_into().expect("a hash is 32 bytes")
+}
+
 fn vote_body(
     query_id: u64,
-    signature: &[u8; 64],
+    signature: &[u8],
     idx: u16,
     proposal_hash: &[u8; 32],
 ) -> chain_block::Cell {
     use chain_block::IBitstring;
     let mut body = chain_block::BuilderData::new();
-    body.append_u32(VOTE).expect("operation");
+    body.append_u32(PQ_CONFIG_VOTE_OP).expect("operation");
     body.append_u64(query_id).expect("query id");
-    body.append_raw(signature, 512).expect("signature");
-    body.append_u32(VOTE_SIGN_TAG).expect("signed tag");
     body.append_u16(idx).expect("index");
     body.append_raw(proposal_hash, 256).expect("proposal");
+    body.checked_append_reference(stored_bytes(signature)).expect("signature");
     body.into_cell().expect("vote body")
 }
 
-/// Exactly the bytes the contract verifies: everything after the signature.
-fn vote_preimage(idx: u16, proposal_hash: &[u8; 32]) -> Vec<u8> {
-    let mut preimage = Vec::with_capacity(38);
-    preimage.extend_from_slice(&VOTE_SIGN_TAG.to_be_bytes());
+/// Exactly the bytes the contract verifies. Built here from the set rather than from the
+/// sender, because the contract reads the validator identity from the set too: a
+/// preimage assembled from what the message claims would agree with a contract that had
+/// stopped checking.
+fn vote_preimage(chain: &Chain, idx: u16, proposal_hash: &[u8; 32]) -> Vec<u8> {
+    let mut preimage = Vec::with_capacity(106);
+    preimage.extend_from_slice(&PQ_CONFIG_VOTE_SIGN_TAG.to_be_bytes());
+    preimage.extend_from_slice(&global_id(chain).to_be_bytes());
+    preimage.extend_from_slice(&current_set_id(chain));
+    preimage.extend_from_slice(&validator_id_at(chain, idx));
     preimage.extend_from_slice(&idx.to_be_bytes());
     preimage.extend_from_slice(proposal_hash);
+    assert_eq!(preimage.len(), 106, "the signed preimage changed shape");
     preimage
+}
+
+/// The network identity every signature is bound to.
+fn global_id(chain: &Chain) -> i32 {
+    match chain.blockchain.config_params().config(19).expect("parameter 19") {
+        Some(chain_block::ConfigParamEnum::ConfigParam19(id)) => id as i32,
+        _ => panic!("the chain states no network id, so nothing can sign for it"),
+    }
 }
 
 /// Register a proposal and return its hash, which is how every vote refers to it.
 fn propose(chain: &mut Chain, param_id: i32, value: u32) -> [u8; 32] {
+    propose_cell(chain, param_id, proposal_value(value), 1)
+}
+
+/// The payload `propose` wraps, so a caller with a whole parameter value can use the
+/// same path.
+fn proposal_value(value: u32) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut payload = chain_block::BuilderData::new();
+    payload.append_u32(value).expect("proposed value");
+    payload.into_cell().expect("value cell")
+}
+
+/// Register a proposal carrying an arbitrary parameter value.
+fn propose_cell(
+    chain: &mut Chain,
+    param_id: i32,
+    value: chain_block::Cell,
+    query_id: u64,
+) -> [u8; 32] {
     use chain_block::{GetRepresentationHash, IBitstring};
     let proposal = proposal_cell(param_id, value);
     let hash: [u8; 32] =
@@ -916,7 +822,7 @@ fn propose(chain: &mut Chain, param_id: i32, value: u32) -> [u8; 32] {
 
     let mut body = chain_block::BuilderData::new();
     body.append_u32(NEW_PROPOSAL).expect("operation");
-    body.append_u64(1).expect("query id");
+    body.append_u64(query_id).expect("query id");
     // Absolute times are converted to a duration by the contract, and the configuration
     // requires a proposal to be stored for at least a million seconds.
     body.append_u32(chain.blockchain.now() + 2_000_000).expect("expiry");
@@ -947,15 +853,14 @@ fn a_validator_votes_for_a_proposal_with_the_key_in_the_current_set() {
     let proposal = propose(&mut chain, 42, 0xabcd);
 
     let voter = &validators[0];
-    let idx = index_of(&chain, &voter.public_key);
-    let signature: [u8; 64] =
-        ed25519_dalek::Signer::sign(&voter.key, &vote_preimage(idx, &proposal)).to_bytes();
+    let idx = index_of(&chain, voter);
+    let signature = voter.sign_under(&vote_preimage(&chain, idx, &proposal), CONFIG_VOTE_CONTEXT);
     let sender = chain.blockchain.treasury("vote-relay", 100 * TOS).expect("a funded account");
     let result = chain
         .blockchain
         .send_message(sender.build_message(
             &chain.config_contract,
-            10 * TOS,
+            VOTE_VALUE,
             true,
             Some(vote_body(2, &signature, idx, &proposal)),
         ))
@@ -973,90 +878,24 @@ fn a_vote_signed_by_a_key_that_is_not_at_that_index_is_refused() {
 
     let voter = &validators[0];
     let other = &validators[1];
-    let idx = index_of(&chain, &voter.public_key);
-    assert_ne!(idx, index_of(&chain, &other.public_key), "the two validators share an index");
+    let idx = index_of(&chain, voter);
+    assert_ne!(idx, index_of(&chain, other), "the two validators share an index");
     // A signature that is valid, over the right proposal and the right index, made by a
     // validator who is not the one at that index.
-    let signature: [u8; 64] =
-        ed25519_dalek::Signer::sign(&other.key, &vote_preimage(idx, &proposal)).to_bytes();
+    let signature = other.sign_under(&vote_preimage(&chain, idx, &proposal), CONFIG_VOTE_CONTEXT);
 
     let sender = chain.blockchain.treasury("vote-relay", 100 * TOS).expect("a funded account");
     chain
         .blockchain
         .send_message(sender.build_message(
             &chain.config_contract,
-            10 * TOS,
+            VOTE_VALUE,
             true,
             Some(vote_body(3, &signature, idx, &proposal)),
         ))
         .expect("the vote is delivered")
         .expect_aborted()
         .expect_exit_code(ERROR_BAD_VOTE_SIGNATURE);
-}
-
-/// The configuration contract's stored sequence number, which its external path
-/// increments on every message it accepts.
-fn config_seqno(chain: &Chain) -> u64 {
-    let result = chain
-        .blockchain
-        .run_get_method(&chain.config_contract, "seqno", vec![])
-        .expect("the configuration contract answers");
-    assert_eq!(result.exit_code, 0, "seqno failed");
-    result
-        .stack
-        .last()
-        .expect("a sequence number")
-        .as_integer()
-        .expect("an integer")
-        .to_string()
-        .parse()
-        .expect("a sequence number")
-}
-
-/// The external vote path, which exists today and which the post-quantum design removes.
-///
-/// It verifies the signature before `accept_message`, so the check has to fit the
-/// ordinary external admission credit. A post-quantum verification costs five times that
-/// credit before it decodes an operand, which is why this path cannot survive the
-/// conversion and is recorded here as it stands rather than as it is remembered.
-#[test]
-fn a_validator_can_still_vote_through_an_external_message() {
-    let (mut chain, validators, _election) = elect_install_and_rotate();
-    let proposal = propose(&mut chain, 43, 0x1234);
-
-    let voter = &validators[2];
-    let idx = index_of(&chain, &voter.public_key);
-    let seqno = config_seqno(&chain) as u32;
-    let valid_until = chain.blockchain.now() + 600;
-
-    let mut preimage = Vec::with_capacity(46);
-    preimage.extend_from_slice(&VOTE.to_be_bytes());
-    preimage.extend_from_slice(&seqno.to_be_bytes());
-    preimage.extend_from_slice(&valid_until.to_be_bytes());
-    preimage.extend_from_slice(&idx.to_be_bytes());
-    preimage.extend_from_slice(&proposal);
-    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&voter.key, &preimage).to_bytes();
-
-    use chain_block::IBitstring;
-    let mut body = chain_block::BuilderData::new();
-    body.append_raw(&signature, 512).expect("signature");
-    body.append_raw(&preimage, 46 * 8).expect("the signed fields follow the signature");
-
-    let result = chain
-        .blockchain
-        .send_message(
-            tos_sandbox::MessageBuilder::external(&chain.config_contract)
-                .body(body.into_cell().expect("external vote body"))
-                .build(),
-        )
-        .expect("the external vote is delivered");
-    result.expect_success().expect_exit_code(0);
-
-    assert_eq!(
-        config_seqno(&chain),
-        seqno as u64 + 1,
-        "the external path accepted a message without counting it"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1067,61 +906,74 @@ fn a_validator_can_still_vote_through_an_external_message() {
 // removes this rather than converting it, so what it can do today is recorded here.
 // ---------------------------------------------------------------------------
 
-/// `perform_action` 0x43665021: change one configuration parameter.
-const ADMIN_CHANGE_PARAMETER: u32 = 0x43665021;
+// ---------------------------------------------------------------------------
+// What no longer has authority
+//
+// Two paths used to change this chain without a vote of the current validators: a
+// validator vote arriving as an external message, and an action signed by a single
+// administrator key. Both are gone, and these tests are what fails if either returns.
+//
+// Each asserts that nothing changed, not merely that something threw. A path that
+// errored after registering a vote or installing a parameter would look identical from
+// the answer alone.
+// ---------------------------------------------------------------------------
 
-/// Put a known administrator key into the configuration contract's storage.
-///
-/// The zerostate generates that key into a file this test does not read, so the path
-/// could not be exercised at all without supplying one. Only the stored key changes; the
-/// contract, and every check it makes, is the deployed one.
-fn install_admin_key(chain: &mut Chain, public_key: &[u8; 32]) {
+/// The configuration contract accepts no external message at all, so a validator has no
+/// way to vote except by the internal path that pays for its own verification.
+#[test]
+fn an_external_validator_vote_has_no_authorization_path() {
+    let (mut chain, validators, _election) = elect_install_and_rotate();
+    let proposal = propose(&mut chain, 43, 0x1234);
+    let voter = &validators[2];
+    let idx = index_of(&chain, voter);
+
+    // Signed by a validator that really is at that index, over the bytes the internal
+    // path verifies. Only the absence of an external authorisation path can refuse it.
+    let signature = voter.sign_under(&vote_preimage(&chain, idx, &proposal), CONFIG_VOTE_CONTEXT);
+
     use chain_block::IBitstring;
-    let mut account = chain
-        .blockchain
-        .get_account(&chain.config_contract)
-        .expect("the configuration contract is deployed")
-        .clone();
-    let data = account.get_data().expect("storage");
-    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
-    let parameters = slice.checked_drain_reference().expect("the parameter dictionary");
-    let seqno = slice.get_next_u32().expect("sequence number");
-    let _old_key = slice.get_next_bits(256).expect("the administrator key");
+    let mut body = chain_block::BuilderData::new();
+    body.append_u16(idx).expect("index");
+    body.append_raw(&proposal, 256).expect("proposal");
+    body.checked_append_reference(stored_bytes(&signature)).expect("signature");
 
-    let mut rebuilt = chain_block::BuilderData::new();
-    rebuilt.checked_append_reference(parameters).expect("parameters");
-    rebuilt.append_u32(seqno).expect("sequence number");
-    rebuilt.append_raw(public_key, 256).expect("administrator key");
-    rebuilt.checked_append_references_and_data(&slice).expect("the votes");
-    account.set_data(rebuilt.into_cell().expect("storage"));
-    chain.blockchain.set_account(chain.config_contract.clone(), account);
+    let before = proposal_voters(&chain, &proposal);
+    let refused = chain.blockchain.send_message(
+        tos_sandbox::MessageBuilder::external(&chain.config_contract)
+            .body(body.into_cell().expect("external vote body"))
+            .build(),
+    );
+    assert!(refused.is_err(), "the configuration contract accepted an external validator vote");
+
+    assert_eq!(proposal_voters(&chain, &proposal), before, "an external message registered a vote");
 }
 
+/// No key, held by anyone, can change a configuration parameter on its own. The action
+/// the administrator used is not merely unsigned now: the contract has no external
+/// handler that would reach it.
 #[test]
-fn the_administrator_key_alone_can_change_a_configuration_parameter() {
+fn no_key_alone_can_change_a_configuration_parameter() {
     let (mut chain, _validators, _election) = elect_install_and_rotate();
-    let admin = ed25519_dalek::SigningKey::from_bytes(&[0x5a; 32]);
-    install_admin_key(&mut chain, &admin.verifying_key().to_bytes());
-
     let parameter = 77i32;
     assert!(
         !parameter_present(&configuration_from_contract(&chain), parameter as u32),
         "the fixture needs a parameter that is not already set"
     );
 
+    // The message the administrator path took, signed by a key of the sender's choosing.
+    // There is no stored key to compare it against any more, which is the point.
+    let admin = ed25519_dalek::SigningKey::from_bytes(&[0x5a; 32]);
     use chain_block::IBitstring;
     let mut value = chain_block::BuilderData::new();
     value.append_u32(0xc0ffee).expect("a value");
     let mut signed = chain_block::BuilderData::new();
-    signed.append_u32(ADMIN_CHANGE_PARAMETER).expect("action");
-    signed.append_u32(config_seqno(&chain) as u32).expect("sequence number");
+    signed.append_u32(0x43665021).expect("the action that changed a parameter");
+    signed.append_u32(0).expect("sequence number");
     signed.append_u32(chain.blockchain.now() + 600).expect("valid until");
     signed.append_i32(parameter).expect("parameter");
     signed.checked_append_reference(value.into_cell().expect("value")).expect("value");
     let signed_cell = signed.into_cell().expect("the signed part");
 
-    // This path hashes what it verifies, unlike the vote path beside it, which signs the
-    // bytes as they are. Two instructions, two meanings, one contract.
     use chain_block::GetRepresentationHash;
     let digest = signed_cell.hash(0);
     let signature: [u8; 64] = ed25519_dalek::Signer::sign(&admin, digest.as_slice()).to_bytes();
@@ -1133,21 +985,146 @@ fn the_administrator_key_alone_can_change_a_configuration_parameter() {
     )
     .expect("the signed part follows the signature");
 
-    chain
-        .blockchain
-        .send_message(
-            tos_sandbox::MessageBuilder::external(&chain.config_contract)
-                .body(body.into_cell().expect("administrator message"))
-                .build(),
-        )
-        .expect("the administrator message is delivered")
-        .expect_success()
-        .expect_exit_code(0);
+    let refused = chain.blockchain.send_message(
+        tos_sandbox::MessageBuilder::external(&chain.config_contract)
+            .body(body.into_cell().expect("administrator message"))
+            .build(),
+    );
+    assert!(refused.is_err(), "the configuration contract accepted an administrator message");
 
     assert!(
-        parameter_present(&configuration_from_contract(&chain), parameter as u32),
-        "one key changed nothing, or the path this test exists to record has already gone"
+        !parameter_present(&configuration_from_contract(&chain), parameter as u32),
+        "a single key changed a configuration parameter"
     );
+}
+
+/// The indices that have voted for a proposal, read from the contract's own storage, so
+/// a refusal that still recorded a vote is visible.
+fn proposal_voters(chain: &Chain, proposal_hash: &[u8; 32]) -> Vec<u16> {
+    let account = chain
+        .blockchain
+        .get_account(&chain.config_contract)
+        .expect("the configuration contract is deployed");
+    let data = account.get_data().expect("storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    slice.checked_drain_reference().expect("the parameter dictionary");
+    let votes = next_dictionary(&mut slice, 256);
+    let status = votes.get(
+        chain_block::SliceData::load_builder(
+            chain_block::BuilderData::with_raw(proposal_hash.to_vec(), 256).expect("a key"),
+        )
+        .expect("a key slice"),
+    );
+    let mut status = match status.expect("lookup") {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    // cfg_proposal_status#ce expires:uint32 proposal:^ConfigProposal is_critical:Bool
+    //   voters:(HashmapE 16 True) ...
+    assert_eq!(status.get_next_byte().expect("the status tag"), 0xce, "not a proposal status");
+    status.get_next_u32().expect("expiry");
+    status.checked_drain_reference().expect("the proposal");
+    status.get_next_bit().expect("critical");
+    let voters = next_dictionary(&mut status, 16);
+    let mut indices = Vec::new();
+    chain_block::HashmapType::iterate_slices(&voters, |mut key, _| {
+        indices.push(key.get_next_u16()?);
+        Ok(true)
+    })
+    .expect("the voters");
+    indices.sort_unstable();
+    indices
+}
+
+/// Make an accepted proposal reachable within one round of voting.
+///
+/// The chain launches asking an ordinary proposal to win two rounds, and a round turns
+/// over only when the validator set does. That is a property of the voting policy, which
+/// is configuration and not authority, so a test about what an accepted proposal may
+/// install sets it to one round rather than running two elections to reach the same
+/// call. The rule under test is unaffected by how many rounds preceded it.
+fn require_one_winning_round(chain: &mut Chain) {
+    use chain_block::IBitstring;
+    // ConfigVotingSetup: cfg_vote_setup#91 normal_params:^ConfigProposalSetup
+    //   critical_params:^ConfigProposalSetup
+    // ConfigProposalSetup: #36 min_tot_rounds:uint8 max_tot_rounds:uint8 min_wins:uint8
+    //   max_losses:uint8 min_store_sec:uint32 max_store_sec:uint32 bit_price:uint32
+    //   cell_price:uint32
+    let setup = |min_rounds: u8, min_wins: u8, bit_price: u32, cell_price: u32| {
+        let mut b = chain_block::BuilderData::new();
+        b.append_u8(0x36).expect("tag");
+        b.append_u8(min_rounds).expect("min rounds");
+        b.append_u8(3).expect("max rounds");
+        b.append_u8(min_wins).expect("min wins");
+        b.append_u8(2).expect("max losses");
+        b.append_u32(1_000_000).expect("min store");
+        b.append_u32(10_000_000).expect("max store");
+        b.append_u32(bit_price).expect("bit price");
+        b.append_u32(cell_price).expect("cell price");
+        b.into_cell().expect("a proposal setup")
+    };
+    let mut value = chain_block::BuilderData::new();
+    value.append_u8(0x91).expect("tag");
+    value.checked_append_reference(setup(1, 1, 1, 500)).expect("ordinary proposals");
+    value.checked_append_reference(setup(1, 1, 2, 1000)).expect("critical proposals");
+
+    set_contract_parameter(chain, 11, value.into_cell().expect("a voting setup"));
+}
+
+/// What became of a proposal the validators voted on.
+#[derive(Debug, PartialEq, Eq)]
+struct Governed {
+    /// The proposal was decided: enough weight voted for it that the contract took it up
+    /// and removed it from the pending votes. Without this, "not installed" would also
+    /// be the answer for a proposal nobody finished voting on.
+    decided: bool,
+    /// The parameter is in the configuration afterwards.
+    installed: bool,
+}
+
+/// Propose a parameter value and have the current validators vote on it.
+///
+/// This is the only way a configuration parameter changes now, so it is also the fixture
+/// every test that needs a parameter installed has to go through.
+///
+/// A proposal the contract refuses to install is not an error: it is decided and
+/// returned unchanged, and the vote that carried it succeeds. So the answer is what
+/// happened to the configuration, not an exit code -- an exit code would read the same
+/// for a rule that refused the value and for a proposal that never carried.
+fn govern_install(
+    chain: &mut Chain,
+    validators: &[PqValidator],
+    param_id: i32,
+    value: chain_block::Cell,
+    query_base: u64,
+) -> Governed {
+    let proposal = propose_cell(chain, param_id, value, query_base);
+    let sender =
+        chain.blockchain.treasury(&format!("govern-{query_base}"), 500 * TOS).expect("an account");
+    let mut decided = false;
+    for (round, voter) in validators.iter().enumerate() {
+        let idx = index_of(chain, voter);
+        let signature =
+            voter.sign_under(&vote_preimage(chain, idx, &proposal), CONFIG_VOTE_CONTEXT);
+        let result = chain
+            .blockchain
+            .send_message(sender.build_message(
+                &chain.config_contract,
+                VOTE_VALUE,
+                true,
+                Some(vote_body(query_base + round as u64, &signature, idx, &proposal)),
+            ))
+            .expect("the vote is delivered");
+        assert_eq!(exit_code_of(&result), 0, "a validator's vote was refused");
+        // The contract drops a proposal's status once it has decided it, so the vote it
+        // was recorded in disappearing is how a decision is visible from outside.
+        if proposal_voters(chain, &proposal).is_empty() {
+            decided = true;
+            break;
+        }
+    }
+    let installed = parameter_present(&configuration_from_contract(chain), param_id as u32);
+    Governed { decided, installed }
 }
 
 /// A controller policy holding `count` distinct code hashes.
@@ -1179,70 +1156,35 @@ fn controller_policy(count: usize) -> chain_block::Cell {
     value.into_cell().expect("a controller policy")
 }
 
-/// Install a configuration parameter through the administrator path.
-fn admin_set_parameter(
-    chain: &mut Chain,
-    admin: &ed25519_dalek::SigningKey,
-    parameter: i32,
-    value: chain_block::Cell,
-) -> tos_sandbox::SendResult {
-    use chain_block::{GetRepresentationHash, IBitstring};
-    let mut signed = chain_block::BuilderData::new();
-    signed.append_u32(ADMIN_CHANGE_PARAMETER).expect("action");
-    signed.append_u32(config_seqno(chain) as u32).expect("sequence number");
-    signed.append_u32(chain.blockchain.now() + 600).expect("valid until");
-    signed.append_i32(parameter).expect("parameter");
-    signed.checked_append_reference(value).expect("value");
-    let signed_cell = signed.into_cell().expect("the signed part");
-    let digest = signed_cell.hash(0);
-    let signature: [u8; 64] = ed25519_dalek::Signer::sign(admin, digest.as_slice()).to_bytes();
-
-    let mut body = chain_block::BuilderData::new();
-    body.append_raw(&signature, 512).expect("signature");
-    body.checked_append_references_and_data(
-        &chain_block::SliceData::load_cell(signed_cell).expect("the signed part"),
-    )
-    .expect("the signed part follows the signature");
-
-    chain
-        .blockchain
-        .send_message(
-            tos_sandbox::MessageBuilder::external(&chain.config_contract)
-                .body(body.into_cell().expect("administrator message"))
-                .build(),
-        )
-        .expect("the administrator message is delivered")
-}
-
 /// The ceiling on admitted controller codes is part of the parameter, not a note about it.
 ///
 /// A hashmap carries no cardinality, so a bound that lives only in prose is a bound that
 /// is never reached by anything. This is the configuration contract refusing the ninth.
 #[test]
 fn the_controller_policy_cannot_grow_past_its_ceiling() {
-    let (mut chain, _validators, _election) = elect_install_and_rotate();
-    let admin = ed25519_dalek::SigningKey::from_bytes(&[0x5a; 32]);
-    install_admin_key(&mut chain, &admin.verifying_key().to_bytes());
+    let (mut chain, validators, _election) = elect_install_and_rotate();
+    require_one_winning_round(&mut chain);
 
-    // Eight is the ceiling, and it is admitted.
-    let result = admin_set_parameter(&mut chain, &admin, 47, controller_policy(8));
-    assert_eq!(exit_code_of(&result), 0, "a policy at the ceiling was refused");
-    assert!(
-        parameter_present(&configuration_from_contract(&chain), 47),
-        "the policy was not installed"
+    // Eight is the ceiling, and a vote of the validators installs it.
+    assert_eq!(
+        govern_install(&mut chain, &validators, 47, controller_policy(8), 100),
+        Governed { decided: true, installed: true },
+        "a policy at the ceiling was refused"
     );
+    let at_ceiling = configuration_from_contract(&chain).config(47).expect("parameter 47");
 
-    // The ninth is not, and the configuration is left as it was.
-    let refused = admin_set_parameter(&mut chain, &admin, 47, controller_policy(9));
-    assert_ne!(
-        exit_code_of(&refused),
-        0,
+    // The ninth is refused by the rule, not by the vote: the validators carried the
+    // proposal and the contract still declined to install it.
+    assert_eq!(
+        govern_install(&mut chain, &validators, 47, controller_policy(9), 200),
+        Governed { decided: true, installed: true },
+        "the fixture needs a proposal the validators actually carried"
+    );
+    assert_eq!(
+        configuration_from_contract(&chain).config(47).expect("parameter 47"),
+        at_ceiling,
         "a ninth controller code was admitted, so the ceiling is prose"
     );
-
-    // What is installed is still the policy of eight.
-    let installed = configuration_from_contract(&chain).config(47).expect("parameter 47").is_some();
-    assert!(installed, "the refused policy removed the one that was there");
 }
 
 /// The compute-phase exit code of the first transaction a message produced.
@@ -1266,8 +1208,8 @@ fn exit_code_of(result: &tos_sandbox::SendResult) -> i32 {
 // ---------------------------------------------------------------------------
 
 const NEW_COMPLAINT: u32 = 0x52674370;
-const COMPLAINT_VOTE: u32 = 0x56744370;
-const COMPLAINT_VOTE_SIGN_TAG: u32 = 0x56744350;
+const COMPLAINT_VOTE: u32 = 0x5051636f;
+const COMPLAINT_VOTE_SIGN_TAG: u32 = 0x5051434f;
 const COMPLAINT_ACCEPTED: u32 = 0xf2676350;
 /// `send_message_back(.., res + 0xd6745240, ..)`: 1 is a vote counted and not yet
 /// decisive, 2 is the vote that carries the complaint and applies the fine.
@@ -1282,6 +1224,7 @@ const COMPLAINT_CARRIED: u32 = 0xd6745240 + 2;
 /// storing it, so the hash a vote refers to is not the hash of what was sent. The test
 /// reads that hash out of the contract's own storage rather than recomputing it.
 fn complaint_body(query_id: u64, election: u32, accused: &[u8; 32]) -> chain_block::Cell {
+    // `accused` is a validator identity: the account the elector saw place the stake.
     use chain_block::IBitstring;
     let mut description = chain_block::BuilderData::new();
     description.append_u32(0).expect("an empty description");
@@ -1379,10 +1322,47 @@ fn frozen_stake(chain: &Chain, election: u32, validator: &[u8; 32]) -> u128 {
     stake
 }
 
+/// Exactly the bytes the elector verifies for a complaint vote.
+fn complaint_vote_preimage(
+    chain: &Chain,
+    idx: u16,
+    election: u32,
+    complaint: &[u8; 32],
+) -> Vec<u8> {
+    let mut preimage = Vec::with_capacity(110);
+    preimage.extend_from_slice(&COMPLAINT_VOTE_SIGN_TAG.to_be_bytes());
+    preimage.extend_from_slice(&global_id(chain).to_be_bytes());
+    preimage.extend_from_slice(&current_set_id(chain));
+    preimage.extend_from_slice(&validator_id_at(chain, idx));
+    preimage.extend_from_slice(&idx.to_be_bytes());
+    preimage.extend_from_slice(&election.to_be_bytes());
+    preimage.extend_from_slice(complaint);
+    assert_eq!(preimage.len(), 110, "the signed preimage changed shape");
+    preimage
+}
+
+fn complaint_vote_body(
+    query_id: u64,
+    signature: &[u8],
+    idx: u16,
+    election: u32,
+    complaint: &[u8; 32],
+) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(COMPLAINT_VOTE).expect("operation");
+    body.append_u64(query_id).expect("query id");
+    body.append_u16(idx).expect("index");
+    body.append_u32(election).expect("election");
+    body.append_raw(complaint, 256).expect("complaint");
+    body.checked_append_reference(stored_bytes(signature)).expect("signature");
+    body.into_cell().expect("complaint vote body")
+}
+
 #[test]
 fn a_validator_votes_to_punish_a_validator_of_a_past_election() {
     let (mut chain, validators, election) = elect_install_and_rotate();
-    let accused = &validators[3];
+    let accused = validator_id_at(&chain, index_of(&chain, &validators[3]));
     let complainant =
         chain.blockchain.treasury("complainant", 1_000 * TOS).expect("a funded account");
 
@@ -1392,7 +1372,7 @@ fn a_validator_votes_to_punish_a_validator_of_a_past_election() {
             &chain.elector,
             300 * TOS,
             true,
-            Some(complaint_body(1, election, &accused.public_key)),
+            Some(complaint_body(1, election, &accused)),
         ))
         .expect("the complaint is delivered");
     let tags = replies(&result);
@@ -1402,7 +1382,7 @@ fn a_validator_votes_to_punish_a_validator_of_a_past_election() {
     assert_eq!(hashes.len(), 1, "exactly one complaint should be registered");
     let complaint = hashes[0];
 
-    let before = frozen_stake(&chain, election, &accused.public_key);
+    let before = frozen_stake(&chain, election, &accused);
     assert_ne!(before, 0, "the accused should have a frozen stake to be fined from");
 
     // One vote is counted and decides nothing; the complaint carries once enough weight
@@ -1411,28 +1391,16 @@ fn a_validator_votes_to_punish_a_validator_of_a_past_election() {
     let sender = chain.blockchain.treasury("complaint-relay", 100 * TOS).expect("an account");
     let mut carried = false;
     for (round, voter) in validators.iter().take(3).enumerate() {
-        let idx = index_of(&chain, &voter.public_key);
-        let mut preimage = Vec::with_capacity(42);
-        preimage.extend_from_slice(&COMPLAINT_VOTE_SIGN_TAG.to_be_bytes());
-        preimage.extend_from_slice(&idx.to_be_bytes());
-        preimage.extend_from_slice(&election.to_be_bytes());
-        preimage.extend_from_slice(&complaint);
-        let signature: [u8; 64] = ed25519_dalek::Signer::sign(&voter.key, &preimage).to_bytes();
-
-        use chain_block::IBitstring;
-        let mut body = chain_block::BuilderData::new();
-        body.append_u32(COMPLAINT_VOTE).expect("operation");
-        body.append_u64(10 + round as u64).expect("query id");
-        body.append_raw(&signature, 512).expect("signature");
-        body.append_raw(&preimage, 42 * 8).expect("the signed fields");
+        let idx = index_of(&chain, voter);
+        let signature = voter.sign(&complaint_vote_preimage(&chain, idx, election, &complaint));
 
         let result = chain
             .blockchain
             .send_message(sender.build_message(
                 &chain.elector,
-                10 * TOS,
+                VOTE_VALUE,
                 true,
-                Some(body.into_cell().expect("vote body")),
+                Some(complaint_vote_body(10 + round as u64, &signature, idx, election, &complaint)),
             ))
             .expect("the vote is delivered");
         result.expect_success();
@@ -1443,7 +1411,7 @@ fn a_validator_votes_to_punish_a_validator_of_a_past_election() {
                 "the first vote was not counted, or decided on its own: {tags:02x?}"
             );
             assert_eq!(
-                frozen_stake(&chain, election, &accused.public_key),
+                frozen_stake(&chain, election, &accused),
                 before,
                 "a fine was taken before the complaint carried"
             );
@@ -1452,7 +1420,7 @@ fn a_validator_votes_to_punish_a_validator_of_a_past_election() {
     }
 
     assert!(carried, "three of four validators voted and the complaint did not carry");
-    let after = frozen_stake(&chain, election, &accused.public_key);
+    let after = frozen_stake(&chain, election, &accused);
     assert_eq!(
         before - after,
         (500 * TOS) as u128,
@@ -1463,7 +1431,7 @@ fn a_validator_votes_to_punish_a_validator_of_a_past_election() {
 #[test]
 fn a_complaint_vote_signed_by_another_validator_is_refused() {
     let (mut chain, validators, election) = elect_install_and_rotate();
-    let accused = &validators[3];
+    let accused = validator_id_at(&chain, index_of(&chain, &validators[3]));
     let complainant =
         chain.blockchain.treasury("complainant-b", 1_000 * TOS).expect("a funded account");
     let result = chain
@@ -1472,7 +1440,7 @@ fn a_complaint_vote_signed_by_another_validator_is_refused() {
             &chain.elector,
             300 * TOS,
             true,
-            Some(complaint_body(1, election, &accused.public_key)),
+            Some(complaint_body(1, election, &accused)),
         ))
         .expect("the complaint is delivered");
     assert!(replies(&result).contains(&COMPLAINT_ACCEPTED), "the complaint was refused");
@@ -1480,31 +1448,19 @@ fn a_complaint_vote_signed_by_another_validator_is_refused() {
 
     let voter = &validators[0];
     let other = &validators[1];
-    let idx = index_of(&chain, &voter.public_key);
-    assert_ne!(idx, index_of(&chain, &other.public_key), "the two validators share an index");
-    let mut preimage = Vec::with_capacity(42);
-    preimage.extend_from_slice(&COMPLAINT_VOTE_SIGN_TAG.to_be_bytes());
-    preimage.extend_from_slice(&idx.to_be_bytes());
-    preimage.extend_from_slice(&election.to_be_bytes());
-    preimage.extend_from_slice(&complaint);
+    let idx = index_of(&chain, voter);
+    assert_ne!(idx, index_of(&chain, other), "the two validators share an index");
     // Valid, over the right complaint and the right index, by the wrong validator.
-    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&other.key, &preimage).to_bytes();
-
-    use chain_block::IBitstring;
-    let mut body = chain_block::BuilderData::new();
-    body.append_u32(COMPLAINT_VOTE).expect("operation");
-    body.append_u64(20).expect("query id");
-    body.append_raw(&signature, 512).expect("signature");
-    body.append_raw(&preimage, 42 * 8).expect("the signed fields");
+    let signature = other.sign(&complaint_vote_preimage(&chain, idx, election, &complaint));
 
     let sender = chain.blockchain.treasury("complaint-relay-b", 100 * TOS).expect("an account");
     chain
         .blockchain
         .send_message(sender.build_message(
             &chain.elector,
-            10 * TOS,
+            VOTE_VALUE,
             true,
-            Some(body.into_cell().expect("vote body")),
+            Some(complaint_vote_body(20, &signature, idx, election, &complaint)),
         ))
         .expect("the vote is delivered")
         .expect_aborted()
@@ -1580,7 +1536,15 @@ impl PqValidator {
     fn new(index: u8) -> Self {
         let key_file = std::env::temp_dir().join(format!("tos-pq-elector-test-{index}.key"));
         if !key_file.exists() {
-            run_key_tool(&["keygen", key_file.to_str().expect("path")]);
+            let mine = key_file.with_extension(format!("{}.tmp", std::process::id()));
+            run_key_tool(&["keygen", mine.to_str().expect("path")]);
+            // Losing the race is fine: whoever won wrote a key, and this one is discarded.
+            match std::fs::hard_link(&mine, &key_file) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => panic!("the key could not be put in place: {e}"),
+            }
+            let _ = std::fs::remove_file(&mine);
         }
         let public_key =
             hex::decode(&run_key_tool(&["public", key_file.to_str().expect("path")])[0])
@@ -1680,6 +1644,49 @@ fn controller_proof(chain: &Chain, who: &tos_sandbox::Treasury) -> chain_block::
 ///
 /// One admitted code and many accounts is the shape of the real rule; the controller
 /// contract's own behaviour is exercised in its own file, not here.
+/// Put a configuration parameter into the configuration contract's own dictionary, and
+/// let the chain adopt it.
+///
+/// Setting it only on the blockchain is not enough. Every rotation refreshes the chain's
+/// configuration from this contract, so a parameter that lives only in the chain's view
+/// disappears the moment a validator set takes over -- and a post-quantum instruction
+/// whose global version went back to fourteen fails as an unknown opcode, which reads
+/// like a broken contract rather than a lost parameter.
+fn set_contract_parameter(chain: &mut Chain, index: i32, value: chain_block::Cell) {
+    use chain_block::IBitstring;
+    let mut account = chain
+        .blockchain
+        .get_account(&chain.config_contract)
+        .expect("the configuration contract is deployed")
+        .clone();
+    let data = account.get_data().expect("storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    let parameters = slice.checked_drain_reference().expect("the parameter dictionary");
+
+    let mut dict = chain_block::HashmapE::with_hashmap(32, Some(parameters));
+    let mut key = chain_block::BuilderData::new();
+    key.append_i32(index).expect("the parameter index");
+    let mut stored = chain_block::BuilderData::new();
+    stored.checked_append_reference(value).expect("the parameter value");
+    dict.set_builder(chain_block::SliceData::load_builder(key).expect("a key slice"), &stored)
+        .expect("the parameter is stored");
+
+    let mut rebuilt = chain_block::BuilderData::new();
+    rebuilt
+        .checked_append_reference(
+            chain_block::HashmapType::data(&dict).expect("a non-empty dictionary").clone(),
+        )
+        .expect("parameters");
+    rebuilt.checked_append_references_and_data(&slice).expect("the votes");
+    account.set_data(rebuilt.into_cell().expect("storage"));
+    chain.blockchain.set_account(chain.config_contract.clone(), account);
+
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(chain))
+        .expect("the chain adopts the parameter");
+}
+
 fn admit_sender_code(chain: &mut Chain, who: &tos_sandbox::Treasury) {
     use chain_block::{GetRepresentationHash, IBitstring};
     let account = chain.blockchain.get_account(who.address()).expect("the sender exists");
@@ -1703,14 +1710,7 @@ fn admit_sender_code(chain: &mut Chain, who: &tos_sandbox::Treasury) {
         )
         .expect("the codes");
 
-    let mut config = chain.blockchain.config_params().clone();
-    config
-        .set_config(chain_block::ConfigParamEnum::ConfigParamAny(
-            47,
-            value.into_cell().expect("a controller policy"),
-        ))
-        .expect("the policy is installed");
-    chain.blockchain.set_config(config).expect("the configuration is replaced");
+    set_contract_parameter(chain, 47, value.into_cell().expect("a controller policy"));
 }
 
 fn pq_stake_body(
@@ -1759,7 +1759,22 @@ fn raise_to_post_quantum_version(chain: &mut Chain) {
             global_version: chain_block::GlobalVersion { version: 16, ..version },
         }))
         .expect("set the global version");
-    chain.blockchain.set_config(config).expect("the chain adopts the version");
+    let raised = config
+        .config_params
+        .get(
+            chain_block::SliceData::load_builder({
+                use chain_block::IBitstring;
+                let mut key = chain_block::BuilderData::new();
+                key.append_i32(8).expect("the parameter index");
+                key
+            })
+            .expect("a key slice"),
+        )
+        .expect("lookup")
+        .expect("the version was just set")
+        .reference(0)
+        .expect("the parameter value is stored behind a reference");
+    set_contract_parameter(chain, 8, raised);
 
     // A post-quantum stake is admitted only from an account born with a controller code
     // the configuration admits. Every sandbox account shares one code, so admitting it
@@ -1853,7 +1868,6 @@ fn pq_book(chain: &Chain) -> (chain_block::HashmapE, chain_block::HashmapE) {
             es.get_next_bits(bytes * 8).expect("an amount");
         }
     }
-    next_dictionary(&mut es, 256); // classical members
     es.get_next_bit().expect("failed");
     es.get_next_bit().expect("finished");
     let members = next_dictionary(&mut es, 256);
@@ -2164,13 +2178,9 @@ fn rewrite_election_with_book_fields(chain: &mut Chain, book_fields: usize) {
             legacy.append_raw(&amount, bytes * 8).expect("an amount");
         }
     }
-    for field in ["the members dictionary", "failed", "finished"] {
+    for field in ["failed", "finished"] {
         if es.get_next_bit().expect(field) {
             legacy.append_bit_one().expect(field);
-            if field == "the members dictionary" {
-                let members = es.checked_drain_reference().expect("the members");
-                legacy.checked_append_reference(members).expect("the members");
-            }
         } else {
             legacy.append_bit_zero().expect(field);
         }
@@ -2193,11 +2203,11 @@ fn rewrite_election_with_book_fields(chain: &mut Chain, book_fields: usize) {
 fn an_election_opened_before_the_upgrade_is_read_and_written_again() {
     let (mut chain, treasury, election) = open_election("legacy-elect", 60_000 * TOS);
     raise_to_post_quantum_version(&mut chain);
-    let classical = Validator::new(0xf1);
-
-    let opening = stake(&mut chain, &treasury, &classical, election, 1, 11_000 * TOS);
+    let opening =
+        pq_stake(&mut chain, &treasury, &PqValidator::new(0xf1), election, 1, 11_000 * TOS);
     assert_eq!(reply(&opening), (STAKE_ACCEPTED, 0), "the fixture needs a member");
-    let placed = stake_of(&chain, &classical.public_key);
+    let placed = declared_total_stake(&chain);
+    assert_ne!(placed, 0, "the fixture needs a running total to read back");
     rewrite_election_with_book_fields(&mut chain, 0);
 
     // Every entry point reads the election first, so an unreadable one stops the elector
@@ -2252,28 +2262,19 @@ fn a_stake_refused_without_its_key_does_not_pay_for_a_verification() {
     );
     let registration = compute_gas(&accepted);
 
-    let classical = Validator::new(0xf7);
-    let classical_refused = stake(&mut chain, &treasury, &classical, election + 1, 3, 11_000 * TOS);
-    assert_eq!(reply(&classical_refused), (STAKE_RETURNED, REASON_WRONG_ELECTION));
-    let classical_refusal = compute_gas(&classical_refused);
-
     assert!(
         refusal * 4 < registration,
         "refusing a stake for its election costs {refusal} gas against {registration} for a \
          registration, so the verification is being paid for before the refusal"
-    );
-    assert!(
-        refusal < classical_refusal * 2,
-        "the same refusal costs {refusal} gas on the post-quantum path and \
-         {classical_refusal} on the classical one, though neither needs a key"
     );
 }
 
 #[test]
 fn half_a_post_quantum_book_is_refused_rather_than_read_as_empty() {
     let (mut chain, treasury, election) = open_election("legacy-partial", 40_000 * TOS);
-    let classical = Validator::new(0xf3);
-    let opening = stake(&mut chain, &treasury, &classical, election, 1, 11_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let opening =
+        pq_stake(&mut chain, &treasury, &PqValidator::new(0xf3), election, 1, 11_000 * TOS);
     assert_eq!(reply(&opening), (STAKE_ACCEPTED, 0), "the fixture needs a member");
 
     // Neither version of the elector ever wrote one dictionary of the book. Reading such
