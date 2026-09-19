@@ -152,6 +152,44 @@ td::Ref<vm::Cell> member_record(std::size_t index, const std::string& public_key
   return cb.finalize();
 }
 
+// The classical elector record as the contract writes it today: stake, timestamp,
+// max_factor, controller address and ADNL address, with no key blob because the key is
+// the dictionary key. Measured so the post-quantum number can be read as a delta rather
+// than as a verdict on a limit that may already bind.
+td::Ref<vm::Cell> classical_member_record(std::size_t index) {
+  vm::CellBuilder cb;
+  cb.store_long(8, 4);
+  cb.store_long(100000000000ll, 64);
+  cb.store_long(1789434000, 32);
+  cb.store_long(0x10000, 32);
+  cb.store_bits_bool(bits_from("controller-" + std::to_string(index)).cbits(), 256);
+  cb.store_bits_bool(bits_from("adnl-" + std::to_string(index)).cbits(), 256);
+  return cb.finalize();
+}
+
+// What a past election freezes per member: controller, weight, stake, banned flag. No
+// key, in either design, which is why past elections are not part of the key problem.
+td::Ref<vm::Cell> frozen_record(std::size_t index) {
+  vm::CellBuilder cb;
+  cb.store_bits_bool(bits_from("controller-" + std::to_string(index)).cbits(), 256);
+  cb.store_long(1, 64);
+  cb.store_long(8, 4);
+  cb.store_long(100000000000ll, 64);
+  cb.store_long(0, 1);
+  return cb.finalize();
+}
+
+td::Ref<vm::Cell> classical_dict(std::size_t count, bool frozen) {
+  vm::Dictionary dict{256};
+  for (std::size_t i = 0; i < count; i++) {
+    auto key = bits_from("classical-" + std::to_string(i));
+    auto ok = dict.set_ref(key.cbits(), 256, frozen ? frozen_record(i) : classical_member_record(i),
+                           vm::Dictionary::SetMode::Add);
+    assert(ok);
+  }
+  return dict.get_root_cell();
+}
+
 struct ElectorState {
   td::Ref<vm::Cell> members;
   td::Ref<vm::Cell> key_owner;
@@ -226,6 +264,10 @@ int main() {
     report("members dictionary, candidates", count, members, mc_account_state_cell_limit);
     report("key_owner reverse index", count, owner, mc_account_state_cell_limit);
     report("elector registration total", count, total, mc_account_state_cell_limit);
+    auto classical_members = measure(classical_dict(count, false));
+    auto classical_frozen = measure(classical_dict(count, true));
+    report("classical members (today)", count, classical_members, mc_account_state_cell_limit);
+    report("one past election, frozen", count, classical_frozen, mc_account_state_cell_limit);
     std::printf("\n");
   }
 
