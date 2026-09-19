@@ -1039,3 +1039,94 @@ fn a_validator_can_still_vote_through_an_external_message() {
         "the external path accepted a message without counting it"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The unilateral administrator
+//
+// A single key, held off-chain, can change any configuration parameter and replace the
+// configuration and elector code, through an external message. The post-quantum design
+// removes this rather than converting it, so what it can do today is recorded here.
+// ---------------------------------------------------------------------------
+
+/// `perform_action` 0x43665021: change one configuration parameter.
+const ADMIN_CHANGE_PARAMETER: u32 = 0x43665021;
+
+/// Put a known administrator key into the configuration contract's storage.
+///
+/// The zerostate generates that key into a file this test does not read, so the path
+/// could not be exercised at all without supplying one. Only the stored key changes; the
+/// contract, and every check it makes, is the deployed one.
+fn install_admin_key(chain: &mut Chain, public_key: &[u8; 32]) {
+    use chain_block::IBitstring;
+    let mut account = chain
+        .blockchain
+        .get_account(&chain.config_contract)
+        .expect("the configuration contract is deployed")
+        .clone();
+    let data = account.get_data().expect("storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    let parameters = slice.checked_drain_reference().expect("the parameter dictionary");
+    let seqno = slice.get_next_u32().expect("sequence number");
+    let _old_key = slice.get_next_bits(256).expect("the administrator key");
+
+    let mut rebuilt = chain_block::BuilderData::new();
+    rebuilt.checked_append_reference(parameters).expect("parameters");
+    rebuilt.append_u32(seqno).expect("sequence number");
+    rebuilt.append_raw(public_key, 256).expect("administrator key");
+    rebuilt.checked_append_references_and_data(&slice).expect("the votes");
+    account.set_data(rebuilt.into_cell().expect("storage"));
+    chain.blockchain.set_account(chain.config_contract.clone(), account);
+}
+
+#[test]
+fn the_administrator_key_alone_can_change_a_configuration_parameter() {
+    let (mut chain, _validators) = elect_install_and_rotate();
+    let admin = ed25519_dalek::SigningKey::from_bytes(&[0x5a; 32]);
+    install_admin_key(&mut chain, &admin.verifying_key().to_bytes());
+
+    let parameter = 77i32;
+    assert!(
+        !parameter_present(&configuration_from_contract(&chain), parameter as u32),
+        "the fixture needs a parameter that is not already set"
+    );
+
+    use chain_block::IBitstring;
+    let mut value = chain_block::BuilderData::new();
+    value.append_u32(0xc0ffee).expect("a value");
+    let mut signed = chain_block::BuilderData::new();
+    signed.append_u32(ADMIN_CHANGE_PARAMETER).expect("action");
+    signed.append_u32(config_seqno(&chain) as u32).expect("sequence number");
+    signed.append_u32(chain.blockchain.now() + 600).expect("valid until");
+    signed.append_i32(parameter).expect("parameter");
+    signed.checked_append_reference(value.into_cell().expect("value")).expect("value");
+    let signed_cell = signed.into_cell().expect("the signed part");
+
+    // This path hashes what it verifies, unlike the vote path beside it, which signs the
+    // bytes as they are. Two instructions, two meanings, one contract.
+    use chain_block::GetRepresentationHash;
+    let digest = signed_cell.hash(0);
+    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&admin, digest.as_slice()).to_bytes();
+
+    let mut body = chain_block::BuilderData::new();
+    body.append_raw(&signature, 512).expect("signature");
+    body.checked_append_references_and_data(
+        &chain_block::SliceData::load_cell(signed_cell).expect("the signed part"),
+    )
+    .expect("the signed part follows the signature");
+
+    chain
+        .blockchain
+        .send_message(
+            tos_sandbox::MessageBuilder::external(&chain.config_contract)
+                .body(body.into_cell().expect("administrator message"))
+                .build(),
+        )
+        .expect("the administrator message is delivered")
+        .expect_success()
+        .expect_exit_code(0);
+
+    assert!(
+        parameter_present(&configuration_from_contract(&chain), parameter as u32),
+        "one key changed nothing, or the path this test exists to record has already gone"
+    );
+}
