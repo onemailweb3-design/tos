@@ -2108,6 +2108,689 @@ fn an_underfunded_complaint_vote_is_refused_before_the_verification() {
     );
 }
 
+/// The indices that have voted on a complaint, read from the elector's own storage.
+fn complaint_voters(chain: &Chain, election: u32, complaint: &[u8; 32]) -> Vec<u16> {
+    let account = chain.blockchain.get_account(&chain.elector).expect("the elector is deployed");
+    let data = account.get_data().expect("the elector has storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    next_dictionary(&mut slice, 32); // the active election
+    next_dictionary(&mut slice, 256); // credits
+    let past = next_dictionary(&mut slice, 32);
+    let mut record = past
+        .get(
+            chain_block::SliceData::load_builder(
+                chain_block::BuilderData::with_raw(election.to_be_bytes().to_vec(), 32)
+                    .expect("a key"),
+            )
+            .expect("a key slice"),
+        )
+        .expect("lookup")
+        .expect("the election is remembered");
+    record.get_next_u32().expect("unfreeze at");
+    record.get_next_u32().expect("stake held");
+    record.get_next_bits(256).expect("the set hash");
+    next_dictionary(&mut record, 256); // the frozen stakes
+    for _ in 0..2 {
+        let bytes = record.get_next_int(4).expect("an amount length") as usize;
+        if bytes > 0 {
+            record.get_next_bits(bytes * 8).expect("an amount");
+        }
+    }
+    let complaints = next_dictionary(&mut record, 256);
+    let status = complaints.get(
+        chain_block::SliceData::load_builder(
+            chain_block::BuilderData::with_raw(complaint.to_vec(), 256).expect("a key"),
+        )
+        .expect("a key slice"),
+    );
+    let mut status = match status.expect("lookup") {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    assert_eq!(status.get_next_byte().expect("the status tag"), 0x2d, "not a complaint status");
+    status.checked_drain_reference().expect("the complaint");
+    let voters = next_dictionary(&mut status, 16);
+    let mut indices = Vec::new();
+    chain_block::HashmapType::iterate_slices(&voters, |mut key, _| {
+        indices.push(key.get_next_u16()?);
+        Ok(true)
+    })
+    .expect("the voters");
+    indices.sort_unstable();
+    indices
+}
+
+#[test]
+fn post_quantum_authority_holds_from_the_controller_to_the_governed_change() {
+    let (mut chain, _treasury, election) = open_election("cutover-e2e", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+
+    // --- the controllers, and the only code the configuration admits ----------------
+    let mut validators: Vec<RootedValidator> =
+        (0..4u8).map(|index| deploy_rooted_validator(&mut chain, index)).collect();
+    admit_code_of(&mut chain, &validators[0].address);
+
+    // --- each controller places a stake, authorised by its own root key -------------
+    for (index, validator) in validators.iter_mut().enumerate() {
+        let preimage = pq_stake_preimage(
+            global_id(&chain),
+            election,
+            0x10000,
+            &validator.id(),
+            &validator.consensus.key_id(),
+            &validator.consensus.adnl,
+        );
+        let signature = validator.consensus.sign(&preimage);
+        let witness = birth_witness(&chain, &validator.address.clone());
+        let body = pq_stake_body(
+            10 + index as u64,
+            &validator.consensus,
+            election,
+            0x10000,
+            &signature,
+            Some(witness),
+        );
+        let result = validator.send_to_elector(&mut chain, 11_000 * TOS, body);
+        result.expect_success();
+        assert!(
+            replies(&result).contains(&STAKE_ACCEPTED),
+            "controller {index} could not place a stake: {:02x?}",
+            replies(&result)
+        );
+    }
+
+    // --- the election selects them, and the configuration contract installs them ----
+    let closes = election - chain.elect_end_before;
+    chain.blockchain.set_now(closes);
+    let result =
+        chain.blockchain.tick_tock(&chain.elector, TransactionTickTock::Tick).expect("tick runs");
+    result.expect_success();
+    assert!(
+        replies(&result).contains(&VALIDATOR_SET_INSTALLED),
+        "the configuration contract refused the elected set: {:02x?}",
+        replies(&result)
+    );
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    let takes_over = chain
+        .blockchain
+        .config_params()
+        .next_validator_set()
+        .expect("the next set is installed")
+        .utime_since();
+    chain.blockchain.set_now(takes_over);
+    chain
+        .blockchain
+        .tick_tock(&chain.config_contract, TransactionTickTock::Tock)
+        .expect("tock runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the rotated set");
+
+    // The set is post-quantum, and it names the controllers rather than their keys.
+    let set = chain.blockchain.config_params().validator_set().expect("a current set");
+    assert_eq!(set.list().len(), 4, "every controller should have been elected");
+    for descriptor in set.list() {
+        assert!(descriptor.pq_key().is_some(), "the elected set carries a classical descriptor");
+        assert!(
+            validators.iter().any(|v| v.id() == descriptor.validator_id().expect("an identity")),
+            "the set names an identity no controller has"
+        );
+    }
+
+    // --- only the current set can govern --------------------------------------------
+    let proposal = propose(&mut chain, 42, 0xc0de);
+    let relay = chain.blockchain.treasury("cutover-relay", 1_000 * TOS).expect("an account");
+
+    let voter = &validators[0];
+    let idx = index_of_pq(&chain, &voter.consensus);
+    let signature =
+        voter.consensus.sign_under(&vote_preimage(&chain, idx, &proposal), CONFIG_VOTE_CONTEXT);
+    let result = chain
+        .blockchain
+        .send_message(relay.build_message(
+            &chain.config_contract,
+            VOTE_VALUE,
+            true,
+            Some(vote_body(1, &signature, idx, &proposal)),
+        ))
+        .expect("the vote is delivered");
+    assert_eq!(exit_code_of(&result), 0, "a validator of the current set could not vote");
+    assert_eq!(proposal_voters(&chain, &proposal), vec![idx], "the vote was not counted");
+
+    // Another validator's signature at that index is refused, and counts for nobody.
+    let other = &validators[1];
+    let stolen =
+        other.consensus.sign_under(&vote_preimage(&chain, idx, &proposal), CONFIG_VOTE_CONTEXT);
+    chain
+        .blockchain
+        .send_message(relay.build_message(
+            &chain.config_contract,
+            VOTE_VALUE,
+            true,
+            Some(vote_body(2, &stolen, idx, &proposal)),
+        ))
+        .expect("the vote is delivered")
+        .expect_aborted()
+        .expect_exit_code(ERROR_BAD_VOTE_SIGNATURE);
+    assert_eq!(
+        proposal_voters(&chain, &proposal),
+        vec![idx],
+        "a vote signed by the wrong validator changed who had voted"
+    );
+
+    // And nothing arrives from outside the chain.
+    assert!(
+        chain
+            .blockchain
+            .send_message(
+                tos_sandbox::MessageBuilder::external(&chain.config_contract)
+                    .body(vote_body(3, &signature, idx, &proposal))
+                    .build(),
+            )
+            .is_err(),
+        "the configuration contract accepted an external message"
+    );
+    assert_eq!(
+        proposal_voters(&chain, &proposal),
+        vec![idx],
+        "an external message changed who had voted"
+    );
+
+    // --- the same, for a complaint against a validator of the closed election --------
+    let accused = validator_id_at(&chain, index_of_pq(&chain, &validators[3].consensus));
+    let complainant =
+        chain.blockchain.treasury("cutover-complainant", 10_000 * TOS).expect("an account");
+    let filed = chain
+        .blockchain
+        .send_message(complainant.build_message(
+            &chain.elector,
+            300 * TOS,
+            true,
+            Some(complaint_body(1, election, &accused)),
+        ))
+        .expect("the complaint is delivered");
+    assert!(replies(&filed).contains(&COMPLAINT_ACCEPTED), "the elector refused the complaint");
+    let complaint = complaint_hashes(&chain, election)[0];
+
+    let counted = chain
+        .blockchain
+        .send_message(relay.build_message(
+            &chain.elector,
+            VOTE_VALUE,
+            true,
+            Some(complaint_vote_body(
+                10,
+                &validators[0].consensus.sign_under(
+                    &complaint_vote_preimage(&chain, idx, election, &complaint),
+                    ELECTION_CONTEXT,
+                ),
+                idx,
+                election,
+                &complaint,
+            )),
+        ))
+        .expect("the vote is delivered");
+    assert_eq!(exit_code_of(&counted), 0, "a validator of the current set could not vote");
+    assert_eq!(
+        complaint_voters(&chain, election, &complaint),
+        vec![idx],
+        "the complaint vote was not counted"
+    );
+
+    // Signed by a validator that is not the one at that index.
+    let stolen_complaint = validators[1]
+        .consensus
+        .sign_under(&complaint_vote_preimage(&chain, idx, election, &complaint), ELECTION_CONTEXT);
+    chain
+        .blockchain
+        .send_message(relay.build_message(
+            &chain.elector,
+            VOTE_VALUE,
+            true,
+            Some(complaint_vote_body(11, &stolen_complaint, idx, election, &complaint)),
+        ))
+        .expect("the vote is delivered")
+        .expect_aborted()
+        .expect_exit_code(ERROR_BAD_VOTE_SIGNATURE);
+    assert_eq!(
+        complaint_voters(&chain, election, &complaint),
+        vec![idx],
+        "a complaint vote signed by the wrong validator changed who had voted"
+    );
+
+    // The operation the chain used before this work: the elector does not know it, so
+    // the message is answered as an unknown query and nothing is recorded.
+    use chain_block::IBitstring;
+    let mut legacy = chain_block::BuilderData::new();
+    legacy.append_u32(0x5674_4370).expect("the operation that used to carry a complaint vote");
+    legacy.append_u64(12).expect("query id");
+    legacy.append_raw(&[0u8; 64], 512).expect("an Ed25519 signature");
+    legacy.append_u32(0x5674_4350).expect("the tag it used to sign under");
+    legacy.append_u16(idx).expect("index");
+    legacy.append_u32(election).expect("election");
+    legacy.append_raw(&complaint, 256).expect("complaint");
+    let refused = chain
+        .blockchain
+        .send_message(relay.build_message(
+            &chain.elector,
+            VOTE_VALUE,
+            true,
+            Some(legacy.into_cell().expect("a legacy complaint vote")),
+        ))
+        .expect("the message is delivered");
+    assert_eq!(
+        reply(&refused).0,
+        UNKNOWN_QUERY,
+        "the elector still recognises the classical complaint vote"
+    );
+    assert_eq!(
+        complaint_voters(&chain, election, &complaint),
+        vec![idx],
+        "an Ed25519 complaint vote changed who had voted"
+    );
+
+    // --- a governed change still goes through ---------------------------------------
+    require_one_winning_round(&mut chain);
+    let policy = controller_policy(2);
+    let governed = govern_install_pq(&mut chain, &validators, 47, policy.clone(), 400);
+    assert!(governed.decided, "the validators did not carry the proposal");
+    assert_eq!(
+        raw_parameter(&chain, 47),
+        Some(policy),
+        "a change the current validators voted for was not made"
+    );
+
+    // --- and no key can make one on its own ------------------------------------------
+    assert!(
+        !govern_install_pq(&mut chain, &validators, -999, stored_bytes(&[0x5a; 32]), 500).installed,
+        "the validators voted an administrator in"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// What the cutover costs at the sizes the chain is configured for
+//
+// The configuration allows up to four hundred validators. Every rule the cutover added
+// runs once per descriptor, so the figures that matter are not the ones measured on the
+// four-member fixture the behavioural tests use.
+//
+// The sets here are synthesised rather than elected, because what is being measured is
+// the contract's work over a set of a given size and not the election that produced it.
+// Each descriptor is distinct in both identities, as an elected one would be.
+// ---------------------------------------------------------------------------
+
+/// A validator set of `count` descriptors, each with its own identity and its own key.
+fn synthetic_set(now: u32, count: u16) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut list = chain_block::HashmapE::with_bit_len(16);
+    let weight = 1u64 << 40;
+    for index in 0..count {
+        // A key of the admitted length, differing between descriptors, so each derives
+        // its own key identity the way an elected one does.
+        let mut key = vec![0x5au8; MLDSA44_PUBLIC_KEY_BYTES];
+        key[0..2].copy_from_slice(&index.to_be_bytes());
+        let mut identity = [0u8; 32];
+        identity[30..32].copy_from_slice(&(index + 1).to_be_bytes());
+        let mut adnl = [0u8; 32];
+        adnl[0..2].copy_from_slice(&index.to_be_bytes());
+        adnl[31] = 1;
+
+        let mut descr = chain_block::BuilderData::new();
+        descr.append_u8(0xb3).expect("tag");
+        descr.append_raw(&identity, 256).expect("validator identity");
+        descr.append_u16(1).expect("algorithm");
+        descr
+            .append_raw(chain_block::derive_consensus_key_id(1, &key).as_slice(), 256)
+            .expect("key identity");
+        descr.checked_append_reference(stored_bytes(&key)).expect("the key");
+        descr.append_u64(weight).expect("weight");
+        descr.append_raw(&adnl, 256).expect("transport identity");
+
+        let mut at = chain_block::BuilderData::new();
+        at.append_u16(index).expect("the index");
+        list.set_builder(chain_block::SliceData::load_builder(at).expect("a key slice"), &descr)
+            .expect("the descriptor is stored");
+    }
+
+    let since = now + 1000;
+    let mut set = chain_block::BuilderData::new();
+    set.append_u8(0x12).expect("validators_ext#12");
+    set.append_u32(since).expect("utime_since");
+    set.append_u32(since + 100_000).expect("utime_until");
+    set.append_u16(count).expect("total");
+    set.append_u16(count).expect("main");
+    set.append_u64(weight * u64::from(count)).expect("total weight");
+    set.append_bit_one().expect("a non-empty list");
+    set.checked_append_reference(
+        chain_block::HashmapType::data(&list).expect("a non-empty list").clone(),
+    )
+    .expect("the list");
+    set.into_cell().expect("a validator set")
+}
+
+/// What the configuration contract spends checking a set before it installs it.
+///
+/// This runs once per elected set, over every descriptor, and it is the only thing
+/// standing between an election and a Config36 the node would refuse to start from.
+#[test]
+fn the_pre_install_check_is_measured_at_the_sizes_the_chain_allows() {
+    let (mut chain, _treasury, _election) = open_election("preinstall-scale", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    raise_validator_ceiling(&mut chain, 400);
+
+    let mut measured = Vec::new();
+    for (query, count) in [(1u64, 21u16), (2, 100), (3, 400)] {
+        let set = synthetic_set(chain.blockchain.now(), count);
+        let result = chain
+            .blockchain
+            .send_message(
+                tos_sandbox::MessageBuilder::internal(
+                    &chain.elector.clone(),
+                    &chain.config_contract.clone(),
+                    10 * TOS,
+                )
+                .body(set_next_validators_body(query, set))
+                .build(),
+            )
+            .expect("the message is delivered");
+        let tags = replies(&result);
+        assert!(
+            tags.contains(&VALIDATOR_SET_INSTALLED),
+            "a set of {count} was refused: {tags:02x?}"
+        );
+        measured.push((count, compute_gas(&result)));
+    }
+
+    for (count, gas) in &measured {
+        eprintln!("pre-install check, {count} validators: {gas} gas");
+    }
+
+    // The elector and the configuration contract are special accounts, allowed seventy
+    // million gas by the masterchain prices the zerostate sets. The largest set the
+    // configuration permits has to fit in that with room to spare, or an election that
+    // succeeds produces a set nothing can install.
+    let (largest, cost) = measured.last().expect("a measurement");
+    assert!(
+        *cost < 20_000_000,
+        "checking {largest} validators costs {cost} gas, too close to what a masterchain \
+         transaction may spend"
+    );
+
+    // And the cost has to follow the count rather than jump: a check that stopped looking
+    // at every descriptor would flatten here, and nothing else would say so.
+    let (small, small_gas) = measured[0];
+    assert!(
+        cost > &(small_gas * 8),
+        "checking {largest} validators costs {cost} gas against {small_gas} for {small}, so \
+         the check is not running over every descriptor"
+    );
+}
+
+/// Raise the validator count the configuration allows, so the sizes above are reachable.
+fn raise_validator_ceiling(chain: &mut Chain, max: u16) {
+    use chain_block::IBitstring;
+    let mut value = chain_block::BuilderData::new();
+    value.append_u16(max).expect("max validators");
+    value.append_u16(max).expect("max main validators");
+    value.append_u16(1).expect("min validators");
+    set_contract_parameter(chain, 16, value.into_cell().expect("a validator count"));
+}
+
+/// Put a book of `count` members into the open election, and admit the code they all
+/// share.
+///
+/// Written into storage rather than staked for, because what the measurement below is
+/// about is the selection over a book of a given size. Placing four hundred stakes would
+/// mean four hundred signatures and would measure the fixture rather than the contract.
+/// Every member is distinct in both identities, as a staked one would be.
+fn install_synthetic_book(chain: &mut Chain, count: u16, stake_each: u64) {
+    install_synthetic_book_over(chain, count, stake_each, 1)
+}
+
+/// The same, with the members spread evenly over `profiles` admitted controller codes.
+/// The effective total is summed over the codes the configuration still admits, so how
+/// many there are is part of what an election costs.
+fn install_synthetic_book_over(chain: &mut Chain, count: u16, stake_each: u64, profiles: u16) {
+    use chain_block::IBitstring;
+    assert!(profiles >= 1, "a book needs at least one admitted profile");
+    let code_of = |index: u16| {
+        let mut bytes = [0x7cu8; 32];
+        bytes[30..32].copy_from_slice(&(index % profiles).to_be_bytes());
+        chain_block::UInt256::from_slice(&bytes)
+    };
+
+    let mut members = chain_block::HashmapE::with_bit_len(256);
+    let mut key_owner = chain_block::HashmapE::with_bit_len(256);
+    let mut by_code = chain_block::HashmapE::with_bit_len(256);
+
+    for index in 0..count {
+        let mut key = vec![0x5au8; MLDSA44_PUBLIC_KEY_BYTES];
+        key[0..2].copy_from_slice(&index.to_be_bytes());
+        let key_id = chain_block::derive_consensus_key_id(1, &key);
+        let mut validator_id = [0u8; 32];
+        validator_id[30..32].copy_from_slice(&(index + 1).to_be_bytes());
+        let mut adnl = [0u8; 32];
+        adnl[0..2].copy_from_slice(&index.to_be_bytes());
+        adnl[31] = 1;
+
+        let mut record = chain_block::BuilderData::new();
+        chain_block::Serializable::write_to(&chain_block::Coins::new(stake_each), &mut record)
+            .expect("the stake");
+        record.append_u32(chain.blockchain.now()).expect("registered at");
+        record.append_u32(0x10000).expect("max factor");
+        record.append_u16(1).expect("algorithm");
+        record.append_raw(key_id.as_slice(), 256).expect("key identity");
+        record.checked_append_reference(stored_bytes(&key)).expect("the key");
+        record.append_raw(&adnl, 256).expect("transport identity");
+        let mut code = chain_block::BuilderData::new();
+        code.append_raw(code_of(index).as_slice(), 256).expect("the controller code");
+        record
+            .checked_append_reference(code.into_cell().expect("a code cell"))
+            .expect("the controller code");
+
+        let id_key = chain_block::SliceData::load_builder(
+            chain_block::BuilderData::with_raw(validator_id.to_vec(), 256).expect("a key"),
+        )
+        .expect("a key slice");
+        members.set_builder(id_key, &record).expect("the member is stored");
+
+        let mut owner = chain_block::BuilderData::new();
+        owner.append_raw(&validator_id, 256).expect("the owner");
+        key_owner
+            .set_builder(
+                chain_block::SliceData::load_builder(
+                    chain_block::BuilderData::with_raw(key_id.as_slice().to_vec(), 256)
+                        .expect("a key"),
+                )
+                .expect("a key slice"),
+                &owner,
+            )
+            .expect("the reverse index");
+    }
+
+    for profile in 0..profiles {
+        let members_here = u64::from(count / profiles) + u64::from(count % profiles > profile);
+        let mut total = chain_block::BuilderData::new();
+        chain_block::Serializable::write_to(
+            &chain_block::Coins::new(stake_each * members_here),
+            &mut total,
+        )
+        .expect("the aggregate");
+        by_code
+            .set_builder(
+                chain_block::SliceData::load_builder(
+                    chain_block::BuilderData::with_raw(code_of(profile).as_slice().to_vec(), 256)
+                        .expect("a key"),
+                )
+                .expect("a key slice"),
+                &total,
+            )
+            .expect("the aggregate by code");
+    }
+
+    // Rewrite the open election with this book, keeping the times and the flags it had.
+    let mut account =
+        chain.blockchain.get_account(&chain.elector).expect("the elector is deployed").clone();
+    let data = account.get_data().expect("the elector has storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    let elect = next_dictionary(&mut slice, 32);
+    let root = chain_block::HashmapType::data(&elect).expect("an active election").clone();
+    let mut es = chain_block::SliceData::load_cell(root).expect("the election");
+
+    let mut rebuilt = chain_block::BuilderData::new();
+    rebuilt.append_u32(es.get_next_u32().expect("elect_at")).expect("elect_at");
+    rebuilt.append_u32(es.get_next_u32().expect("elect_close")).expect("elect_close");
+    for _ in 0..2 {
+        let bytes = es.get_next_int(4).expect("an amount length") as usize;
+        rebuilt.append_bits(bytes, 4).expect("an amount length");
+        if bytes > 0 {
+            let amount = es.get_next_bits(bytes * 8).expect("an amount");
+            rebuilt.append_raw(&amount, bytes * 8).expect("an amount");
+        }
+    }
+    rebuilt.append_bit_zero().expect("not failed");
+    rebuilt.append_bit_zero().expect("not finished");
+    for dict in [&members, &key_owner, &by_code] {
+        match chain_block::HashmapType::data(dict) {
+            Some(cell) => {
+                rebuilt.append_bit_one().expect("a non-empty dictionary");
+                rebuilt.checked_append_reference(cell.clone()).expect("the dictionary");
+            }
+            None => {
+                rebuilt.append_bit_zero().expect("an empty dictionary");
+            }
+        }
+    }
+
+    let mut storage = chain_block::BuilderData::new();
+    storage.append_bit_one().expect("an active election");
+    storage
+        .checked_append_reference(rebuilt.into_cell().expect("the election"))
+        .expect("the election");
+    storage.checked_append_references_and_data(&slice).expect("the rest of the storage");
+    account.set_data(storage.into_cell().expect("storage"));
+    chain.blockchain.set_account(chain.elector.clone(), account);
+
+    // The codes the synthetic members were admitted under.
+    let mut dict = chain_block::HashmapE::with_bit_len(256);
+    for profile in 0..profiles {
+        dict.set(
+            chain_block::SliceData::load_builder(
+                chain_block::BuilderData::with_raw(code_of(profile).as_slice().to_vec(), 256)
+                    .expect("a key"),
+            )
+            .expect("a key slice"),
+            &chain_block::SliceData::default(),
+        )
+        .expect("insert");
+    }
+    let mut policy = chain_block::BuilderData::new();
+    policy.append_bit_one().expect("a non-empty policy");
+    policy
+        .checked_append_reference(
+            chain_block::HashmapType::data(&dict).expect("a non-empty dictionary").clone(),
+        )
+        .expect("the codes");
+    set_contract_parameter(chain, 47, policy.into_cell().expect("a controller policy"));
+}
+
+/// What an election costs at the sizes the chain allows, from the book to the set the
+/// configuration contract installs.
+#[test]
+fn an_election_is_measured_at_the_sizes_the_chain_allows() {
+    let mut measured = Vec::new();
+    for count in [21u16, 100, 400] {
+        let (mut chain, _treasury, election) =
+            open_election(&format!("election-scale-{count}"), 200_000 * TOS);
+        raise_to_post_quantum_version(&mut chain);
+        raise_validator_ceiling(&mut chain, 400);
+        install_synthetic_book(&mut chain, count, 11_000 * TOS);
+
+        chain.blockchain.set_now(election - chain.elect_end_before);
+        let result = chain
+            .blockchain
+            .tick_tock(&chain.elector, TransactionTickTock::Tick)
+            .expect("tick runs");
+        result.expect_success();
+        let tags = replies(&result);
+        assert!(
+            tags.contains(&VALIDATOR_SET_INSTALLED),
+            "an election of {count} did not produce a set the configuration installed: \
+             {tags:02x?}"
+        );
+        let installed = configuration_from_contract(&chain)
+            .next_validator_set()
+            .expect("the stored set parses");
+        assert_eq!(installed.list().len(), count as usize, "not every member was elected");
+        measured.push((count, tick_gas(&result)));
+    }
+
+    for (count, gas) in &measured {
+        eprintln!("election and set production, {count} members: {gas} gas");
+    }
+
+    let (largest, cost) = measured.last().expect("a measurement");
+    assert!(
+        *cost < 50_000_000,
+        "electing {largest} members costs {cost} gas, too close to what a masterchain \
+         transaction may spend"
+    );
+    let (small, small_gas) = measured[0];
+    assert!(
+        cost > &(small_gas * 8),
+        "electing {largest} members costs {cost} gas against {small_gas} for {small}, so the \
+         selection is not running over every member"
+    );
+}
+
+/// What spreading the validators over several controller profiles costs.
+///
+/// The effective total an election is judged on is summed over the codes the
+/// configuration still admits, and the ceiling on those is eight. The figure to know is
+/// whether the election a chain runs depends on how its operators are spread.
+#[test]
+fn the_effective_total_is_measured_over_one_profile_and_over_eight() {
+    let mut measured = Vec::new();
+    for profiles in [1u16, 8] {
+        let (mut chain, _treasury, election) =
+            open_election(&format!("profiles-{profiles}"), 200_000 * TOS);
+        raise_to_post_quantum_version(&mut chain);
+        raise_validator_ceiling(&mut chain, 400);
+        install_synthetic_book_over(&mut chain, 100, 11_000 * TOS, profiles);
+
+        chain.blockchain.set_now(election - chain.elect_end_before);
+        let result = chain
+            .blockchain
+            .tick_tock(&chain.elector, TransactionTickTock::Tick)
+            .expect("tick runs");
+        result.expect_success();
+        assert!(
+            replies(&result).contains(&VALIDATOR_SET_INSTALLED),
+            "an election over {profiles} profiles produced no installed set"
+        );
+        measured.push((profiles, tick_gas(&result)));
+    }
+
+    for (profiles, gas) in &measured {
+        eprintln!("election over {profiles} controller profiles, 100 members: {gas} gas");
+    }
+
+    let (_, one) = measured[0];
+    let (_, eight) = measured[1];
+    // Eight profiles is the ceiling, and the sum runs over the admitted codes rather than
+    // over the members, so the difference must be a rounding error against an election.
+    assert!(
+        eight < one + one / 100,
+        "an election over eight profiles costs {eight} gas against {one} over one, so the \
+         effective total is being summed over the members rather than over the codes"
+    );
+}
+
 /// A controller policy holding `count` distinct code hashes.
 fn controller_policy(count: usize) -> chain_block::Cell {
     use chain_block::IBitstring;
@@ -2952,6 +3635,19 @@ fn a_signed_post_quantum_stake_registers_the_sender_as_the_validator() {
 }
 
 /// What the compute phase of the first transaction spent.
+/// The gas a tick or tock transaction spent. The elector's state machine advances on
+/// these rather than on messages, so an election is measured here and not in `compute_gas`.
+fn tick_gas(result: &tos_sandbox::SendResult) -> u64 {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    match transaction.read_description().expect("description") {
+        chain_block::TransactionDescr::TickTock(descr) => match descr.compute_ph {
+            chain_block::TrComputePhase::Vm(vm) => vm.gas_used.as_u64(),
+            other => panic!("the compute phase did not run: {other:?}"),
+        },
+        other => panic!("not a tick-tock transaction: {other:?}"),
+    }
+}
+
 fn compute_gas(result: &tos_sandbox::SendResult) -> u64 {
     let (_, transaction) = result.transactions.first().expect("a transaction");
     match transaction.read_description().expect("description") {
