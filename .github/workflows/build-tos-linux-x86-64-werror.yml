@@ -123,14 +123,26 @@ jobs:
     - name: Check C++ formatting of changed lines
       shell: bash
       run: |
+        # The formatter exits non-zero when it has something to say, and this step runs
+        # under `set -e`, so capturing its output directly ended the step before the
+        # diff below could be printed. Every formatting failure looked identical, and
+        # said only that one had happened.
+        set +e
         out="$(git clang-format-21 --binary clang-format-21 --diff \
           --extensions h,hpp,cpp "${{ steps.changed.outputs.base }}" -- :/ \
           ':(exclude)crypto/smartcont/tol-stdlib/' \
           ':(exclude)tol/' \
           ':(exclude)tol-tester/' \
-          ':(exclude)third-party/')"
+          ':(exclude)third-party/' 2>&1)"
+        status=$?
+        set -e
         case "$out" in
           ''|*'did not modify any files'*|*'no modified files to format'*)
+            # Silence is an answer only if the formatter meant to say nothing.
+            if [ "$status" -ne 0 ]; then
+              echo "the formatter exited $status without reporting anything" >&2
+              exit 1
+            fi
             echo "changed lines are formatted" ;;
           *)
             echo "$out"

@@ -39,9 +39,8 @@ td::Bits256 derived_key_id(const std::string& public_key) {
 }
 
 // Deliberately builds whatever it is told to, including descriptors that must be refused.
-td::Ref<vm::Cell> descriptor(unsigned tag, const td::Bits256& validator_id, int algorithm_id,
-                             const td::Bits256& key_id, const td::Ref<vm::Cell>& stored_key, td::uint64 weight,
-                             const td::Bits256& adnl_addr) {
+td::Ref<vm::Cell> descriptor(unsigned tag, const td::Bits256& validator_id, int algorithm_id, const td::Bits256& key_id,
+                             const td::Ref<vm::Cell>& stored_key, td::uint64 weight, const td::Bits256& adnl_addr) {
   vm::CellBuilder cb;
   cb.store_long(tag, 8);
   cb.store_bits_bool(validator_id.cbits(), 256);
@@ -135,11 +134,9 @@ int main() {
   emit("valid-max-weight", "accept", descriptor(0xb3, vid, 1, kid_a, canonical_a, 0x3fffffffffffffffULL, adnl),
        0x3fffffffffffffffULL);
   emit("key-id-of-another-key", "reject", descriptor(0xb3, vid, 1, kid_b, canonical_a, 5, adnl), 5);
-  emit("unknown-algorithm", "reject",
-       descriptor(0xb3, vid, 7, derived_key_id(key_a), canonical_a, 5, adnl), 5);
+  emit("unknown-algorithm", "reject", descriptor(0xb3, vid, 7, derived_key_id(key_a), canonical_a, 5, adnl), 5);
   emit("short-key", "reject",
-       descriptor(0xb3, vid, 1, derived_key_id(short_key), stored_key(short_key, tos::pq::pq_bytes_chunk), 5, adnl),
-       5);
+       descriptor(0xb3, vid, 1, derived_key_id(short_key), stored_key(short_key, tos::pq::pq_bytes_chunk), 5, adnl), 5);
   // Same bytes, chunked differently. The identity derived from it is unchanged, because
   // the hash does not depend on the boundaries, so only the shape rule can refuse it.
   emit("non-canonical-chunking", "reject", descriptor(0xb3, vid, 1, kid_a, stored_key(key_a, 64), 5, adnl), 5);

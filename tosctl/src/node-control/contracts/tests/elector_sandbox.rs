@@ -1427,6 +1427,8 @@ const CONFIG_VOTE_CONTEXT: &[u8] = b"TOS-VALIDATOR-CONFIG-VOTE-v1";
 const MLDSA44_PUBLIC_KEY_BYTES: usize = 1312;
 /// `return_stake` reason 7: no transport address was stated.
 /// No election is taking stakes: none is open, it is finished, or it has closed.
+/// The library refuses a suite it does not admit, before anything reads the key.
+const ERROR_UNADMITTED_ALGORITHM: i32 = 61;
 const REASON_NO_ELECTION: u32 = 0;
 const REASON_BELOW_MINIMUM: u32 = 5;
 const REASON_FACTOR_BELOW_ONE: u32 = 6;
@@ -1522,12 +1524,27 @@ fn pq_stake_preimage(
     key_id: &chain_block::UInt256,
     adnl: &[u8; 32],
 ) -> Vec<u8> {
+    pq_stake_preimage_for(global_id, stake_at, max_factor, validator_id, 1, key_id, adnl)
+}
+
+/// The same bytes with the suite stated explicitly, so a signature can be made over a
+/// suite other than the one the request carries.
+#[allow(clippy::too_many_arguments)]
+fn pq_stake_preimage_for(
+    global_id: i32,
+    stake_at: u32,
+    max_factor: u32,
+    validator_id: &chain_block::UInt256,
+    algorithm_id: u16,
+    key_id: &chain_block::UInt256,
+    adnl: &[u8; 32],
+) -> Vec<u8> {
     chain_block::pq_elector::stake_preimage(
         global_id,
         stake_at,
         max_factor,
         validator_id,
-        1,
+        algorithm_id,
         key_id,
         &chain_block::UInt256::from(*adnl),
     )
@@ -2257,6 +2274,7 @@ struct SignedFields {
     global_id: i32,
     stake_at: u32,
     max_factor: u32,
+    algorithm_id: u16,
     adnl: [u8; 32],
     key_id: chain_block::UInt256,
 }
@@ -2275,11 +2293,12 @@ fn pq_stake_signed_over(
 ) -> tos_sandbox::SendResult {
     let validator_id =
         chain_block::UInt256::from_slice(&from.address().address().get_bytestring(0));
-    let preimage = pq_stake_preimage(
+    let preimage = pq_stake_preimage_for(
         signed.global_id,
         signed.stake_at,
         signed.max_factor,
         &validator_id,
+        signed.algorithm_id,
         &signed.key_id,
         &signed.adnl,
     );
@@ -2316,6 +2335,7 @@ fn every_signed_field_of_a_stake_is_covered_by_its_signature() {
         global_id,
         stake_at: election,
         max_factor: 0x10000,
+        algorithm_id: 1,
         adnl: validator.adnl,
         key_id: validator.key_id(),
     };
@@ -2335,6 +2355,12 @@ fn every_signed_field_of_a_stake_is_covered_by_its_signature() {
         ("another transport address", SignedFields { adnl: [0x5e; 32], ..honest.clone() },
             ELECTION_CONTEXT),
         ("another key", SignedFields { key_id: other.key_id(), ..honest.clone() },
+            ELECTION_CONTEXT),
+        // While one suite is admitted this case cannot tell a preimage that commits the
+        // request's suite from one that commits the constant 1, because they are the same
+        // value. What distinguishes them is a request carrying a second admitted suite,
+        // which is the positive case to add on the day there is one.
+        ("another suite", SignedFields { algorithm_id: 7, ..honest.clone() },
             ELECTION_CONTEXT),
         ("another purpose", honest.clone(), CONFIG_VOTE_CONTEXT),
     ];
@@ -2403,6 +2429,42 @@ fn a_refused_rotation_leaves_both_controllers_as_they_were() {
         total_before,
         "the refused rotation was counted into the election total"
     );
+}
+
+/// A request naming a suite the contract does not admit is refused before it is read as
+/// a key.
+///
+/// One suite is admitted, and a second would be a protocol change rather than a
+/// configuration value. The guard that says so has to be reachable from a request, or it
+/// is a claim about a constant instead of a rule about what arrives.
+#[test]
+fn a_stake_naming_an_unadmitted_suite_is_refused() {
+    use chain_block::IBitstring;
+    let (mut chain, treasury, election) = open_election("pq-suite", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(24);
+
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(PQ_STAKE_OP).expect("operation");
+    body.append_u64(1).expect("query id");
+    body.append_u16(7).expect("a suite that is not admitted");
+    body.checked_append_reference(stored_bytes(&validator.public_key)).expect("public key");
+    body.append_u32(election).expect("election");
+    body.append_u32(0x10000).expect("max factor");
+    body.append_raw(&validator.adnl, 256).expect("adnl address");
+    body.checked_append_reference(stored_bytes(&vec![0u8; 2420])).expect("signature");
+
+    let result = chain
+        .blockchain
+        .send_message(treasury.build_message(
+            &chain.elector,
+            11_000 * TOS,
+            true,
+            Some(body.into_cell().expect("stake body")),
+        ))
+        .expect("the stake is delivered");
+    result.expect_exit_code(ERROR_UNADMITTED_ALGORITHM);
+    assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered anyway");
 }
 
 #[test]
