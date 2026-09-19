@@ -10,6 +10,9 @@
 
 #include "block/mc-config.h"
 #include "block/validator-set.h"
+#include "block/validator-session-members.h"
+#include "auto/tl/tos_api.hpp"
+#include "tl-utils/tl-utils.hpp"
 #include "crypto/pq/pq-bytes.h"
 #include "crypto/pq/pq-consensus.h"
 #include "vm/cells/CellBuilder.h"
@@ -185,6 +188,39 @@ int main() {
     assert(seen >= 5);
   }
 
-  printf("VALIDATOR_IDENTITY_OK rotation keeps validator_id, changes key_id; bindings enforced\n");
+  {  // A consensus session must commit to both identities, so that rotating a key
+     // starts a different session while the validator stays the same member.
+    auto session_id = [](const std::vector<tos::ValidatorDescr>& nodes) {
+      return tos::create_hash_tl_object<tos::tos_api::validator_groupNew>(
+          0, static_cast<long long>(0x8000000000000000ull), 0, 0, 1, td::Bits256::zero(),
+          block::validator_session_members(nodes));
+    };
+    auto pq_node = [](const td::Bits256& vid, const td::Bits256& kid) {
+      return tos::ValidatorDescr{tos::ValidatorId{vid}, 1, tos::ConsensusKeyId{kid},
+                                 std::string(tos::pq::mldsa44_public_key_bytes, '\x01'), 5, fill(0xc0)};
+    };
+    const auto vid_x = fill(0xa0), vid_y = fill(0xa1);
+    const auto kid_1 = fill(0xb0), kid_2 = fill(0xb1);
+
+    // the same validator, before and after rotating its key
+    assert(session_id({pq_node(vid_x, kid_1)}) != session_id({pq_node(vid_x, kid_2)}));
+    // the same key, held by a different validator
+    assert(session_id({pq_node(vid_x, kid_1)}) != session_id({pq_node(vid_y, kid_1)}));
+    // and the identical member is of course the identical session
+    assert(session_id({pq_node(vid_x, kid_1)}) == session_id({pq_node(vid_x, kid_1)}));
+
+    // A classical member and a post-quantum member are distinct constructors of one
+    // boxed type, so their encodings cannot be mistaken for one another.
+    auto classical = tos::ValidatorDescr{tos::Ed25519_PublicKey{fill(0x11)}, 5, fill(0xc0)};
+    auto pq_members = block::validator_session_members({pq_node(vid_x, kid_1)});
+    auto classical_members = block::validator_session_members({classical});
+    assert(pq_members[0]->get_id() != classical_members[0]->get_id());
+    assert(pq_members[0]->get_id() == tos::tos_api::validator_groupMemberPQ::ID);
+    assert(classical_members[0]->get_id() == tos::tos_api::validator_groupMember::ID);
+    // a classical member still reports the identity derived from its key
+    assert(session_id({classical}) != session_id({pq_node(vid_x, kid_1)}));
+  }
+
+  printf("VALIDATOR_IDENTITY_OK rotation keeps validator_id, changes key_id; bindings enforced; session binds both\n");
   return 0;
 }

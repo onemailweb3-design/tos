@@ -63,6 +63,7 @@
 #include "import-db-slice-local.hpp"
 #include "import-db-slice.hpp"
 #include "manager.h"
+#include "block/validator-session-members.h"
 #include "manager.hpp"
 
 #include "validator/consensus/db-path.h"
@@ -3349,14 +3350,8 @@ void ValidatorManagerImpl::updated_init_block(BlockIdExt last_rotate_block_id,
 ValidatorSessionId ValidatorManagerImpl::get_validator_set_id(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set,
                                                               td::Bits256 opts_hash, BlockSeqno last_key_block_seqno,
                                                               const consensus::ValidatorSessionOptions &opts) {
-  std::vector<tl_object_ptr<tos_api::validator_groupMember>> vec;
-  auto v = val_set->export_vector();
+  auto vec = block::validator_session_members(val_set->export_vector());
   auto vert_seqno = opts_->get_maximal_vertical_seqno();
-  for (auto &n : v) {
-    auto pub_key = PublicKey{pubkeys::Ed25519{n.classical_key()}};
-    vec.push_back(
-        create_tl_object<tos_api::validator_groupMember>(pub_key.compute_short_id().bits256_value(), n.addr, n.weight));
-  }
   if (!opts.new_catchain_ids) {
     if (vert_seqno == 0) {
       return create_hash_tl_object<tos_api::validator_group>(shard.workchain, shard.shard,

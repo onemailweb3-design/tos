@@ -193,6 +193,7 @@ set(TLB_BLOCK_AUTO
 )
 
 set(BLOCK_SOURCE
+  block/validator-session-members.cpp
   pq/pq-bytes.cpp
   block/Binlog.h
   block/Binlog.cpp

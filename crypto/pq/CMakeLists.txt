@@ -79,7 +79,7 @@ if(TARGET tos_crypto)
   target_link_libraries(validator-set-hash-vectors-gen PRIVATE tos_block tos_crypto keys)
   add_executable(test-validator-identity "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-identity-test.cpp")
   set_target_properties(test-validator-identity PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(test-validator-identity PRIVATE tos_block tos_crypto keys)
+  target_link_libraries(test-validator-identity PRIVATE tos_block tos_crypto keys tl-utils)
   target_compile_definitions(test-validator-identity PRIVATE
     SET_HASH_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-set-hash-vectors.txt")
   add_test(NAME validator-identity COMMAND test-validator-identity)
