@@ -180,6 +180,103 @@ fn the_library_reaches_the_same_verdict_as_the_node_on_every_descriptor() {
     assert!(accepted >= 2 && refused >= 8, "the vectors lost coverage: {accepted}/{refused}");
 }
 
+/// The same cell, presented as a reference into the library collection instead of as
+/// itself. The virtual machine resolves it and parses what it finds; the node's decoder
+/// has no library context and sees a special cell.
+fn library_reference(root: &Cell) -> Cell {
+    let mut data = vec![0x80u8; 34];
+    data[0] = u8::from(chain_block::CellType::LibraryReference);
+    data[1..33].copy_from_slice(root.repr_hash().as_slice());
+    Cell::with_cell_impl(
+        chain_block::DataCell::with_params(
+            vec![],
+            &data,
+            chain_block::CellType::LibraryReference,
+            0,
+            None,
+        )
+        .expect("a library reference"),
+    )
+}
+
+/// The probe, deployed with `library` in its own library collection, so a reference to it
+/// resolves while the probe runs.
+///
+/// It is deployed in a basechain, because the masterchain refuses a state init that
+/// carries libraries at all. That refusal is not the guard being tested: the elector
+/// reads keys that reach it in messages, and the cell in a message is whatever its sender
+/// built, whether or not the sending account could hold a library itself.
+fn deploy_holding(chain: &mut Blockchain, library: &Cell) -> MsgAddressInt {
+    let mut state = StateInit::with_code_and_data(probe_code(), Cell::default());
+    let mut libraries = chain_block::StateInitLib::default();
+    libraries
+        .set(&library.repr_hash(), &chain_block::SimpleLib::new(library.clone(), true))
+        .expect("a published library");
+    state.library = libraries;
+    let address = MsgAddressInt::with_params(
+        0,
+        state.write_to_new_cell().expect("state").into_cell().expect("state cell").hash(0),
+    )
+    .expect("address");
+    let deployer = chain.treasury("pq-lib-library-funder", 100_000 * TOS).expect("funding");
+    let deployment = chain
+        .send_message(
+            MessageBuilder::internal(deployer.address(), &address, 50_000 * TOS)
+                .bounce(false)
+                .state_init(state)
+                .body(Cell::default())
+                .build(),
+        )
+        .expect("deployment");
+    let (_, transaction) = deployment.transactions.first().expect("a transaction");
+    assert!(
+        !transaction.read_description().expect("description").is_aborted(),
+        "the probe could not be deployed holding a library: {:?}",
+        transaction.read_description().expect("description")
+    );
+    address
+}
+
+/// A key that is not the bytes but a pointer to them.
+///
+/// Reading a cell resolves a library reference and continues with what it points at, so
+/// such a key walks and hashes exactly as the key itself: same length, same chunking,
+/// same identity. The node reads the same cell with no library context, sees a special
+/// cell, and refuses it. Were the library to accept it, a stake would register a key that
+/// every node then fails to decode, which is a halt and not a bad registration.
+#[test]
+fn a_key_that_is_only_a_reference_to_a_key_is_refused() {
+    let key = key_bytes(0x5c);
+    let stored = stored_key(&key);
+    let mut chain = Blockchain::with_global_version(16).expect("a chain");
+    chain.set_workchain(0);
+    let probe = deploy_holding(&mut chain, &stored);
+
+    // The fixture is only meaningful if the reference really does resolve to the key.
+    let direct = chain
+        .run_get_method(
+            &probe,
+            "probe_key_id",
+            vec![StackItem::int(1), StackItem::Cell(stored.clone())],
+        )
+        .expect("the probe answers");
+    assert_eq!(direct.exit_code, 0, "the fixture's own key was refused");
+
+    let reference = chain
+        .run_get_method(
+            &probe,
+            "probe_key_id",
+            vec![StackItem::int(1), StackItem::Cell(library_reference(&stored))],
+        )
+        .expect("the probe answers");
+    // Under the reader this replaced, the reference was accepted and derived the very
+    // same identity as the key itself, so nothing downstream could have told them apart.
+    assert_eq!(
+        reference.exit_code, ERROR_MALFORMED_KEY,
+        "a key presented as a library reference was accepted, and the node cannot decode it"
+    );
+}
+
 #[test]
 fn the_library_derives_the_key_identity_the_node_derives() {
     let mut chain = Blockchain::with_global_version(16).expect("a chain");

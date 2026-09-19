@@ -37,6 +37,22 @@ int pq::public_key_bytes(int algorithm_id) inline {
   return algorithm_id == pq::algorithm::mldsa44 ? pq::mldsa44_public_key_bytes : 0;
 }
 
+;; Parsing that refuses a cell which is not ordinary.
+;;
+;; `begin_parse` resolves a library cell against the library context and carries on with
+;; whatever it finds there, so a key presented as a library reference walks, measures and
+;; hashes as the key it points at, and arrives at the very same identity. The node decodes
+;; the same cell with no library context and sees a special cell it refuses. A stored key
+;; must therefore be the bytes themselves and never a reference to them, or the contract
+;; would accept a descriptor the node cannot read.
+(slice, int) pq::parse_maybe_special(cell c) asm "XCTOS";
+
+slice pq::parse_ordinary(cell c) inline {
+  (slice cs, int special) = pq::parse_maybe_special(c);
+  throw_if(pq::error::malformed_key, special);
+  return cs;
+}
+
 ;; Walks a stored chain and returns the bytes it carries, refusing anything that is not
 ;; the canonical shape: byte-aligned cells, at most one continuation each, every chunk but
 ;; the last exactly full, and a last chunk that is neither empty nor oversized.
@@ -48,7 +64,7 @@ int pq::chain_bytes(cell chain) {
   int total = 0;
   int walking = -1;
   while (walking) {
-    slice cs = chain.begin_parse();
+    slice cs = chain.pq::parse_ordinary();
     int bits = cs.slice_bits();
     int refs = cs.slice_refs();
     throw_if(pq::error::malformed_key, bits & 7);
@@ -70,7 +86,7 @@ int pq::chain_bytes(cell chain) {
 ;; carries the bytes. The length is checked against the suite before anything is hashed.
 (int, cell) pq::stored_key(int algorithm_id, cell stored) {
   throw_unless(pq::error::algorithm, pq::admitted_algorithm?(algorithm_id));
-  slice cs = stored.begin_parse();
+  slice cs = stored.pq::parse_ordinary();
   int declared = cs~load_uint(32);
   cell chain = cs~load_ref();
   cs.end_parse();
@@ -86,7 +102,7 @@ const int pq::mldsa44_signature_bytes = 2420;
 ;; malformed signature is refused cheaply rather than paid for.
 cell pq::stored_signature(int algorithm_id, cell stored) {
   throw_unless(pq::error::algorithm, pq::admitted_algorithm?(algorithm_id));
-  slice cs = stored.begin_parse();
+  slice cs = stored.pq::parse_ordinary();
   int declared = cs~load_uint(32);
   cell chain = cs~load_ref();
   cs.end_parse();
