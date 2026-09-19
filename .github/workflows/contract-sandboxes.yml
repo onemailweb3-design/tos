@@ -80,8 +80,12 @@ jobs:
       # by the sandbox suites below; this is the producing side.
       - name: Validator vote bodies
         run: |
-          cmake --build build --target test-pq-vote-body -j2
+          cmake --build build --target test-pq-vote-body test-n3-carrier -j2
           ./build/crypto/pq/test-pq-vote-body
+          # The recorded carriers. The tooling's half of this lock is a Rust test, which
+          # the sandbox step below runs; both read the same file, so a layout that drifts
+          # on one side fails on that side rather than on chain.
+          ./build/crypto/pq/test-n3-carrier
 
       # The node's own key file, and the tool that provisions one. Both are held to the
       # same rules, because the tool linking a different copy of them is how a key that

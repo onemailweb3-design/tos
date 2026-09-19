@@ -116,12 +116,21 @@ if(TARGET tos_crypto)
   add_executable(n3-preimage-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-preimage-vectors-gen.cpp")
   set_target_properties(n3-preimage-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(n3-preimage-vectors-gen PRIVATE tos_block tos_crypto)
+  add_executable(n3-carrier-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-vectors-gen.cpp")
+  set_target_properties(n3-carrier-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(n3-carrier-vectors-gen PRIVATE tos_block tos_crypto)
   add_executable(test-n3-preimage "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-preimage-test.cpp")
   set_target_properties(test-n3-preimage PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(test-n3-preimage PRIVATE tos_block tos_crypto)
   target_compile_definitions(test-n3-preimage PRIVATE
     N3_PREIMAGE_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-preimage-vectors.tsv")
   add_test(NAME n3-preimage-vectors COMMAND test-n3-preimage)
+  add_executable(test-n3-carrier "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-test.cpp")
+  set_target_properties(test-n3-carrier PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-n3-carrier PRIVATE tos_block tos_crypto)
+  target_compile_definitions(test-n3-carrier PRIVATE
+    N3_CARRIER_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-vectors.tsv")
+  add_test(NAME n3-carrier-vectors COMMAND test-n3-carrier)
   # What a validator controller's post-quantum root signs.
   add_executable(n3-controller-auth-vectors-gen
     "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-controller-auth-vectors-gen.cpp")
