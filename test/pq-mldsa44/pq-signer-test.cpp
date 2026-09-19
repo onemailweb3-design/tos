@@ -60,6 +60,39 @@ int main() {
   assert(simplex_sign_context != validator_election_context &&
          validator_election_context != validator_config_vote_context &&
          validator_config_vote_context != config_admin_context && simplex_sign_context != config_admin_context);
+  // The two authority surfaces N3 gave a signer. Each verifies under its own context and
+  // under no other, which is what stops a validator's vote on a configuration proposal
+  // being replayed as a vote on a complaint, or as a finality signature.
+  {
+    const std::string vote = "config vote preimage fixture";
+    auto config_opt = ks.sign_config_vote(vote);
+    assert(config_opt.has_value() && config_opt->signature.size() == mldsa44_signature_bytes);
+    const std::string& config_sig = config_opt->signature;
+    assert(verify_mldsa44(vote, validator_config_vote_context, config_sig, key.public_key) ==
+           VerifyResult::valid);
+    assert(verify_mldsa44(vote, simplex_sign_context, config_sig, key.public_key) ==
+           VerifyResult::invalid);
+    assert(verify_mldsa44(vote, validator_election_context, config_sig, key.public_key) ==
+           VerifyResult::invalid);
+    assert(verify_mldsa44(vote, config_admin_context, config_sig, key.public_key) ==
+           VerifyResult::invalid);
+
+    auto election_opt = ks.sign_election(vote);
+    assert(election_opt.has_value() && election_opt->signature.size() == mldsa44_signature_bytes);
+    const std::string& election_sig = election_opt->signature;
+    assert(verify_mldsa44(vote, validator_election_context, election_sig, key.public_key) ==
+           VerifyResult::valid);
+    assert(verify_mldsa44(vote, validator_config_vote_context, election_sig, key.public_key) ==
+           VerifyResult::invalid);
+    assert(verify_mldsa44(vote, simplex_sign_context, election_sig, key.public_key) ==
+           VerifyResult::invalid);
+
+    // The same key over the same bytes under two surfaces: two signatures, neither
+    // usable as the other. If the context ever stopped reaching the backend, both would
+    // verify everywhere and this is where that would show.
+    assert(config_sig != election_sig);
+  }
+
   // tampered signature: invalid
   {
     std::string bad = sig;
@@ -114,7 +147,7 @@ int main() {
   assert(!ValidatorPQKeyStore::from_seed(std::string(31, 'x')).has_value());  // bad seed length refused
 
   printf(
-      "PQ_SIGNER_N1_OK signer->verifier valid; context-substitution(all 4 frozen surfaces)+tamper+wrongmsg rejected; "
+      "PQ_SIGNER_OK signer->verifier valid for all three signed surfaces; context-substitution(all 4 frozen surfaces)+tamper+wrongmsg rejected; "
       "seed deterministic; NIST FIPS-204 KeyGen KAT matched\n");
   return 0;
 }

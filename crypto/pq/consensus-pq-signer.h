@@ -33,6 +33,15 @@ class ValidatorPQKeyStore {
   // nullopt on backend failure; the returned signature is always signature_bytes long.
   std::optional<ConsensusPQSignature> sign_consensus(std::string_view message) const noexcept;
 
+  // Sign a validator's vote on a configuration proposal, under
+  // validator_config_vote_context. The message is the preimage the configuration
+  // contract rebuilds and verifies; this signs it, and decides nothing about it.
+  std::optional<ConsensusPQSignature> sign_config_vote(std::string_view message) const noexcept;
+
+  // Sign a validator's vote on a complaint against a validator of a past election,
+  // under validator_election_context, which the elector shares with stake requests.
+  std::optional<ConsensusPQSignature> sign_election(std::string_view message) const noexcept;
+
  private:
   ValidatorPQKeyStore() = default;
   struct Secret;

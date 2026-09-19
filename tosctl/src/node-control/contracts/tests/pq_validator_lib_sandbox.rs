@@ -71,6 +71,19 @@ cell probe_election_context() method_id {
 cell probe_config_vote_context() method_id {
   return pq::config_vote_context();
 }
+cell probe_stake_preimage(int stake_at, int max_factor, int validator_id, int algorithm_id,
+                          int key_id, int adnl_addr) method_id {
+  return pq::stake_preimage(stake_at, max_factor, validator_id, algorithm_id, key_id, adnl_addr);
+}
+cell probe_config_vote_preimage(int validator_set_id, int validator_id, int idx,
+                                int proposal_hash) method_id {
+  return pq::config_vote_preimage(validator_set_id, validator_id, idx, proposal_hash);
+}
+cell probe_complaint_vote_preimage(int validator_set_id, int validator_id, int idx,
+                                   int election_id, int complaint_hash) method_id {
+  return pq::complaint_vote_preimage(validator_set_id, validator_id, idx, election_id,
+                                     complaint_hash);
+}
 () recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
 }
 "#,
@@ -401,6 +414,112 @@ fn a_descriptor_the_library_packs_is_one_the_node_accepts() {
         expected.repr_hash(),
         "the library packed different bytes than the node's encoder"
     );
+}
+
+/// The bytes the contract signs are the bytes the node and the tooling sign.
+///
+/// `test/pq-native/n3-preimage-vectors.tsv` is the shared lock: the node's C++ builders
+/// and the Rust tooling are both held to it. The contract said in a comment that it was
+/// held to it too, and nothing checked that. A contract that built a different preimage
+/// would refuse every correctly signed request, and the failure would look like a bad
+/// key rather than like a field in the wrong place.
+///
+/// The global id has to match the one the vectors were generated for, which is what the
+/// fixture below sets the chain to.
+#[test]
+fn the_contract_builds_the_bytes_the_vectors_freeze() {
+    let mut chain = Blockchain::with_global_version(16).expect("a chain");
+    chain.set_workchain(-1);
+    set_global_id(&mut chain, -239);
+    let probe = deploy(&mut chain);
+
+    let vectors =
+        std::fs::read_to_string(repo_root().join("test/pq-native/n3-preimage-vectors.tsv"))
+            .expect("the shared preimage vectors");
+    let expected = |name: &str| -> String {
+        vectors
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+            .find_map(|line| {
+                let mut fields = line.split('\t');
+                (fields.next()? == name).then(|| fields.nth(1).map(str::to_string))?
+            })
+            .unwrap_or_else(|| panic!("the vectors carry no case named {name}"))
+    };
+
+    // The same fixed inputs the C++ and Rust producers are checked against, chosen so
+    // every field is distinguishable in the output.
+    let fill = |byte: u8| IntegerData::from_unsigned_bytes_be([byte; 32]);
+    let cases: Vec<(&str, &str, Vec<StackItem>)> = vec![
+        (
+            "stake",
+            "probe_stake_preimage",
+            vec![
+                StackItem::integer(IntegerData::from_u32(1_789_434_000)),
+                StackItem::integer(IntegerData::from_u32(0x10000)),
+                StackItem::integer(fill(0xa1)),
+                StackItem::integer(IntegerData::from_u32(1)),
+                StackItem::integer(fill(0xb2)),
+                StackItem::integer(fill(0xc3)),
+            ],
+        ),
+        (
+            "config-vote",
+            "probe_config_vote_preimage",
+            vec![
+                StackItem::integer(fill(0xd4)),
+                StackItem::integer(fill(0xa1)),
+                StackItem::integer(IntegerData::from_u32(7)),
+                StackItem::integer(fill(0xe5)),
+            ],
+        ),
+        (
+            "complaint-vote",
+            "probe_complaint_vote_preimage",
+            vec![
+                StackItem::integer(fill(0xd4)),
+                StackItem::integer(fill(0xa1)),
+                StackItem::integer(IntegerData::from_u32(7)),
+                StackItem::integer(IntegerData::from_u32(1_789_434_000)),
+                StackItem::integer(fill(0xf6)),
+            ],
+        ),
+    ];
+
+    for (name, method, arguments) in cases {
+        let result = chain.run_get_method(&probe, method, arguments).expect("the probe answers");
+        assert_eq!(result.exit_code, 0, "{method} failed");
+        let cell = result.stack.last().expect("a preimage").as_cell().expect("a cell").clone();
+        let mut slice = chain_block::SliceData::load_cell(cell).expect("the preimage");
+        assert_eq!(slice.remaining_references(), 0, "{name} is more than one cell");
+        let bits = slice.remaining_bits();
+        assert_eq!(bits % 8, 0, "{name} is not a whole number of bytes");
+        let bytes = slice.get_next_bits(bits).expect("the preimage bytes");
+        assert_eq!(
+            hex::encode(&bytes),
+            expected(name),
+            "the contract's {name} preimage is not the one the node and the tooling sign"
+        );
+    }
+}
+
+/// The network the chain says it is, which every preimage is bound to.
+///
+/// The sandbox's default configuration carries neither this nor the fundamental-contract
+/// list a full configuration is built from, so both are supplied here. Only the network
+/// identity matters to what is measured; the other is what makes the configuration
+/// complete enough to install.
+fn set_global_id(chain: &mut Blockchain, global_id: i32) {
+    let mut config = chain.config_params().clone();
+    config
+        .set_config(chain_block::ConfigParamEnum::ConfigParam19(global_id as u32))
+        .expect("the network identity is set");
+    config
+        .set_config(chain_block::ConfigParamEnum::ConfigParam31(chain_block::ConfigParam31 {
+            fundamental_smc_addr: chain_block::FundamentalSmcAddresses::default(),
+        }))
+        .expect("the fundamental contracts are listed");
+    chain.set_config(config).expect("the chain adopts it");
 }
 
 #[test]
