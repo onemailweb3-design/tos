@@ -201,11 +201,14 @@ std::variant<ConsensusPQKey, ConsensusKeyFileError> create_consensus_key(
     return ConsensusKeyFileError::write_failed;
   }
   // The rename itself has to reach the disk, or a crash leaves the directory pointing at
-  // a name that is no longer there.
+  // a name that is no longer there. This is the failure the flush exists for, so it is
+  // reported rather than ignored: a key that could not be made durable must not be
+  // reported as created, or an operator provisions a validator that comes back without
+  // its key.
   {
     Descriptor dir(::open(parent_directory(path).c_str(), O_RDONLY | O_CLOEXEC));
-    if (dir.valid()) {
-      ::fsync(dir.get());
+    if (!dir.valid() || ::fsync(dir.get()) != 0) {
+      return ConsensusKeyFileError::write_failed;
     }
   }
   return store->consensus_key();

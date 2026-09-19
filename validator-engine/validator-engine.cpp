@@ -278,6 +278,10 @@ Config::Config(const tos::tos_api::engine_validator_config &config) {
       auto key = tos::adnl::AdnlNodeIdShort{client->adnl_id_};
       fast_sync_overlay_clients.emplace_back(std::move(key), client->slot_);
     }
+    if (config.extraconfig_->pq_consensus_) {
+      pq_consensus = PqConsensus{tos::ValidatorId{config.extraconfig_->pq_consensus_->validator_id_},
+                                 config.extraconfig_->pq_consensus_->consensus_key_file_};
+    }
   } else {
     state_serializer_enabled = true;
   }
@@ -385,7 +389,7 @@ tos::tl_object_ptr<tos::tos_api::engine_validator_config> Config::tl() const {
 
   tos::tl_object_ptr<tos::tos_api::engine_validator_extraConfig> extra_config_obj = {};
   if (!state_serializer_enabled || !fast_sync_member_certificates.empty() || collator_node_whitelist_obj ||
-      !fast_sync_overlay_clients.empty()) {
+      !fast_sync_overlay_clients.empty() || pq_consensus) {
     // Non-default values
     extra_config_obj = tos::create_tl_object<tos::tos_api::engine_validator_extraConfig>();
     extra_config_obj->state_serializer_enabled_ = state_serializer_enabled;
@@ -399,6 +403,10 @@ tos::tl_object_ptr<tos::tos_api::engine_validator_config> Config::tl() const {
       extra_config_obj->fast_sync_overlay_clients_.push_back(
           tos::create_tl_object<tos::tos_api::engine_validator_fastSyncOverlayClient>(client.id.bits256_value(),
                                                                                       client.slot));
+    }
+    if (pq_consensus) {
+      extra_config_obj->pq_consensus_ = tos::create_tl_object<tos::tos_api::engine_validator_pqConsensus>(
+          pq_consensus->validator_id.value, pq_consensus->consensus_key_file);
     }
   }
 

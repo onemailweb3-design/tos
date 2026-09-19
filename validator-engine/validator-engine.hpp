@@ -83,6 +83,13 @@ struct Config {
     tos::PublicKey key;
     td::IPAddress addr;
   };
+  // The one post-quantum secret a validator host holds, and the identity it holds it
+  // for. The controller root that authorises the stake and its own replacement stays on
+  // an operator machine and has no representation here at all.
+  struct PqConsensus {
+    tos::ValidatorId validator_id;
+    std::string consensus_key_file;
+  };
   struct FastSyncOverlayClient {
     FastSyncOverlayClient() = default;
     FastSyncOverlayClient(tos::adnl::AdnlNodeIdShort id, td::int32 slot) : id(id), slot(slot) {
@@ -110,6 +117,7 @@ struct Config {
   std::set<tos::PublicKeyHash> gc;
   std::vector<tos::ShardIdFull> shards_to_monitor;
   std::vector<FastSyncOverlayClient> fast_sync_overlay_clients;
+  std::optional<PqConsensus> pq_consensus;
 
   bool state_serializer_enabled = true;
   std::vector<std::pair<tos::adnl::AdnlNodeIdShort, tos::overlay::OverlayMemberCertificate>>

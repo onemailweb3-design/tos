@@ -715,9 +715,17 @@ engine.validator.fullNodeConfig ext_messages_broadcast_disabled:Bool = engine.va
 engine.validator.fastSyncMemberCertificate adnl_id:int256 certificate:overlay.MemberCertificate = engine.validator.FastSyncMemberCertificate;
 engine.validator.fastSyncOverlayClient adnl_id:int256 slot:int = engine.validator.FastSyncOverlayClient;
 engine.validator.collatorNodeWhitelist enabled:Bool adnl_ids:(vector int256) = engine.validator.CollatorNodeWhitelist;
+// Which validator this node holds a post-quantum consensus key for, and where that key
+// is. The identity is the controller account the validator was registered as; it is
+// stated here because it cannot be derived from the key, which rotates while the identity
+// does not. No key identity is configured: that is derived from the seed, so a
+// configuration cannot claim to hold a key it does not.
+engine.validator.pqConsensus validator_id:int256 consensus_key_file:string = engine.validator.PqConsensus;
+
 engine.validator.extraConfig state_serializer_enabled:Bool fast_sync_member_certificates:(vector engine.validator.fastSyncMemberCertificate)
     collator_node_whitelist:engine.validator.collatorNodeWhitelist
-    fast_sync_overlay_clients:(vector engine.validator.fastSyncOverlayClient) = engine.validator.ExtraConfig;
+    fast_sync_overlay_clients:(vector engine.validator.fastSyncOverlayClient)
+    pq_consensus:engine.validator.pqConsensus = engine.validator.ExtraConfig;
 engine.validator.config out_port:int addrs:(vector engine.Addr) adnl:(vector engine.adnl)
         dht:(vector engine.dht)
         validators:(vector engine.validator) collators:(vector engine.collator)

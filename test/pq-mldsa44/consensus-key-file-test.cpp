@@ -83,8 +83,11 @@ int main() {
   assert(::symlink(key.c_str(), link.c_str()) == 0);
   assert(refusal(load_consensus_key(link)) == ConsensusKeyFileError::cannot_open);
 
-  // A directory.
-  assert(refusal(load_consensus_key(dir)) == ConsensusKeyFileError::not_a_regular_file);
+  // A directory, inside a private one, so nothing about its surroundings can refuse it
+  // and the rule under test is the only one left.
+  const std::string inner = dir + "/inner";
+  assert(::mkdir(inner.c_str(), 0700) == 0);
+  assert(refusal(load_consensus_key(inner)) == ConsensusKeyFileError::not_a_regular_file);
 
   // Readable by the group: the right size, the right owner, one bit too many.
   const std::string shared = dir + "/shared.key";
@@ -103,6 +106,15 @@ int main() {
   // holds is refused however well protected the file itself is.
   const std::string open_dir = dir + "/open";
   assert(::mkdir(open_dir.c_str(), 0777) == 0);
+  // `mkdir` is filtered by the process umask, so the mode asked for is not the mode
+  // given. Without this the directory is often 0755, nothing refuses the key inside it,
+  // and the case below stops being about the rule it names.
+  assert(::chmod(open_dir.c_str(), 0777) == 0);
+  {
+    struct stat st {};
+    assert(::stat(open_dir.c_str(), &st) == 0);
+    assert((st.st_mode & (S_IWGRP | S_IWOTH)) == (S_IWGRP | S_IWOTH));
+  }
   const std::string exposed = open_dir + "/consensus.key";
   write_file(exposed, std::string(32, 'k'), 0600);
   assert(refusal(load_consensus_key(exposed)) == ConsensusKeyFileError::directory_writable);
@@ -110,6 +122,16 @@ int main() {
   auto in_open = create_consensus_key(open_dir + "/new.key");
   assert(std::holds_alternative<ConsensusKeyFileError>(in_open));
   assert(std::get<ConsensusKeyFileError>(in_open) == ConsensusKeyFileError::directory_writable);
+
+  // Two rules have no input this test can build, and saying so is better than a case
+  // that appears to cover them and does not:
+  //
+  //   the file is owned by this process   -- would mean creating a file as another user
+  //   the directory flush succeeded       -- would mean a filesystem that fails fsync
+  //
+  // Both are held by reading the code rather than by running it. The second is the one
+  // that decides whether a key reported as created survives a crash, so it is worth
+  // knowing that it is the weaker of the checks here.
 
   std::printf("CONSENSUS_KEY_FILE_OK create/load round-trips; symlink, directory, group-readable, "
               "short, long, and world-writable-directory each refused on their own\n");
