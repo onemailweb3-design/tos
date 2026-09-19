@@ -85,9 +85,12 @@
 #include <limits>
 #include <set>
 
+#include "block/pq-vote.h"
 #include "block/precompiled-smc/PrecompiledSmartContract.h"
 #include "common/delay.h"
 #include "interfaces/validator-manager.h"
+#include "pq/consensus-key-file.h"
+#include "pq/pq-elector.h"
 #include "tl-utils/lite-utils.hpp"
 
 #include "block-auto.h"
@@ -1165,94 +1168,68 @@ class ValidatorElectionBidCreator : public td::actor::Actor {
   td::BufferSlice result_;
 };
 
+// The two votes a validator casts as a member of the current set: on a configuration
+// proposal, and on a complaint against a validator of a past election. Both are signed
+// with this node's post-quantum consensus key, under their own frozen context, over a
+// preimage that names the exact validator set counting the vote.
+//
+// Neither the signed bytes nor the message body is built by a script any more. A script
+// is a second place the wire is written, and the signature it could produce -- Ed25519,
+// over a preimage that names no validator set -- is one no contract in this tree accepts.
 class ValidatorProposalVoteCreator : public td::actor::Actor {
  public:
-  ValidatorProposalVoteCreator(td::BufferSlice proposal, std::string dir, td::actor::ActorId<ValidatorEngine> engine,
-                               td::actor::ActorId<tos::keyring::Keyring> keyring, td::Promise<td::BufferSlice> promise)
-      : proposal_(std::move(proposal))
-      , dir_(std::move(dir))
-      , engine_(engine)
-      , keyring_(keyring)
-      , promise_(std::move(promise)) {
+  ValidatorProposalVoteCreator(td::BufferSlice proposal, td::actor::ActorId<ValidatorEngine> engine,
+                               td::Promise<td::BufferSlice> promise)
+      : proposal_(std::move(proposal)), engine_(engine), promise_(std::move(promise)) {
   }
 
   void start_up() override {
-    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<std::pair<tos::PublicKey, size_t>> R) {
+    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<ValidatorEngine::LocalValidator> R) {
       if (R.is_error()) {
         td::actor::send_closure(SelfId, &ValidatorProposalVoteCreator::abort_query,
-                                R.move_as_error_prefix("failed to find self permanent key: "));
+                                R.move_as_error_prefix("this node cannot vote: "));
       } else {
-        auto v = R.move_as_ok();
-        td::actor::send_closure(SelfId, &ValidatorProposalVoteCreator::got_id, v.first, v.second);
+        td::actor::send_closure(SelfId, &ValidatorProposalVoteCreator::got_validator, R.move_as_ok());
       }
     });
-    td::actor::send_closure(engine_, &ValidatorEngine::get_current_validator_perm_key, std::move(P));
+    td::actor::send_closure(engine_, &ValidatorEngine::get_current_validator, std::move(P));
   }
 
-  void got_id(tos::PublicKey pubkey, size_t idx) {
-    pubkey_ = std::move(pubkey);
-    idx_ = idx;
-    auto codeR = td::read_file_str(dir_ + "/config-proposal-vote-req.fif");
-    if (codeR.is_error()) {
-      abort_query(codeR.move_as_error_prefix("fif not found (validator-elect-req.fif)"));
+  void got_validator(ValidatorEngine::LocalValidator self) {
+    auto subjectR = block::pq::parse_vote_subject(proposal_.as_slice());
+    if (subjectR.is_error()) {
+      abort_query(subjectR.move_as_error());
       return;
     }
-    auto data = proposal_.as_slice().str();
-    auto R = fift::mem_run_fift(codeR.move_as_ok(), {"config-proposal-vote-req.fif", "-i", td::to_string(idx_), data},
-                                dir_ + "/");
-    if (R.is_error()) {
-      abort_query(R.move_as_error_prefix("fift fail (cofig-proposal-vote-req.fif)"));
+    auto proposal_hash = subjectR.move_as_ok();
+    if (self.idx > std::numeric_limits<td::uint16>::max()) {
+      abort_query(td::Status::Error("this node's index in the validator set does not fit in 16 bits"));
       return;
     }
-    auto res = R.move_as_ok();
-    auto to_signR = res.source_lookup.read_file("validator-to-sign.req");
-    if (to_signR.is_error()) {
-      abort_query(td::Status::Error(PSTRING() << "strange error: no to sign file. Output: " << res.output));
+    auto idx = static_cast<td::uint16>(self.idx);
+
+    auto preimage = tos::pq::config_vote_preimage(self.global_id, self.validator_set_id, self.validator_id.value, idx,
+                                                  proposal_hash);
+    auto signature = self.signer->sign_config_vote(preimage);
+    if (!signature.has_value()) {
+      abort_query(td::Status::Error("the post-quantum consensus key could not sign this vote"));
       return;
     }
-    auto to_sign = td::BufferSlice{to_signR.move_as_ok().data};
-
-    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<td::BufferSlice> R) {
-      if (R.is_error()) {
-        td::actor::send_closure(SelfId, &ValidatorProposalVoteCreator::abort_query,
-                                R.move_as_error_prefix("sign fail: "));
-      } else {
-        td::actor::send_closure(SelfId, &ValidatorProposalVoteCreator::signed_vote, R.move_as_ok());
-      }
-    });
-
-    td::actor::send_closure(keyring_, &tos::keyring::Keyring::sign_message, pubkey_.compute_short_id(),
-                            std::move(to_sign), std::move(P));
-  }
-
-  void signed_vote(td::BufferSlice signature) {
-    signature_ = std::move(signature);
-
-    auto codeR = td::read_file_str(dir_ + "/config-proposal-vote-signed.fif");
-    if (codeR.is_error()) {
-      abort_query(codeR.move_as_error_prefix("fif not found (config-proposal-vote-signed.fif)"));
+    auto bodyR = block::pq::config_vote_body(
+        block::pq::vote_query_id(static_cast<td::uint32>(td::Clocks::system()), proposal_hash), idx, proposal_hash,
+        td::Slice{signature->signature});
+    if (bodyR.is_error()) {
+      abort_query(bodyR.move_as_error());
+      return;
+    }
+    auto serialized = vm::std_boc_serialize(bodyR.move_as_ok(), 2);
+    if (serialized.is_error()) {
+      abort_query(serialized.move_as_error());
       return;
     }
 
-    auto key = td::base64_encode(pubkey_.export_as_slice().as_slice());
-    auto sig = td::base64_encode(signature_.as_slice());
-
-    auto data = proposal_.as_slice().str();
-    auto R = fift::mem_run_fift(
-        codeR.move_as_ok(), {"config-proposal-vote-signed.fif", "-i", td::to_string(idx_), data, key, sig}, dir_ + "/");
-    if (R.is_error()) {
-      abort_query(R.move_as_error_prefix("fift fail (config-proposal-vote-signed.fif)"));
-      return;
-    }
-
-    auto res = R.move_as_ok();
-    auto dataR = res.source_lookup.read_file("vote-msg-body.boc");
-    if (dataR.is_error()) {
-      abort_query(td::Status::Error("strage error: no result boc"));
-      return;
-    }
-
-    result_ = td::BufferSlice(dataR.move_as_ok().data);
+    validator_id_ = self.validator_id;
+    result_ = serialized.move_as_ok();
     finish_query();
   }
 
@@ -1261,123 +1238,78 @@ class ValidatorProposalVoteCreator : public td::actor::Actor {
     stop();
   }
   void finish_query() {
+    // The identity field carries the stable validator identity. There is no permanent
+    // key left to name: a post-quantum validator is its validator_id, and the key it
+    // signs with is the one the set records for that identity.
     promise_.set_value(tos::create_serialize_tl_object<tos::tos_api::engine_validator_proposalVote>(
-        pubkey_.compute_short_id().bits256_value(), std::move(result_)));
+        validator_id_.value, std::move(result_)));
     stop();
   }
 
  private:
   td::BufferSlice proposal_;
-  std::string dir_;
 
-  tos::PublicKey pubkey_;
-  size_t idx_;
-
-  td::BufferSlice signature_;
+  tos::ValidatorId validator_id_;
   td::BufferSlice result_;
   td::actor::ActorId<ValidatorEngine> engine_;
-  td::actor::ActorId<tos::keyring::Keyring> keyring_;
 
   td::Promise<td::BufferSlice> promise_;
-
-  tos::PublicKeyHash perm_key_;
-  tos::PublicKey perm_key_full_;
-  tos::adnl::AdnlNodeIdShort adnl_addr_;
-  tos::adnl::AdnlNodeIdFull adnl_key_full_;
 };
 
 class ValidatorPunishVoteCreator : public td::actor::Actor {
  public:
-  ValidatorPunishVoteCreator(td::uint32 election_id, td::BufferSlice proposal, std::string dir,
-                             td::actor::ActorId<ValidatorEngine> engine,
-                             td::actor::ActorId<tos::keyring::Keyring> keyring, td::Promise<td::BufferSlice> promise)
-      : election_id_(election_id)
-      , proposal_(std::move(proposal))
-      , dir_(std::move(dir))
-      , engine_(engine)
-      , keyring_(keyring)
-      , promise_(std::move(promise)) {
+  ValidatorPunishVoteCreator(td::uint32 election_id, td::BufferSlice proposal,
+                             td::actor::ActorId<ValidatorEngine> engine, td::Promise<td::BufferSlice> promise)
+      : election_id_(election_id), proposal_(std::move(proposal)), engine_(engine), promise_(std::move(promise)) {
   }
 
   void start_up() override {
-    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<std::pair<tos::PublicKey, size_t>> R) {
+    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<ValidatorEngine::LocalValidator> R) {
       if (R.is_error()) {
         td::actor::send_closure(SelfId, &ValidatorPunishVoteCreator::abort_query,
-                                R.move_as_error_prefix("failed to find self permanent key: "));
+                                R.move_as_error_prefix("this node cannot vote: "));
       } else {
-        auto v = R.move_as_ok();
-        td::actor::send_closure(SelfId, &ValidatorPunishVoteCreator::got_id, v.first, v.second);
+        td::actor::send_closure(SelfId, &ValidatorPunishVoteCreator::got_validator, R.move_as_ok());
       }
     });
-    td::actor::send_closure(engine_, &ValidatorEngine::get_current_validator_perm_key, std::move(P));
+    td::actor::send_closure(engine_, &ValidatorEngine::get_current_validator, std::move(P));
   }
 
-  void got_id(tos::PublicKey pubkey, size_t idx) {
-    pubkey_ = std::move(pubkey);
-    idx_ = idx;
-    auto codeR = td::read_file_str(dir_ + "/complaint-vote-req.fif");
-    if (codeR.is_error()) {
-      abort_query(codeR.move_as_error_prefix("fif not found (complaint-vote-req.fif)"));
+  void got_validator(ValidatorEngine::LocalValidator self) {
+    auto subjectR = block::pq::parse_vote_subject(proposal_.as_slice());
+    if (subjectR.is_error()) {
+      abort_query(subjectR.move_as_error());
       return;
     }
-    auto data = proposal_.as_slice().str();
-    auto R = fift::mem_run_fift(codeR.move_as_ok(),
-                                {"complaint-vote-req.fif", td::to_string(idx_), td::to_string(election_id_), data},
-                                dir_ + "/");
-    if (R.is_error()) {
-      abort_query(R.move_as_error_prefix("fift fail (complaint-vote-req.fif)"));
+    auto complaint_hash = subjectR.move_as_ok();
+    if (self.idx > std::numeric_limits<td::uint16>::max()) {
+      abort_query(td::Status::Error("this node's index in the validator set does not fit in 16 bits"));
       return;
     }
-    auto res = R.move_as_ok();
-    auto to_signR = res.source_lookup.read_file("validator-to-sign.req");
-    if (to_signR.is_error()) {
-      abort_query(td::Status::Error(PSTRING() << "strange error: no to sign file. Output: " << res.output));
+    auto idx = static_cast<td::uint16>(self.idx);
+
+    auto preimage = tos::pq::complaint_vote_preimage(self.global_id, self.validator_set_id, self.validator_id.value,
+                                                     idx, election_id_, complaint_hash);
+    auto signature = self.signer->sign_election(preimage);
+    if (!signature.has_value()) {
+      abort_query(td::Status::Error("the post-quantum consensus key could not sign this vote"));
       return;
     }
-    auto to_sign = td::BufferSlice{to_signR.move_as_ok().data};
-
-    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<td::BufferSlice> R) {
-      if (R.is_error()) {
-        td::actor::send_closure(SelfId, &ValidatorPunishVoteCreator::abort_query,
-                                R.move_as_error_prefix("sign fail: "));
-      } else {
-        td::actor::send_closure(SelfId, &ValidatorPunishVoteCreator::signed_vote, R.move_as_ok());
-      }
-    });
-
-    td::actor::send_closure(keyring_, &tos::keyring::Keyring::sign_message, pubkey_.compute_short_id(),
-                            std::move(to_sign), std::move(P));
-  }
-
-  void signed_vote(td::BufferSlice signature) {
-    signature_ = std::move(signature);
-
-    auto codeR = td::read_file_str(dir_ + "/complaint-vote-signed.fif");
-    if (codeR.is_error()) {
-      abort_query(codeR.move_as_error_prefix("fif not found (complaint-vote-signed.fif)"));
+    auto bodyR = block::pq::complaint_vote_body(
+        block::pq::vote_query_id(static_cast<td::uint32>(td::Clocks::system()), complaint_hash), idx, election_id_,
+        complaint_hash, td::Slice{signature->signature});
+    if (bodyR.is_error()) {
+      abort_query(bodyR.move_as_error());
+      return;
+    }
+    auto serialized = vm::std_boc_serialize(bodyR.move_as_ok(), 2);
+    if (serialized.is_error()) {
+      abort_query(serialized.move_as_error());
       return;
     }
 
-    auto key = td::base64_encode(pubkey_.export_as_slice().as_slice());
-    auto sig = td::base64_encode(signature_.as_slice());
-
-    auto data = proposal_.as_slice().str();
-    auto R = fift::mem_run_fift(
-        codeR.move_as_ok(),
-        {"complaint-vote-signed.fif", td::to_string(idx_), td::to_string(election_id_), data, key, sig}, dir_ + "/");
-    if (R.is_error()) {
-      abort_query(R.move_as_error_prefix("fift fail (complaint-vote-signed.fif)"));
-      return;
-    }
-
-    auto res = R.move_as_ok();
-    auto dataR = res.source_lookup.read_file("vote-query.boc");
-    if (dataR.is_error()) {
-      abort_query(td::Status::Error("strage error: no result boc"));
-      return;
-    }
-
-    result_ = td::BufferSlice(dataR.move_as_ok().data);
+    validator_id_ = self.validator_id;
+    result_ = serialized.move_as_ok();
     finish_query();
   }
 
@@ -1387,29 +1319,19 @@ class ValidatorPunishVoteCreator : public td::actor::Actor {
   }
   void finish_query() {
     promise_.set_value(tos::create_serialize_tl_object<tos::tos_api::engine_validator_proposalVote>(
-        pubkey_.compute_short_id().bits256_value(), std::move(result_)));
+        validator_id_.value, std::move(result_)));
     stop();
   }
 
  private:
   td::uint32 election_id_;
   td::BufferSlice proposal_;
-  std::string dir_;
 
-  tos::PublicKey pubkey_;
-  size_t idx_;
-
-  td::BufferSlice signature_;
+  tos::ValidatorId validator_id_;
   td::BufferSlice result_;
   td::actor::ActorId<ValidatorEngine> engine_;
-  td::actor::ActorId<tos::keyring::Keyring> keyring_;
 
   td::Promise<td::BufferSlice> promise_;
-
-  tos::PublicKeyHash perm_key_;
-  tos::PublicKey perm_key_full_;
-  tos::adnl::AdnlNodeIdShort adnl_addr_;
-  tos::adnl::AdnlNodeIdFull adnl_key_full_;
 };
 
 class CheckDhtServerStatusQuery : public td::actor::Actor {
@@ -2534,6 +2456,47 @@ void ValidatorEngine::start_validator() {
                             json_rpc_server_.get());
   }
 
+  // The one post-quantum secret this host holds. A key that cannot be loaded, or a
+  // binding that does not name a validator, is this machine's own misconfiguration: the
+  // node must not come up quietly as an observer while its operator believes it is
+  // validating. What the chain later says about this identity is a different matter and
+  // is not decided here.
+  if (config_.pq_consensus) {
+    if (config_.pq_consensus->validator_id.is_zero()) {
+      LOG(FATAL) << "post-quantum consensus custody names no validator: validator_id is zero";
+    }
+    auto loaded = tos::pq::load_consensus_key(config_.pq_consensus->consensus_key_file);
+    if (std::holds_alternative<tos::pq::ConsensusKeyFileError>(loaded)) {
+      LOG(FATAL) << "post-quantum consensus key " << config_.pq_consensus->consensus_key_file << ": "
+                 << tos::pq::describe(std::get<tos::pq::ConsensusKeyFileError>(loaded));
+    }
+    auto store =
+        std::make_shared<const tos::pq::ValidatorPQKeyStore>(std::move(std::get<tos::pq::ValidatorPQKeyStore>(loaded)));
+    // The identity of the key is what the key derives, never what the configuration says:
+    // a node cannot claim to hold a key it does not.
+    LOG(WARNING) << "post-quantum consensus custody: validator " << config_.pq_consensus->validator_id.value.to_hex()
+                 << " key "
+                 << td::base64_encode(
+                        td::Slice(store->consensus_key().key_id.data(), store->consensus_key().key_id.size()));
+    pq_consensus_signer_ = store;
+    // Registration crosses an actor boundary, so nothing else may start until it has
+    // answered. Were the rest of startup to run here, a refused custody would kill the
+    // process only after the node had already begun serving as an observer.
+    td::actor::send_closure(validator_manager_, &tos::validator::ValidatorManagerInterface::add_pq_consensus_key,
+                            config_.pq_consensus->validator_id, std::move(store),
+                            [SelfId = actor_id(this)](td::Result<td::Unit> result) {
+                              if (result.is_error()) {
+                                LOG(FATAL) << "post-quantum consensus custody was refused: " << result.move_as_error();
+                              }
+                              td::actor::send_closure(SelfId, &ValidatorEngine::finish_start_validator);
+                            });
+    return;
+  }
+
+  finish_start_validator();
+}
+
+void ValidatorEngine::finish_start_validator() {
   for (auto &v : config_.validators) {
     td::actor::send_closure(validator_manager_, &tos::validator::ValidatorManagerInterface::add_permanent_key, v.first,
                             [](td::Result<>) {});
@@ -4723,13 +4686,8 @@ void ValidatorEngine::run_control_query(tos::tos_api::engine_validator_createPro
     return;
   }
 
-  if (fift_dir_.empty()) {
-    promise.set_value(create_control_query_error(td::Status::Error(tos::ErrorCode::notready, "no fift dir")));
-    return;
-  }
-
-  td::actor::create_actor<ValidatorProposalVoteCreator>("votecreate", std::move(query.vote_), fift_dir_, actor_id(this),
-                                                        keyring_.get(), std::move(promise))
+  td::actor::create_actor<ValidatorProposalVoteCreator>("votecreate", std::move(query.vote_), actor_id(this),
+                                                        std::move(promise))
       .release();
 }
 
@@ -4749,13 +4707,8 @@ void ValidatorEngine::run_control_query(tos::tos_api::engine_validator_createCom
     return;
   }
 
-  if (fift_dir_.empty()) {
-    promise.set_value(create_control_query_error(td::Status::Error(tos::ErrorCode::notready, "no fift dir")));
-    return;
-  }
-
   td::actor::create_actor<ValidatorPunishVoteCreator>("votecomplaintcreate", query.election_id_, std::move(query.vote_),
-                                                      fift_dir_, actor_id(this), keyring_.get(), std::move(promise))
+                                                      actor_id(this), std::move(promise))
       .release();
 }
 
@@ -5949,26 +5902,63 @@ void ValidatorEngine::add_json_rpc_trusted_proxy(std::string ip) {
   json_rpc_opts_.trusted_proxies.push_back(std::move(ip));
 }
 
-void ValidatorEngine::get_current_validator_perm_key(td::Promise<std::pair<tos::PublicKey, size_t>> promise) {
+void ValidatorEngine::get_current_validator(td::Promise<LocalValidator> promise) {
   if (state_.is_null()) {
     promise.set_error(td::Status::Error(tos::ErrorCode::notready, "not started"));
     return;
   }
+  if (!pq_consensus_signer_ || !config_.pq_consensus) {
+    promise.set_error(td::Status::Error(tos::ErrorCode::notready, "no post-quantum consensus key is custodied"));
+    return;
+  }
 
   CHECK(validator_set_.not_null());
+
+  // The stored ConfigParam 34 cell, not the set decoded from it: the contract counting
+  // the vote hashes the cell it holds, so anything else would sign for a set nobody has.
+  auto holder = state_->get_config_holder();
+  if (holder.is_error()) {
+    promise.set_error(holder.move_as_error_prefix("masterchain configuration is unavailable: "));
+    return;
+  }
+  auto *holder_q = dynamic_cast<const tos::validator::ConfigHolderQ *>(holder.ok().get());
+  if (holder_q == nullptr || holder_q->get_config() == nullptr) {
+    promise.set_error(td::Status::Error("masterchain config holder does not expose block::Config"));
+    return;
+  }
+  auto stored_set = holder_q->get_config()->get_config_param(34);
+  if (stored_set.is_null()) {
+    promise.set_error(td::Status::Error(tos::ErrorCode::notready, "no validator set is stored in the configuration"));
+    return;
+  }
+  td::Bits256 validator_set_id{stored_set->get_hash().bits()};
+
+  const auto &held_key = pq_consensus_signer_->consensus_key();
+  td::Bits256 held;
+  std::memcpy(held.data(), held_key.key_id.data(), held_key.key_id.size());
+
   auto vec = validator_set_->export_vector();
   for (size_t idx = 0; idx < vec.size(); idx++) {
-    auto &el = vec[idx];
-    tos::PublicKey pub{tos::pubkeys::Ed25519{el.classical_key().as_bits256()}};
-    auto pubkey_hash = pub.compute_short_id();
-
-    auto it = config_.validators.find(pubkey_hash);
-    if (it != config_.validators.end()) {
-      promise.set_value(std::make_pair(pub, idx));
+    const auto &descr = vec[idx];
+    if (!descr.is_pq()) {
+      continue;
+    }
+    if (descr.validator_id != config_.pq_consensus->validator_id) {
+      continue;
+    }
+    if (descr.key_id.value != held) {
+      // The identity is ours and the key is not: the consensus key was rotated and this
+      // node still holds the one before it. Nothing here can sign for this set, and the
+      // node goes on serving as an ordinary one.
+      promise.set_error(td::Status::Error(tos::ErrorCode::notready,
+                                          "the current set records another consensus key for this validator"));
       return;
     }
+    promise.set_value(LocalValidator{descr.validator_id, descr.key_id, idx, pq_consensus_signer_,
+                                     state_->get_global_id(), validator_set_id});
+    return;
   }
-  promise.set_error(td::Status::Error(tos::ErrorCode::notready, "not a validator"));
+  promise.set_error(td::Status::Error(tos::ErrorCode::notready, "not a validator of the current set"));
 }
 
 std::atomic<bool> need_stats_flag{false};

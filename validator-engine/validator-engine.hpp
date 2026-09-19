@@ -36,19 +36,20 @@
 #include "auto/tl/tos_api.h"
 #include "auto/tl/tos_api.hpp"
 #include "auto/tl/tos_api_json.h"
+#include "crypto/pq/consensus-pq-signer.h"
 #include "dht/dht.h"
 #include "metrics/prometheus-exporter.h"
-#include "tos/tos-types.h"
-#include "json-rpc-server.h"
 #include "quic/quic-sender.h"
 #include "rldp2/rldp.h"
 #include "td/actor/MultiPromise.h"
 #include "td/actor/PromiseFuture.h"
+#include "tos/tos-types.h"
 #include "validator/full-node-master.h"
 #include "validator/full-node.h"
 #include "validator/manager.h"
 #include "validator/validator.h"
 
+#include "json-rpc-server.h"
 #include "overlays.h"
 
 enum ValidatorEnginePermissions : td::uint32 { vep_default = 1, vep_modify = 2, vep_unsafe = 4 };
@@ -223,6 +224,9 @@ class ValidatorEngine : public td::actor::Actor {
 
   td::Ref<tos::validator::MasterchainState> state_;
   td::Ref<block::ValidatorSet> validator_set_, validator_set_prev_, validator_set_next_;
+  // The hot consensus key this host custodies, kept so the node can sign its own votes
+  // without asking anything else for the secret.
+  std::shared_ptr<const tos::pq::ValidatorPQKeyStore> pq_consensus_signer_;
   td::Timestamp issue_fast_sync_overlay_certificates_at_ = td::Timestamp::now();
   td::Timestamp issue_shard_overlay_certificates_at_ = td::Timestamp::now();
   bool fast_sync_member_certificates_write_scheduled_ = false;
@@ -515,6 +519,9 @@ class ValidatorEngine : public td::actor::Actor {
   void started_overlays();
 
   void start_validator();
+  // The part of validator startup that may only run once post-quantum custody, if any is
+  // configured, has been accepted.
+  void finish_start_validator();
   void started_validator();
   // Crash-recovery: re-index any wc=0 block left flagged incomplete by the
   // wc0 wallet-index writer (see wallet-index.h's 0x1E marker). Fired once,
@@ -566,7 +573,29 @@ class ValidatorEngine : public td::actor::Actor {
   void set_json_rpc_trust_proxy_headers(bool trust);
   void add_json_rpc_trusted_proxy(std::string ip);
 
-  void get_current_validator_perm_key(td::Promise<std::pair<tos::PublicKey, size_t>> promise);
+  // What this node is in the current validator set, if it is anything.
+  //
+  // A validator is ours only when the set's descriptor names the identity we were
+  // configured for and records the identity of the key we actually hold. The key is
+  // never taken from the configuration -- it is derived from the seed -- so a node
+  // cannot claim a membership it has no key for.
+  //
+  // This replaced a lookup that asked each descriptor for an Ed25519 key. A
+  // post-quantum descriptor has none and refuses rather than inventing one, so that
+  // lookup stopped the node the moment post-quantum descriptors became authoritative.
+  struct LocalValidator {
+    tos::ValidatorId validator_id;
+    tos::ConsensusKeyId key_id;
+    std::size_t idx;
+    std::shared_ptr<const tos::pq::ValidatorPQKeyStore> signer;
+    // What every authority signature this node produces is bound to: the network, and
+    // the exact stored validator set that will count the vote. Both are read here, from
+    // the state the lookup already holds, so a caller cannot supply a set the node is
+    // not a member of.
+    td::int32 global_id;
+    td::Bits256 validator_set_id;
+  };
+  void get_current_validator(td::Promise<LocalValidator> promise);
 
   void try_add_adnl_node(tos::PublicKeyHash pub, AdnlCategory cat, td::Promise<td::Unit> promise);
   void try_add_dht_node(tos::PublicKeyHash pub, td::Promise<td::Unit> promise);

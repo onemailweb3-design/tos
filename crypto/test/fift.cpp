@@ -120,10 +120,6 @@ TEST(Fift, test_validator_proposal_invalid_signature) {
   run_fift("validator-proposal-invalid-signature.fif", true);
 }
 
-TEST(Fift, test_validator_proposal_expire_fail) {
-  run_fift("validator-proposal-expire-fail.fif", true);
-}
-
 TEST(Fift, test_validator_proposal_invalid_complaint) {
   run_fift("validator-proposal-invalid-complaint.fif", true);
 }

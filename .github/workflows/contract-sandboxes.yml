@@ -75,6 +75,14 @@ jobs:
           ./build/test-fift
           ./build/test-cells
 
+      # The message bodies the node sends to the governance contracts, and the parsing
+      # of the subject an operator names. The contracts' side of these bytes is covered
+      # by the sandbox suites below; this is the producing side.
+      - name: Validator vote bodies
+        run: |
+          cmake --build build --target test-pq-vote-body -j2
+          ./build/crypto/pq/test-pq-vote-body
+
       - name: Build the post-quantum key tool
         run: |
           cmake -S crypto/pq/tools -B build-pq-key -G Ninja -DCMAKE_BUILD_TYPE=Release

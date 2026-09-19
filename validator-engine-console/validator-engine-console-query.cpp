@@ -812,7 +812,9 @@ td::Status CreateProposalVoteQuery::send() {
 td::Status CreateProposalVoteQuery::receive(td::BufferSlice data) {
   TRY_RESULT_PREFIX(f, tos::fetch_tl_object<tos::tos_api::engine_validator_proposalVote>(data.as_slice(), true),
                     "received incorrect answer: ");
-  td::TerminalIO::out() << "success: permkey=" << f->perm_key_.to_hex() << "\n";
+  // The identity that voted. A post-quantum validator has no permanent key to name; the
+  // field keeps its wire name and carries the stable validator identity.
+  td::TerminalIO::out() << "success: validator=" << f->perm_key_.to_hex() << "\n";
   TRY_STATUS(td::write_file(fname_, f->to_send_.as_slice()));
   return td::Status::OK();
 }
@@ -835,7 +837,7 @@ td::Status CreateComplaintVoteQuery::send() {
 td::Status CreateComplaintVoteQuery::receive(td::BufferSlice data) {
   TRY_RESULT_PREFIX(f, tos::fetch_tl_object<tos::tos_api::engine_validator_proposalVote>(data.as_slice(), true),
                     "received incorrect answer: ");
-  td::TerminalIO::out() << "success: permkey=" << f->perm_key_.to_hex() << "\n";
+  td::TerminalIO::out() << "success: validator=" << f->perm_key_.to_hex() << "\n";
   TRY_STATUS(td::write_file(fname_, f->to_send_.as_slice()));
   return td::Status::OK();
 }

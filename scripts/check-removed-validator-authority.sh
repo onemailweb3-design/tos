@@ -39,7 +39,49 @@ crypto/smartcont/config-code.fc	check_signature	the config contract authorises s
 crypto/smartcont/config-code.fc	0x43665021	the administrator can change a parameter again
 crypto/smartcont/config-code.fc	0x50624b21	the administrator key can be replaced again, so there is one
 crypto/smartcont/config-code.fc	0x4e43ef05	the administrator can replace the elector code again
+crypto/fift/lib/Validator.fif	566f7465	a script builds the classical configuration vote again
+crypto/fift/lib/Validator.fif	566f7445	a script builds the classical internal configuration vote again
+crypto/fift/lib/Validator.fif	56744350	a script builds the classical complaint-vote request again
+crypto/fift/lib/Validator.fif	56744370	a script builds the classical complaint-vote body again
+crypto/fift/lib/Validator.fif	4e436f64	a script builds the administrator's code replacement again
 SITES
+
+# The scripts that produced those messages. A validator's vote is signed with a
+# post-quantum key over a preimage that names the validator set counting it, which a
+# script has no way to learn, so a file here is either a vote nothing accepts or a way
+# to sign one outside the node that holds the key.
+while read -r file; do
+  case "$file" in ''|'#'*) continue ;; esac
+  if [ -e "$root/$file" ]; then
+    echo "authority check failed: $file exists again -- a removed authority has tooling" >&2
+    failed=1
+  fi
+done <<'GONE'
+crypto/smartcont/config-proposal-vote-req.fif
+crypto/smartcont/config-proposal-vote-signed.fif
+crypto/smartcont/complaint-vote-req.fif
+crypto/smartcont/complaint-vote-signed.fif
+crypto/smartcont/update-config-smc.fif
+crypto/smartcont/update-elector-smc.fif
+GONE
+
+# The node builds its own votes. Running a script to do it would mean the signed bytes
+# have a second definition, and the one the contract verifies would be whichever the
+# node happened to run. (The election-bid path still runs a script; it produces a stake
+# request the elector no longer accepts, and it is not this check's subject.)
+engine="$root/validator-engine/validator-engine.cpp"
+for script in config-proposal-vote-req config-proposal-vote-signed complaint-vote-req complaint-vote-signed; do
+  if grep -q -- "$script" "$engine"; then
+    echo "authority check failed: validator-engine.cpp runs $script.fif again" >&2
+    failed=1
+  fi
+done
+for builder in 'block::pq::config_vote_body' 'block::pq::complaint_vote_body'; do
+  if ! grep -q -- "$builder" "$engine"; then
+    echo "authority check failed: validator-engine.cpp no longer builds its vote with $builder" >&2
+    failed=1
+  fi
+done
 
 # The external entry point exists only to refuse. A body that does anything else is an
 # external authority path, whatever it is called.

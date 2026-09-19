@@ -13,11 +13,23 @@
 // They are here rather than in a Fift script because a script is a second place the wire
 // can be written, and the two would drift the first time one of them changed.
 
+#include "common/bigint.hpp"
+#include "common/bitstring.h"
 #include "pq/pq-bytes.h"
 #include "pq/pq-elector.h"
 #include "vm/cells.h"
 
 namespace block::pq {
+
+// The proposal or complaint an operator names, as the control interface passes it:
+// decimal, or hexadecimal behind an "0x". A partially parsed hash is a vote on a
+// different subject, so anything the whole text is not is refused.
+td::Result<td::Bits256> parse_vote_subject(td::Slice text);
+
+// The identifier a vote carries. The contracts only echo it back and it authorises
+// nothing, but the derivation is the one the governance contracts have always used, so
+// an operator reading a refused query sees a familiar number.
+td::uint64 vote_query_id(td::uint32 now, const td::Bits256& subject);
 
 // `PQvo`: a validator of the current set votes for a configuration proposal.
 td::Result<td::Ref<vm::Cell>> config_vote_body(td::uint64 query_id, td::uint16 idx,

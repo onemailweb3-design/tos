@@ -42,7 +42,7 @@ target_compile_options(validator-engine PRIVATE
 )
 target_link_libraries(validator-engine metrics overlay tdutils tdactor adnl tl_api dht
   rldp2 quic full-node validator tos_validator validator
-  fift-lib memprof git ${JEMALLOC_LIBRARIES})
+  fift-lib memprof git tos_pq_consensus_signer ${JEMALLOC_LIBRARIES})
 
 add_library(json-rpc-account-model STATIC
   json-rpc-account-model.h
