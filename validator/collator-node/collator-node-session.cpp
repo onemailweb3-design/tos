@@ -15,6 +15,7 @@
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include "block/validator-session-members.h"
 #include "collator-node-session.hpp"
 #include "collator-node-limits.h"
 #include "collator-node.hpp"
@@ -322,8 +323,19 @@ void CollatorNodeSession::process_request(adnl::AdnlNodeIdShort src, std::vector
   // Require the creator to be a member of this group's validator set, which
   // bounds the distinct creators -- and thus the stored records -- to the set.
   // The creator is a stable validator identity, so membership is asked directly.
-  if (validator_set_->get_validator(creator) == nullptr) {
+  const auto* creator_descr = validator_set_->get_validator(creator);
+  if (creator_descr == nullptr) {
     promise.set_error(td::Status::Error(ErrorCode::error, "collate query: creator is not in the validator set"));
+    return;
+  }
+  // Being some validator's ADNL identity is not enough to speak for some other
+  // validator. Without this, an authorised validator could have blocks collated and
+  // stored under a peer's identity, because the transport identity that was
+  // authenticated and the validator identity the block is attributed to were checked
+  // separately and never against each other.
+  if (src != adnl::AdnlNodeIdShort{block::validator_adnl_identity(*creator_descr)}) {
+    promise.set_error(td::Status::Error(
+        ErrorCode::error, "collate query: authenticated ADNL identity does not belong to the named creator"));
     return;
   }
   generate_block(std::move(prev_blocks), priority, timeout, std::move(promise));

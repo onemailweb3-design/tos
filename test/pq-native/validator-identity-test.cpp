@@ -12,6 +12,7 @@
 #include "block/mc-config.h"
 #include "block/validator-set.h"
 #include "block/validator-session-members.h"
+#include <keys/keys.hpp>
 #include "auto/tl/tos_api.hpp"
 #include "tl-utils/tl-utils.hpp"
 #include "crypto/pq/pq-bytes.h"
@@ -316,6 +317,42 @@ int main() {
       seen++;
     }
     assert(seen >= 13);
+  }
+
+  {  // Five different 32-byte values meet on one validator, and substituting any of them
+     // for another is the mistake this whole phase is about. They are asserted to be
+     // pairwise different, because a test written where two of them coincide would keep
+     // passing after exactly that substitution.
+    auto classical = tos::ValidatorDescr{tos::Ed25519_PublicKey{fill(0x11)}, 5, fill(0xc0)};
+    block::ValidatorSet classical_set{1, tos::ShardIdFull{tos::masterchainId}, {classical}};
+    const auto* c = classical_set.get_validator(
+        tos::ValidatorId{tos::PublicKey{tos::pubkeys::Ed25519{tos::Ed25519_PublicKey{fill(0x11)}}}
+                             .compute_short_id()
+                             .bits256_value()});
+    assert(c != nullptr);
+
+    const auto raw_key = fill(0x11);                  // the Ed25519 key itself
+    const auto short_id = c->validator_id.value;      // the identity derived from it
+    const auto adnl = c->addr;                        // where it is reachable
+    assert(raw_key != short_id);                      // the confusion that rejected blocks
+    assert(short_id != adnl);
+    assert(raw_key != adnl);
+    // For a classical descriptor the key identity is the same value as the membership
+    // identity; for a post-quantum one they are independent, which is the point.
+    assert(c->key_id.value == short_id);
+    const auto* pq = set_after.get_validator(tos::ValidatorId{vid});
+    assert(pq->validator_id.value != pq->key_id.value);
+    assert(pq->validator_id.value != pq->addr);
+    assert(pq->key_id.value != pq->addr);
+
+    // Where a validator is reachable is answered from the descriptor, so a post-quantum
+    // one uses the address it carries and a classical one with none falls back to the
+    // identity derived from its key. Nothing derives it from a post-quantum key.
+    assert(block::validator_adnl_identity(*pq) == pq->addr);
+    assert(block::validator_adnl_identity(*c) == adnl);
+    auto classical_no_addr = tos::ValidatorDescr{tos::Ed25519_PublicKey{fill(0x11)}, 5};
+    assert(block::validator_adnl_identity(classical_no_addr) == short_id);
+    assert(block::validator_adnl_identity(classical_no_addr) != raw_key);
   }
 
   printf("VALIDATOR_IDENTITY_OK rotation keeps validator_id, changes key_id; bindings enforced; session binds both\n");

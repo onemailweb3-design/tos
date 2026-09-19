@@ -37,4 +37,13 @@ std::vector<tos::tl_object_ptr<tos::tos_api::engine_validator_GroupMember>> vali
   return members;
 }
 
+td::Bits256 validator_adnl_identity(const tos::ValidatorDescr& descr) {
+  if (!descr.addr.is_zero()) {
+    return descr.addr;
+  }
+  // Only a classical descriptor can leave it implicit; a post-quantum one is refused at
+  // decode without an explicit address.
+  return tos::PublicKey{tos::pubkeys::Ed25519{descr.classical_key()}}.compute_short_id().bits256_value();
+}
+
 }  // namespace block

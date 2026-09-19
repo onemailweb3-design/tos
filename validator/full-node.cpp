@@ -17,6 +17,7 @@
     Copyright 2017-2020 Telegram Systems LLP
     Copyright 2025-2026 TOS Blockchain Teams
 */
+#include "block/validator-session-members.h"
 #include "common/delay.h"
 #include "impl/out-msg-queue-proof.hpp"
 #include "interfaces/validator-full-id.h"
@@ -594,7 +595,7 @@ void FullNodeImpl::got_key_block_config(td::Ref<ConfigHolder> config) {
           l = key;
         }
         if (i == 1) {
-          current_validators[key] = adnl::AdnlNodeIdShort{el.addr.is_zero() ? key.bits256_value() : el.addr};
+          current_validators[key] = adnl::AdnlNodeIdShort{block::validator_adnl_identity(el)};
         }
       }
     }

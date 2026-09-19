@@ -43,4 +43,12 @@ namespace block {
 std::vector<tos::tl_object_ptr<tos::tos_api::engine_validator_GroupMember>> validator_session_members(
     const std::vector<tos::ValidatorDescr>& nodes);
 
+// The ADNL identity a validator is reachable at, as the set records it.
+//
+// A classical descriptor may leave it implicit, in which case it is the one derived
+// from its key. A post-quantum descriptor always carries it explicitly, because a
+// consensus key is never a transport identity. Answering this in one place keeps the
+// rule from being restated at each call site and drifting.
+td::Bits256 validator_adnl_identity(const tos::ValidatorDescr& descr);
+
 }  // namespace block

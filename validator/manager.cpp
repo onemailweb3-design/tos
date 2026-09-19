@@ -3377,7 +3377,7 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
   auto descr = validator_set->get_validator(tos::ValidatorId{validator_id.bits256_value()});
   CHECK(descr);
   auto adnl_id = adnl::AdnlNodeIdShort{
-      descr->addr.is_zero() ? ValidatorFullId{descr->classical_key()}.compute_short_id().bits256_value() : descr->addr};
+      block::validator_adnl_identity(*descr)};
 
   auto new_consensus_config = last_masterchain_state_->get_new_consensus_config(shard.workchain);
   if (!consensus_group_admissible(new_consensus_config)) {
@@ -3427,7 +3427,7 @@ std::set<adnl::AdnlNodeIdShort> ValidatorManagerImpl::get_observer_adnl_ids(
       if (!descr) {
         continue;
       }
-      result.emplace(descr->addr.is_zero() ? key.bits256_value() : descr->addr);
+      result.emplace(block::validator_adnl_identity(*descr));
     }
   }
   return result;
@@ -3442,7 +3442,7 @@ std::vector<adnl::AdnlNodeIdShort> ValidatorManagerImpl::get_all_validator_adnl_
     }
     for (const auto &descr : total_set->export_vector()) {
       auto key_hash = ValidatorFullId{descr.classical_key()}.compute_short_id();
-      result.emplace_back(descr.addr.is_zero() ? key_hash.bits256_value() : descr.addr);
+      result.emplace_back(block::validator_adnl_identity(descr));
     }
   }
   std::sort(result.begin(), result.end());

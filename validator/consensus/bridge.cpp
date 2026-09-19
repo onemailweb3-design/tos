@@ -6,6 +6,7 @@
 
 #include <cerrno>
 
+#include "block/validator-session-members.h"
 #include "td/db/RocksDb.h"
 #include "td/utils/port/Stat.h"
 #include "td/utils/port/path.h"
@@ -369,7 +370,7 @@ class BridgeImpl final : public IValidatorGroup {
           .idx = PeerValidatorId{idx},
           .key = key,
           .short_id = short_id,
-          .adnl_id = adnl::AdnlNodeIdShort{el.addr.is_zero() ? short_id.bits256_value() : el.addr},
+          .adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(el)},
           .weight = el.weight,
       });
 
@@ -478,7 +479,10 @@ class BridgeImpl final : public IValidatorGroup {
         candidate_id->collated_data_hash_ =
             std::get<CandidateHashData::FullCandidate>(hash_data.candidate).collated_file_hash;
         if (c.leader.value() < bus.validator_set.size()) {
-          candidate_id->creator_ = bus.validator_set[c.leader.value()].key.ed25519_value().raw();
+          // Report the identity the set holds for this leader, not a value derived
+          // from its key: those are different bytes and only one of them is what the
+          // block is attributed to.
+          candidate_id->creator_ = bus.validator_set[c.leader.value()].validator_id.value;
         }
       } else {
         // Candidate data not yet available locally: fill in seqno from chain
@@ -653,7 +657,7 @@ td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
   // consensus key never doubles as a transport identity.
   CHECK(!descr->is_pq() || !descr->addr.is_zero());
   auto local_adnl_id = adnl::AdnlNodeIdShort{
-      descr->addr.is_zero() ? ValidatorFullId{descr->classical_key()}.compute_short_id().bits256_value() : descr->addr};
+      block::validator_adnl_identity(*descr)};
   consensus::BridgeCreationParams params{
       .name = name_with_seqno,
       .is_create_session_called = create_session,
