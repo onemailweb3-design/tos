@@ -601,3 +601,114 @@ fn the_election_is_forgotten_only_once_the_set_is_installed() {
         "the elector kept an election whose set is installed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// What the elector keeps, and for how long
+// ---------------------------------------------------------------------------
+
+#[test]
+fn one_address_may_register_two_separate_keys() {
+    let (mut chain, treasury, election) = open_election("validator-f", 60_000 * TOS);
+    let first = Validator::new(0xf1);
+    let second = Validator::new(0xf2);
+
+    assert_eq!(
+        reply(&stake(&mut chain, &treasury, &first, election, 1, 11_000 * TOS)),
+        (STAKE_ACCEPTED, 0)
+    );
+    assert_eq!(
+        reply(&stake(&mut chain, &treasury, &second, election, 2, 11_000 * TOS)),
+        (STAKE_ACCEPTED, 0)
+    );
+
+    // Two members, because membership is a property of the key here and one account may
+    // hold several. A design that identifies a member by its controlling account instead
+    // has to answer this case differently, which is why it is pinned rather than assumed.
+    assert_ne!(stake_of(&chain, &first.public_key), 0, "the first key is not registered");
+    assert_ne!(stake_of(&chain, &second.public_key), 0, "the second key is not registered");
+    assert_ne!(
+        first.public_key, second.public_key,
+        "the fixture must use two keys for this to mean anything"
+    );
+}
+
+/// `HashmapE n X` is a bit saying whether anything is stored, and a reference to the tree
+/// if there is. Read that way rather than through a helper, so the field order below is
+/// the contract's storage layout and not an approximation of it.
+fn next_dictionary(slice: &mut chain_block::SliceData, bit_len: usize) -> chain_block::HashmapE {
+    let present = slice.get_next_bit().expect("the presence bit of a dictionary");
+    let root = if present {
+        Some(slice.checked_drain_reference().expect("the tree of a non-empty dictionary"))
+    } else {
+        None
+    };
+    chain_block::HashmapE::with_hashmap(bit_len, root)
+}
+
+/// The elector's storage: `elect credits past_elections tomis active_id active_hash`.
+fn past_elections(chain: &Chain) -> chain_block::HashmapE {
+    let account = chain.blockchain.get_account(&chain.elector).expect("the elector is deployed");
+    let data = account.get_data().expect("the elector has storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    let _current = next_dictionary(&mut slice, 32);
+    let _credits = next_dictionary(&mut slice, 256);
+    next_dictionary(&mut slice, 32)
+}
+
+#[test]
+fn a_finished_election_is_kept_without_any_key_material() {
+    let (mut chain, election, validators) = elect_four();
+    let closes = election - chain.elect_end_before;
+    chain.blockchain.set_now(closes);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    assert_eq!(active_election_id(&chain), 0, "the election should be finished by now");
+
+    let past = past_elections(&chain);
+    let record = past
+        .get(
+            chain_block::SliceData::load_builder(
+                chain_block::BuilderData::with_raw(election.to_be_bytes().to_vec(), 32)
+                    .expect("election key"),
+            )
+            .expect("key slice"),
+        )
+        .expect("lookup")
+        .unwrap_or_else(|| panic!("no record for the election that just finished"));
+
+    // unfreeze_at:uint32 stake_held:uint32 vset_hash:uint256 frozen:HashmapE total:Tomis
+    // bonuses:Tomis complaints:HashmapE
+    let mut fields = record;
+    let _unfreeze_at = fields.get_next_u32().expect("unfreeze time");
+    let _stake_held = fields.get_next_u32().expect("hold time");
+    let _vset_hash = fields.get_next_bits(256).expect("the set this election produced");
+    let frozen = next_dictionary(&mut fields, 256);
+
+    let mut counted = 0;
+    chain_block::HashmapType::iterate_slices(&frozen, |_key, value| {
+        // A frozen stake is an address, a weight, an amount and a flag. Nothing here
+        // refers to another cell, and a consensus key does not fit in one, so this is
+        // what says the elector is not keeping key material after the fact.
+        assert_eq!(
+            value.remaining_references(),
+            0,
+            "a frozen stake carries a reference, which is where a key would hide"
+        );
+        counted += 1;
+        Ok(true)
+    })
+    .expect("frozen stakes");
+    assert_eq!(counted, validators.len(), "every elected validator should be frozen");
+}
