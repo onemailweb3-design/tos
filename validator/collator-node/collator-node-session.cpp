@@ -322,20 +322,11 @@ void CollatorNodeSession::process_request(adnl::AdnlNodeIdShort src, std::vector
   // unbounded distinct records (and pay the rewrite cost) for a single block.
   // Require the creator to be a member of this group's validator set, which
   // bounds the distinct creators -- and thus the stored records -- to the set.
-  // The creator is a stable validator identity, so membership is asked directly.
-  const auto* creator_descr = validator_set_->get_validator(creator);
-  if (creator_descr == nullptr) {
-    promise.set_error(td::Status::Error(ErrorCode::error, "collate query: creator is not in the validator set"));
-    return;
-  }
-  // Being some validator's ADNL identity is not enough to speak for some other
-  // validator. Without this, an authorised validator could have blocks collated and
-  // stored under a peer's identity, because the transport identity that was
-  // authenticated and the validator identity the block is attributed to were checked
-  // separately and never against each other.
-  if (src != adnl::AdnlNodeIdShort{block::validator_adnl_identity(*creator_descr)}) {
-    promise.set_error(td::Status::Error(
-        ErrorCode::error, "collate query: authenticated ADNL identity does not belong to the named creator"));
+  // Membership and the transport identity the request arrived on have to agree; the
+  // rule itself lives next to the set so a test can exercise this exact decision.
+  if (auto status = block::authorise_collate_request(*validator_set_, creator, src.bits256_value());
+      status.is_error()) {
+    promise.set_error(td::Status::Error(ErrorCode::error, status.message()));
     return;
   }
   generate_block(std::move(prev_blocks), priority, timeout, std::move(promise));

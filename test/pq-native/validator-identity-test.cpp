@@ -355,6 +355,33 @@ int main() {
     assert(block::validator_adnl_identity(classical_no_addr) != raw_key);
   }
 
+  {  // Serving a collate request needs both facts to agree. Two post-quantum validators
+     // whose identities and addresses are all distinct, so a request can name one while
+     // arriving on the other's address.
+    const std::string key_c(tos::pq::mldsa44_public_key_bytes, '\x44');
+    const auto kid_c = key_id_of(key_c);
+    const auto vid_b = fill(0xa7), adnl_b = fill(0xc7);
+    auto two = block::Config::unpack_validator_set(
+                   validator_set_cell({pq_descriptor(vid, 1, kid_a, key_a, 5, adnl),
+                                       pq_descriptor(vid_b, 1, kid_c, key_c, 7, adnl_b)},
+                                      12),
+                   false)
+                   .move_as_ok();
+    block::ValidatorSet vset{1, tos::ShardIdFull{tos::masterchainId}, two->export_validator_set()};
+
+    // Each validator may ask for its own blocks, from its own address.
+    assert(block::authorise_collate_request(vset, tos::ValidatorId{vid}, adnl).is_ok());
+    assert(block::authorise_collate_request(vset, tos::ValidatorId{vid_b}, adnl_b).is_ok());
+    // But not for someone else's: arriving as one validator and naming another is what
+    // would otherwise let a member have blocks attributed to a peer.
+    assert(block::authorise_collate_request(vset, tos::ValidatorId{vid_b}, adnl).is_error());
+    assert(block::authorise_collate_request(vset, tos::ValidatorId{vid}, adnl_b).is_error());
+    // Nor may a stranger, and nor does naming a member from an address that belongs to
+    // no member help.
+    assert(block::authorise_collate_request(vset, tos::ValidatorId{fill(0xee)}, adnl).is_error());
+    assert(block::authorise_collate_request(vset, tos::ValidatorId{vid}, fill(0xee)).is_error());
+  }
+
   printf("VALIDATOR_IDENTITY_OK rotation keeps validator_id, changes key_id; bindings enforced; session binds both\n");
   return 0;
 }

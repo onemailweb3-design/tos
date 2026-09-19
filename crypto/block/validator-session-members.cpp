@@ -16,6 +16,8 @@
 */
 #include "block/validator-session-members.h"
 
+#include "block/validator-set.h"
+
 #include <keys/keys.hpp>
 
 namespace block {
@@ -44,6 +46,18 @@ td::Bits256 validator_adnl_identity(const tos::ValidatorDescr& descr) {
   // Only a classical descriptor can leave it implicit; a post-quantum one is refused at
   // decode without an explicit address.
   return tos::PublicKey{tos::pubkeys::Ed25519{descr.classical_key()}}.compute_short_id().bits256_value();
+}
+
+td::Status authorise_collate_request(const ValidatorSet& validator_set, const tos::ValidatorId& creator,
+                                     const td::Bits256& src) {
+  const auto* descr = validator_set.get_validator(creator);
+  if (descr == nullptr) {
+    return td::Status::Error("collate query: creator is not in the validator set");
+  }
+  if (src != validator_adnl_identity(*descr)) {
+    return td::Status::Error("collate query: authenticated ADNL identity does not belong to the named creator");
+  }
+  return td::Status::OK();
 }
 
 }  // namespace block

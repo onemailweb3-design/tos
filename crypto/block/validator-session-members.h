@@ -51,4 +51,16 @@ std::vector<tos::tl_object_ptr<tos::tos_api::engine_validator_GroupMember>> vali
 // rule from being restated at each call site and drifting.
 td::Bits256 validator_adnl_identity(const tos::ValidatorDescr& descr);
 
+class ValidatorSet;
+
+// Whether a collate request may be served.
+//
+// Two separate facts have to line up: the creator a request names must be a member of
+// the set, and the transport identity the request actually arrived on must be the one
+// that member is reachable at. Checking only that both are validators lets one member
+// have blocks collated and stored under another's identity, so the decision is made
+// here, once, rather than restated at the call site.
+td::Status authorise_collate_request(const ValidatorSet& validator_set, const tos::ValidatorId& creator,
+                                     const td::Bits256& src);
+
 }  // namespace block
