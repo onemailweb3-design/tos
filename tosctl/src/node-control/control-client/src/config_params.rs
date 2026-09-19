@@ -7,7 +7,7 @@
  * This software is provided "AS IS", WITHOUT WARRANTY OF ANY KIND.
  */
 use anyhow::Context;
-use chain_block::{ConfigParam15, SigPubKey, UInt256, ValidatorDescr, ValidatorSet};
+use chain_block::{ConfigParam15, SigPubKey, UInt256, ValidatorDescr, ValidatorKey, ValidatorSet};
 use std::str::FromStr;
 
 // TOS compatibility: Config param 15 controls election timing. TOS inherits the same
@@ -99,8 +99,10 @@ fn parse_validator_set(bytes: &[u8], key: &str) -> anyhow::Result<ValidatorSet> 
         let adnl_addr =
             map.get("adnl_addr").and_then(|v| v.as_str()).map(UInt256::from_str).transpose()?;
         let descr = ValidatorDescr {
-            public_key: SigPubKey::from_bytes(&pubkey)
-                .map_err(|_| anyhow::anyhow!("public key is invalid"))?,
+            key: ValidatorKey::Ed25519(
+                SigPubKey::from_bytes(&pubkey)
+                    .map_err(|_| anyhow::anyhow!("public key is invalid"))?,
+            ),
             weight,
             adnl_addr,
             prev_weight_sum: 0,

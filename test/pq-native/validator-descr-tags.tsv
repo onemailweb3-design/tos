@@ -9,6 +9,6 @@
 53	accept	validator#53 public_key:SigPubKey weight:uint64
 73	accept	validator_addr#73 adds adnl_addr:bits256
 93	reject	Rust-only path that never existed in block.tlb; removed in N2.0
-b3	reject	validator_pq#b3 reserved for the PQ descriptor; not implemented yet
+b3	accept	validator_pq#b3 validator_id, algorithm_id, key_id, ^PQBytes key, weight, adnl_addr
 00	reject	unallocated
 ff	reject	unallocated

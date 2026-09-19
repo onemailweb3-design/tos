@@ -208,7 +208,7 @@ fn test_isolate_mc_validators() {
 
         for sv in shard_validators.iter() {
             for mv in main_validators.iter() {
-                assert_ne!(sv.public_key, mv.public_key)
+                assert_ne!(sv.public_key().unwrap(), mv.public_key().unwrap())
             }
         }
     }
@@ -223,13 +223,25 @@ fn test_isolate_mc_validators() {
 // the wrong reason.
 #[test]
 fn accepted_descriptor_tags_match_the_shared_set() {
-    fn descriptor_bytes(tag: u8, with_adnl: bool) -> SliceData {
+    fn descriptor_bytes(tag: u8) -> SliceData {
         let mut b = BuilderData::new();
         b.append_u8(tag).unwrap();
-        SigPubKey::from_bytes(&[7u8; 32]).unwrap().write_to(&mut b).unwrap();
-        1234u64.write_to(&mut b).unwrap();
-        if with_adnl {
+        if tag == 0xb3 {
+            // the post-quantum shape
+            UInt256::from([1u8; 32]).write_to(&mut b).unwrap();
+            b.append_bits(1, 16).unwrap();
+            UInt256::from([2u8; 32]).write_to(&mut b).unwrap();
+            b.checked_append_reference(pack_pq_bytes(&vec![3u8; 1312], PQ_BYTES_HARD_MAX).unwrap())
+                .unwrap();
+            1234u64.write_to(&mut b).unwrap();
             UInt256::from([9u8; 32]).write_to(&mut b).unwrap();
+        } else {
+            // the classical shape; 0x53 carries no adnl_addr
+            SigPubKey::from_bytes(&[7u8; 32]).unwrap().write_to(&mut b).unwrap();
+            1234u64.write_to(&mut b).unwrap();
+            if tag != 0x53 {
+                UInt256::from([9u8; 32]).write_to(&mut b).unwrap();
+            }
         }
         SliceData::load_builder(b).unwrap()
     }
@@ -246,8 +258,7 @@ fn accepted_descriptor_tags_match_the_shared_set() {
         let tag = u8::from_str_radix(f.next().expect("tag"), 16).expect("hex tag");
         let verdict = f.next().expect("verdict");
 
-        // 0x53 carries no adnl_addr; every other shape here is given the 0x73 body.
-        let mut cs = descriptor_bytes(tag, tag != 0x53);
+        let mut cs = descriptor_bytes(tag);
         let parsed = ValidatorDescr::construct_from(&mut cs);
         match verdict {
             "accept" => assert!(parsed.is_ok(), "tag 0x{:02x} must be accepted", tag),
@@ -266,4 +277,104 @@ fn accepted_descriptor_tags_match_the_shared_set() {
         let emitted = SliceData::load_builder(b).unwrap().get_next_byte().unwrap();
         assert!(emitted == 0x53 || emitted == 0x73, "writer emitted 0x{emitted:02x}");
     }
+}
+
+fn sample_pq_key() -> PqConsensusKey {
+    PqConsensusKey {
+        validator_id: UInt256::from([1u8; 32]),
+        algorithm_id: 1,
+        key_id: UInt256::from([2u8; 32]),
+        public_key: vec![3u8; 1312],
+    }
+}
+
+// A post-quantum descriptor survives a full encode/decode cycle with every field
+// intact, including the 1312-byte key that has to travel through the bounded-bytes
+// cell encoding because it cannot fit inline.
+#[test]
+fn pq_descriptor_round_trip() {
+    let descr = ValidatorDescr::with_pq_params(sample_pq_key(), 4242, UInt256::from([9u8; 32]));
+
+    let mut b = BuilderData::new();
+    descr.write_to(&mut b).unwrap();
+    let mut cs = SliceData::load_builder(b).unwrap();
+    let back = ValidatorDescr::construct_from(&mut cs).unwrap();
+
+    assert_eq!(back, descr);
+    let key = back.pq_key().expect("post-quantum key");
+    assert_eq!(key.validator_id, UInt256::from([1u8; 32]));
+    assert_eq!(key.algorithm_id, 1);
+    assert_eq!(key.key_id, UInt256::from([2u8; 32]));
+    assert_eq!(key.public_key.len(), 1312);
+    assert_eq!(back.weight, 4242);
+    assert_eq!(back.adnl_addr, Some(UInt256::from([9u8; 32])));
+
+    // The classical accessor refuses rather than inventing an Ed25519 key.
+    assert!(back.public_key().is_err());
+
+    // A post-quantum descriptor without an explicit ADNL address cannot be written,
+    // because an ADNL identity is never derived from a consensus key.
+    let no_adnl = ValidatorDescr {
+        key: ValidatorKey::Pq(sample_pq_key()),
+        weight: 1,
+        adnl_addr: None,
+        prev_weight_sum: 0,
+    };
+    assert!(no_adnl.write_to(&mut BuilderData::new()).is_err());
+
+    // The writer emits the frozen tag.
+    let mut b = BuilderData::new();
+    descr.write_to(&mut b).unwrap();
+    assert_eq!(SliceData::load_builder(b).unwrap().get_next_byte().unwrap(), 0xb3);
+}
+
+// The post-quantum descriptor bytes are produced authoritatively by the C++ side and
+// recorded in test/pq-native/validator-descr-vectors.txt. Rust must decode each one to
+// the same fields and re-encode to the identical cell, so neither implementation can
+// change the wire format without the other noticing.
+#[test]
+fn pq_descriptor_matches_shared_cpp_vectors() {
+    use crate::read_single_root_boc;
+
+    fn u256(hex_str: &str) -> UInt256 {
+        let mut a = [0u8; 32];
+        a.copy_from_slice(&hex::decode(hex_str).unwrap());
+        UInt256::from(a)
+    }
+
+    let path =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../../test/pq-native/validator-descr-vectors.txt");
+    let text = std::fs::read_to_string(path).expect("shared descriptor vectors");
+    let mut checked = 0;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split(' ').collect();
+        assert_eq!(f.len(), 8, "bad vector line");
+        let (vid, alg) = (u256(f[0]), f[1].parse::<u16>().unwrap());
+        let (kid, public_key) = (u256(f[2]), hex::decode(f[3]).unwrap());
+        let (weight, adnl) = (f[4].parse::<u64>().unwrap(), u256(f[5]));
+        let (root_hex, boc) = (f[6], hex::decode(f[7]).unwrap());
+
+        // The C++-produced cell decodes to exactly the recorded fields.
+        let cell = read_single_root_boc(&boc).unwrap();
+        assert_eq!(cell.repr_hash().as_hex_string(), root_hex);
+        let mut cs = SliceData::load_cell_ref(&cell).unwrap();
+        let descr = ValidatorDescr::construct_from(&mut cs).unwrap();
+        let key = descr.pq_key().expect("post-quantum key");
+        assert_eq!(key.validator_id, vid);
+        assert_eq!(key.algorithm_id, alg);
+        assert_eq!(key.key_id, kid);
+        assert_eq!(key.public_key, public_key);
+        assert_eq!(descr.weight, weight);
+        assert_eq!(descr.adnl_addr, Some(adnl));
+
+        // Re-encoding the same fields in Rust yields the identical cell.
+        let mut b = BuilderData::new();
+        descr.write_to(&mut b).unwrap();
+        assert_eq!(b.into_cell().unwrap().repr_hash().as_hex_string(), root_hex);
+        checked += 1;
+    }
+    assert!(checked >= 3, "expected the full vector set, saw {checked}");
 }

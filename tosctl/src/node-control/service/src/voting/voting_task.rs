@@ -278,7 +278,7 @@ impl VotingRunner {
             let vset_entry = vset
                 .list()
                 .iter()
-                .position(|item| item.public_key.as_slice() == &key)
+                .position(|item| item.public_key().is_ok_and(|pk| pk.as_slice() == &key))
                 .map(|idx| (idx as u16, entry.clone()));
             if let Some((idx, entry)) = vset_entry {
                 return Ok((idx, entry));

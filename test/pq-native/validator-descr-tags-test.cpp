@@ -12,6 +12,7 @@
 #include "td/utils/misc.h"
 #include "vm/cells/CellBuilder.h"
 #include "vm/cells/CellSlice.h"
+#include "crypto/pq/pq-bytes.h"
 
 // The accepted ValidatorDescr constructor set is shared with the Rust reader
 // through test/pq-native/validator-descr-tags.tsv. One implementation accepting
@@ -50,21 +51,31 @@ int main() {
 
   // 2. Behavioural check: a descriptor that is well formed apart from its tag is
   //    accepted or refused purely on the tag, so no case can pass for a bad reason.
-  auto descriptor = [](unsigned tag, bool with_adnl) {
+  auto descriptor = [](unsigned tag) {
     vm::CellBuilder cb;
     cb.store_long(tag, 8);
-    cb.store_long(0x8e81278a, 32);              // ed25519_pubkey#8e81278a
-    cb.store_bytes(std::string(32, '\x07'));    // pubkey:bits256
-    cb.store_long(1234, 64);                    // weight:uint64
-    if (with_adnl) {
+    if (tag == 0xb3) {  // the post-quantum shape
+      cb.store_bytes(std::string(32, '\x01'));  // validator_id:bits256
+      cb.store_long(1, 16);                     // algorithm_id:uint16
+      cb.store_bytes(std::string(32, '\x02'));  // key_id:bits256
+      cb.store_ref(tos::pq::pack_pq_bytes(td::Slice(std::string(1312, '\x03')),
+                                          tos::pq::pq_bytes_hard_max)
+                       .move_as_ok());          // public_key:^Cell
+      cb.store_long(1234, 64);                  // weight:uint64
       cb.store_bytes(std::string(32, '\x09'));  // adnl_addr:bits256
+    } else {                                    // the classical shape
+      cb.store_long(0x8e81278a, 32);            // ed25519_pubkey#8e81278a
+      cb.store_bytes(std::string(32, '\x07'));  // pubkey:bits256
+      cb.store_long(1234, 64);                  // weight:uint64
+      if (tag != 0x53) {                        // 0x53 carries no adnl_addr
+        cb.store_bytes(std::string(32, '\x09'));  // adnl_addr:bits256
+      }
     }
     return cb.finalize();
   };
   for (unsigned tag = 0; tag <= 0xff; tag++) {
     const bool expect = shared_accept.count(tag) != 0;
-    // 0x53 carries no adnl_addr; every other shape gets the longer 0x73 body.
-    auto cell = descriptor(tag, tag != 0x53);
+    auto cell = descriptor(tag);
     vm::CellSlice cs(vm::NoVm(), cell);
     const bool got = block::gen::t_ValidatorDescr.validate_skip(nullptr, cs, false) && cs.empty_ext();
     assert(got == expect);
@@ -73,6 +84,6 @@ int main() {
     }
   }
 
-  printf("VALIDATOR_DESCR_TAGS_OK schema==shared accept={0x53,0x73} rejected 0x93/0xb3 and all others\n");
+  printf("VALIDATOR_DESCR_TAGS_OK schema==shared accept={0x53,0x73,0xb3} rejected 0x93 and all others\n");
   return 0;
 }

@@ -507,8 +507,10 @@ impl VoteOfferCastCmd {
                 continue;
             }
             // Search for this public key in the current validator set
-            if let Some(idx) =
-                vset.list().iter().position(|item| item.public_key.as_slice() == &key)
+            if let Some(idx) = vset
+                .list()
+                .iter()
+                .position(|item| item.public_key().is_ok_and(|pk| pk.as_slice() == &key))
             {
                 found_idx = Some(idx as u16);
                 found_key_id = Some(validator.id.clone());
@@ -790,8 +792,10 @@ impl VoteComplaintCastCmd {
                 continue;
             }
             // Search for this public key in the current validator set
-            if let Some(idx) =
-                vset.list().iter().position(|item| item.public_key.as_slice() == &key)
+            if let Some(idx) = vset
+                .list()
+                .iter()
+                .position(|item| item.public_key().is_ok_and(|pk| pk.as_slice() == &key))
             {
                 found_idx = Some(idx as u16);
                 found_key_id = Some(validator.id.clone());

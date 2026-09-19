@@ -7,7 +7,7 @@
  * This software is provided "AS IS", WITHOUT WARRANTY OF ANY KIND.
  */
 use adnl::client::AdnlClientConfig;
-use chain_block::{SigPubKey, UInt256, ValidatorDescr, ValidatorSet};
+use chain_block::{SigPubKey, UInt256, ValidatorDescr, ValidatorKey, ValidatorSet};
 use control_client::{
     client_adnl::ControlClientAdnl,
     client_api::{ControlClient, SignRq},
@@ -159,8 +159,10 @@ impl VotingProvider for VotingProviderImpl {
             let adnl_addr =
                 map.get("adnl_addr").and_then(|v| v.as_str()).map(UInt256::from_str).transpose()?;
             let descr = ValidatorDescr {
-                public_key: SigPubKey::from_bytes(&pubkey)
-                    .map_err(|_| anyhow::anyhow!("public key is invalid"))?,
+                key: ValidatorKey::Ed25519(
+                    SigPubKey::from_bytes(&pubkey)
+                        .map_err(|_| anyhow::anyhow!("public key is invalid"))?,
+                ),
                 weight,
                 adnl_addr,
                 prev_weight_sum: 0,
