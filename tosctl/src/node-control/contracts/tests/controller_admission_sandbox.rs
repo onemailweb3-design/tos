@@ -278,7 +278,10 @@ fn the_first_stake_carrier_is_measured_with_its_proof() {
     body.append_u32(0x10000).expect("max factor");
     body.append_raw(&[0xd0; 32], 256).expect("adnl address");
     body.checked_append_reference(stored(&vec![0u8; 2420])).expect("signature");
-    let without = body.clone().into_cell().expect("a stake body");
+    let mut bare = body.clone();
+    bare.append_bit_zero().expect("no controller proof");
+    let without = bare.into_cell().expect("a stake body");
+    body.append_bit_one().expect("a proof is present");
     body.checked_append_reference(proof.clone()).expect("the controller proof");
     let with = body.into_cell().expect("a first-stake body");
 
@@ -294,10 +297,10 @@ fn the_first_stake_carrier_is_measured_with_its_proof() {
 
     assert_eq!(
         (bare_cells, bare_bits),
-        (34, 30_352),
+        (34, 30_353),
         "the request this measures is no longer the one the branch asserts elsewhere"
     );
-    assert_eq!((full_cells, full_bits), (37, 30_933), "the first-stake carrier changed shape");
+    assert_eq!((full_cells, full_bits), (37, 30_934), "the first-stake carrier changed shape");
 }
 
 /// Each refusal the frozen gate list names, reached on its own and costing little.

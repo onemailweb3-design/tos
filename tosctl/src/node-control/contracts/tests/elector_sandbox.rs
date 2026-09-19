@@ -1652,12 +1652,74 @@ fn pq_stake_preimage_for(
     )
 }
 
+/// A proof of what a sender was deployed as: the state init's own bits, with a pruned
+/// branch in place of each child.
+fn controller_proof(chain: &Chain, who: &tos_sandbox::Treasury) -> chain_block::Cell {
+    use chain_block::{GetRepresentationHash, IBitstring, Serializable};
+    let account = chain.blockchain.get_account(who.address()).expect("the sender exists");
+    let state_init = account.state_init().expect("the sender was deployed with a state init");
+    let root = state_init.write_to_new_cell().expect("state init").into_cell().expect("cell");
+    let mut partial = chain_block::BuilderData::with_raw(root.data().to_vec(), root.bit_length())
+        .expect("the root's own bits");
+    for index in 0..root.references_count() {
+        let child = root.reference(index).expect("a child");
+        let mut branch = chain_block::BuilderData::new();
+        branch.set_type(chain_block::CellType::PrunedBranch);
+        branch.append_u8(u8::from(chain_block::CellType::PrunedBranch)).expect("the type byte");
+        branch.append_u8(1).expect("one stored hash, at merkle depth zero");
+        branch.append_raw(child.repr_hash().as_slice(), 256).expect("the pruned hash");
+        branch.append_u16(child.repr_depth()).expect("the pruned depth");
+        partial
+            .checked_append_reference(branch.into_cell().expect("a pruned branch"))
+            .expect("a pruned child");
+    }
+    partial.into_cell().expect("a controller proof")
+}
+
+/// The code every sandbox account is deployed with, which is what the fixture admits.
+///
+/// One admitted code and many accounts is the shape of the real rule; the controller
+/// contract's own behaviour is exercised in its own file, not here.
+fn admit_sender_code(chain: &mut Chain, who: &tos_sandbox::Treasury) {
+    use chain_block::{GetRepresentationHash, IBitstring};
+    let account = chain.blockchain.get_account(who.address()).expect("the sender exists");
+    let state_init = account.state_init().expect("a state init");
+    let code_hash = state_init.code().expect("code").repr_hash();
+
+    let mut dict = chain_block::HashmapE::with_bit_len(256);
+    dict.set(
+        chain_block::SliceData::load_builder(
+            chain_block::BuilderData::with_raw(code_hash.as_slice().to_vec(), 256).expect("a key"),
+        )
+        .expect("a key slice"),
+        &chain_block::SliceData::default(),
+    )
+    .expect("insert");
+    let mut value = chain_block::BuilderData::new();
+    value.append_bit_one().expect("a non-empty policy");
+    value
+        .checked_append_reference(
+            chain_block::HashmapType::data(&dict).expect("a non-empty dictionary").clone(),
+        )
+        .expect("the codes");
+
+    let mut config = chain.blockchain.config_params().clone();
+    config
+        .set_config(chain_block::ConfigParamEnum::ConfigParamAny(
+            47,
+            value.into_cell().expect("a controller policy"),
+        ))
+        .expect("the policy is installed");
+    chain.blockchain.set_config(config).expect("the configuration is replaced");
+}
+
 fn pq_stake_body(
     query_id: u64,
     validator: &PqValidator,
     stake_at: u32,
     max_factor: u32,
     signature: &[u8],
+    proof: Option<chain_block::Cell>,
 ) -> chain_block::Cell {
     use chain_block::IBitstring;
     let mut body = chain_block::BuilderData::new();
@@ -1669,6 +1731,15 @@ fn pq_stake_body(
     body.append_u32(max_factor).expect("max factor");
     body.append_raw(&validator.adnl, 256).expect("adnl address");
     body.checked_append_reference(stored_bytes(signature)).expect("signature");
+    match proof {
+        Some(cell) => {
+            body.append_bit_one().expect("a proof is present");
+            body.checked_append_reference(cell).expect("the controller proof");
+        }
+        None => {
+            body.append_bit_zero().expect("no proof");
+        }
+    }
     body.into_cell().expect("stake body")
 }
 
@@ -1689,6 +1760,14 @@ fn raise_to_post_quantum_version(chain: &mut Chain) {
         }))
         .expect("set the global version");
     chain.blockchain.set_config(config).expect("the chain adopts the version");
+
+    // A post-quantum stake is admitted only from an account born with a controller code
+    // the configuration admits. Every sandbox account shares one code, so admitting it
+    // admits the senders these tests use -- one code, many accounts, which is the shape
+    // of the real rule. What a real controller does with that authority is exercised in
+    // `validator_controller_sandbox.rs`.
+    let probe = chain.blockchain.treasury("controller-policy-probe", TOS).expect("an account");
+    admit_sender_code(chain, &probe);
 }
 
 /// Send a post-quantum stake, signing for whichever sender is named.
@@ -1732,13 +1811,16 @@ fn pq_stake_with_max_factor(
         &validator.adnl,
     );
     let signature = validator.sign(&preimage);
+    // A first registration proves what its sender was deployed as; a controller the book
+    // already knows is re-checked against the policy instead.
+    let proof = Some(controller_proof(chain, from));
     chain
         .blockchain
         .send_message(from.build_message(
             &chain.elector,
             value,
             true,
-            Some(pq_stake_body(query_id, validator, election, max_factor, &signature)),
+            Some(pq_stake_body(query_id, validator, election, max_factor, &signature, proof)),
         ))
         .expect("the stake is delivered")
 }
@@ -1834,6 +1916,9 @@ fn a_signed_post_quantum_stake_registers_the_sender_as_the_validator() {
     let validator = PqValidator::new(0);
 
     let result = pq_stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
+    for (_, tx) in &result.transactions {
+        eprintln!("tx: {:?}", tx.read_description().expect("description"));
+    }
     result.expect_exit_code(0);
     assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "a correctly signed stake was refused");
 
@@ -1886,13 +1971,14 @@ fn a_post_quantum_stake_signed_by_another_key_is_returned() {
         &validator.adnl,
     );
     let signature = impostor.sign(&preimage);
+    let proof = controller_proof(&chain, &treasury);
     let result = chain
         .blockchain
         .send_message(treasury.build_message(
             &chain.elector,
             11_000 * TOS,
             true,
-            Some(pq_stake_body(1, &validator, election, 0x10000, &signature)),
+            Some(pq_stake_body(1, &validator, election, 0x10000, &signature, Some(proof))),
         ))
         .expect("the stake is delivered");
 
@@ -2313,12 +2399,11 @@ fn tree_size(root: &chain_block::Cell) -> (usize, usize) {
 #[test]
 fn a_stake_request_is_the_size_the_design_was_sized_for() {
     let validator = PqValidator::new(23);
-    let body = pq_stake_body(1, &validator, 1_789_434_000, 0x10000, &vec![0u8; 2420]);
-    let (cells, bits) = tree_size(&body);
+    let bare = pq_stake_body(1, &validator, 1_789_434_000, 0x10000, &vec![0u8; 2420], None);
     assert_eq!(
-        (cells, bits),
-        (34, 30_352),
-        "the stake request changed shape: {cells} cells and {bits} bits"
+        tree_size(&bare),
+        (34, 30_353),
+        "a stake carrying no controller proof changed shape"
     );
 }
 
@@ -2415,7 +2500,14 @@ fn pq_stake_signed_over(
             &chain.elector,
             11_000 * TOS,
             true,
-            Some(pq_stake_body(1, validator, election, 0x10000, &signature)),
+            Some(pq_stake_body(
+                1,
+                validator,
+                election,
+                0x10000,
+                &signature,
+                Some(controller_proof(chain, from)),
+            )),
         ))
         .expect("the stake is delivered")
 }
@@ -2579,6 +2671,9 @@ fn a_stake_naming_an_unadmitted_suite_is_refused() {
     body.append_u32(0x10000).expect("max factor");
     body.append_raw(&validator.adnl, 256).expect("adnl address");
     body.checked_append_reference(stored_bytes(&vec![0u8; 2420])).expect("signature");
+    body.append_bit_one().expect("a proof is present");
+    body.checked_append_reference(controller_proof(&chain, &treasury))
+        .expect("the controller proof");
 
     let result = chain
         .blockchain
@@ -2608,6 +2703,197 @@ fn a_stake_after_the_election_closes_is_returned_before_the_tick_conducts_it() {
         "a stake was admitted to an election that may already be conducted"
     );
     assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered anyway");
+}
+
+/// Reasons the elector refuses a stake over the controller it came from.
+const REASON_PROOF_MISSING: u32 = 8;
+const REASON_PROOF_MISMATCH: u32 = 9;
+const REASON_CODE_NOT_ADMITTED: u32 = 10;
+const REASON_NO_POLICY: u32 = 11;
+const REASON_CODE_RETIRED: u32 = 12;
+
+/// Replace the admitted controller codes with `codes`, or remove the policy entirely.
+fn set_policy(chain: &mut Chain, codes: &[chain_block::UInt256]) {
+    use chain_block::IBitstring;
+    let mut config = chain.blockchain.config_params().clone();
+    let mut value = chain_block::BuilderData::new();
+    let mut dict = chain_block::HashmapE::with_bit_len(256);
+    for code in codes {
+        dict.set(
+            chain_block::SliceData::load_builder(
+                chain_block::BuilderData::with_raw(code.as_slice().to_vec(), 256).expect("a key"),
+            )
+            .expect("a key slice"),
+            &chain_block::SliceData::default(),
+        )
+        .expect("insert");
+    }
+    match chain_block::HashmapType::data(&dict) {
+        Some(root) => {
+            value.append_bit_one().expect("a non-empty policy");
+            value.checked_append_reference(root.clone()).expect("the codes");
+        }
+        None => {
+            value.append_bit_zero().expect("an empty policy");
+        }
+    }
+    config
+        .set_config(chain_block::ConfigParamEnum::ConfigParamAny(
+            47,
+            value.into_cell().expect("a controller policy"),
+        ))
+        .expect("the policy is installed");
+    chain.blockchain.set_config(config).expect("the configuration is replaced");
+}
+
+/// The code an account was deployed with.
+fn sender_code_hash(chain: &Chain, who: &tos_sandbox::Treasury) -> chain_block::UInt256 {
+    use chain_block::GetRepresentationHash;
+    let account = chain.blockchain.get_account(who.address()).expect("the sender exists");
+    account.state_init().expect("a state init").code().expect("code").repr_hash()
+}
+
+/// An account whose birth code nothing admits cannot obtain validator authority, however
+/// correct everything else about its request is.
+#[test]
+fn a_stake_from_an_unadmitted_controller_is_returned() {
+    let (mut chain, treasury, election) = open_election("pq-unadmitted", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(25);
+
+    // A policy that admits some other code: the sender's is well formed and unlisted.
+    set_policy(&mut chain, &[chain_block::UInt256::from_slice(&[0x11; 32])]);
+    let result = pq_stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_CODE_NOT_ADMITTED),
+        "an account nothing admits obtained validator authority"
+    );
+    assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered anyway");
+
+    // No policy at all admits nobody, rather than everybody.
+    let mut config = chain.blockchain.config_params().clone();
+    config
+        .config_params
+        .remove(
+            chain_block::SliceData::load_builder(
+                chain_block::BuilderData::with_raw(47u32.to_be_bytes().to_vec(), 32)
+                    .expect("a key"),
+            )
+            .expect("a key slice"),
+        )
+        .expect("remove the policy");
+    chain.blockchain.set_config(config).expect("the configuration is replaced");
+    let result = pq_stake(&mut chain, &treasury, &validator, election, 2, 11_000 * TOS);
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_NO_POLICY),
+        "with no policy installed the elector admitted a controller"
+    );
+}
+
+/// A proof that does not reconstruct the sender's own address proves nothing about it.
+#[test]
+fn a_stake_carrying_another_accounts_proof_is_returned() {
+    let (mut chain, treasury, election) = open_election("pq-foreign-proof", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let other = chain.blockchain.treasury("pq-foreign-proof-other", TOS).expect("an account");
+    let validator = PqValidator::new(26);
+
+    let global_id = match chain.blockchain.config_params().config(19).expect("parameter 19") {
+        Some(chain_block::ConfigParamEnum::ConfigParam19(id)) => id as i32,
+        _ => panic!("the chain states no network id"),
+    };
+    let validator_id =
+        chain_block::UInt256::from_slice(&treasury.address().address().get_bytestring(0));
+    let preimage = pq_stake_preimage(
+        global_id,
+        election,
+        0x10000,
+        &validator_id,
+        &validator.key_id(),
+        &validator.adnl,
+    );
+    let signature = validator.sign(&preimage);
+    let foreign = controller_proof(&chain, &other);
+    let result = chain
+        .blockchain
+        .send_message(treasury.build_message(
+            &chain.elector,
+            11_000 * TOS,
+            true,
+            Some(pq_stake_body(1, &validator, election, 0x10000, &signature, Some(foreign))),
+        ))
+        .expect("the stake is delivered");
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_PROOF_MISMATCH),
+        "a proof of another account admitted this one"
+    );
+
+    // And a first registration with no proof at all says so, rather than being admitted.
+    let bare = chain
+        .blockchain
+        .send_message(treasury.build_message(
+            &chain.elector,
+            11_000 * TOS,
+            true,
+            Some(pq_stake_body(2, &validator, election, 0x10000, &signature, None)),
+        ))
+        .expect("the stake is delivered");
+    assert_eq!(
+        reply(&bare),
+        (STAKE_RETURNED, REASON_PROOF_MISSING),
+        "a first registration without a proof was admitted"
+    );
+}
+
+/// Retiring a controller code stops the controllers already using it, not only new ones.
+#[test]
+fn retiring_a_controller_code_stops_the_members_that_used_it() {
+    let (mut chain, treasury, election) = open_election("pq-retire", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(27);
+    let rotated = PqValidator::new(28);
+
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS)),
+        (STAKE_ACCEPTED, 0),
+        "the fixture needs a registered member"
+    );
+    let placed = pq_stake_of(&chain, &treasury);
+
+    // The code this member was admitted under is retired.
+    set_policy(&mut chain, &[chain_block::UInt256::from_slice(&[0x11; 32])]);
+
+    let topped = pq_stake(&mut chain, &treasury, &validator, election, 2, 12_000 * TOS);
+    assert_eq!(
+        reply(&topped),
+        (STAKE_RETURNED, REASON_CODE_RETIRED),
+        "a member whose controller code was retired could still top up"
+    );
+    let rotation = pq_stake(&mut chain, &treasury, &rotated, election, 3, 12_000 * TOS);
+    assert_eq!(
+        reply(&rotation),
+        (STAKE_RETURNED, REASON_CODE_RETIRED),
+        "a member whose controller code was retired could still rotate its key"
+    );
+
+    assert_eq!(pq_stake_of(&chain, &treasury), placed, "a refused action changed the member");
+    assert_eq!(
+        pq_member_key_id(&chain, &treasury),
+        Some(validator.key_id()),
+        "a refused rotation moved the member off its key"
+    );
+
+    // Admitting it again restores what it could do.
+    let code = sender_code_hash(&chain, &treasury);
+    set_policy(&mut chain, &[code]);
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &treasury, &validator, election, 4, 12_000 * TOS)),
+        (STAKE_ACCEPTED, 0),
+        "re-admitting the code did not restore the member"
+    );
 }
 
 #[test]

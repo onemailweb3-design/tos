@@ -49,8 +49,10 @@ fn probe_code() -> Cell {
         r#"
 (cell, cell) probe_register(cell members, cell key_owner, int validator_id, int algorithm_id,
                             cell public_key, int adnl) method_id {
+  ;; The controller code is a fixed stand-in here: this file measures and exercises the
+  ;; book, and which code admitted a member is the elector's business.
   return pq::register_member(members, key_owner, validator_id, 11000000000000, 1789434000, 0x10000,
-                             algorithm_id, public_key, adnl);
+                             algorithm_id, public_key, adnl, 0xc0de);
 }
 int probe_key_holder(cell key_owner, int key_id) method_id {
   return pq::key_holder(key_owner, key_id);
@@ -60,7 +62,7 @@ int probe_key_holder(cell key_owner, int key_id) method_id {
   ifnot (found) {
     return (0, 0, 0, 0, 0, 0);
   }
-  (int stake, int at, int max_factor, int algorithm_id, int key_id, cell public_key, int adnl) =
+  (int stake, int at, int max_factor, int algorithm_id, int key_id, cell public_key, int adnl, _) =
     pq::unpack_member(ms);
   return (stake, at, max_factor, algorithm_id, key_id, adnl);
 }
@@ -78,7 +80,7 @@ int probe_key_holder(cell key_owner, int key_id) method_id {
     int validator_id = cell_hash(begin_cell().store_uint(index, 32).end_cell());
     int adnl = cell_hash(begin_cell().store_uint(index, 32).store_uint(1, 8).end_cell());
     (members, key_owner) = pq::register_member(members, key_owner, validator_id, 11000000000000,
-                                               1789434000, 0x10000, 1, public_key, adnl);
+                                               1789434000, 0x10000, 1, public_key, adnl, 0xc0de);
     index += 1;
   }
   return (members, key_owner);

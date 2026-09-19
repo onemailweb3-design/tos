@@ -312,6 +312,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   int max_factor = cs~load_uint(32);
   int adnl_addr = cs~load_uint(256);
   cell signature = cs~load_ref();
+  cell controller_proof = cs~load_maybe_ref();
   cs.end_parse();
 
   ;; The validator identity is the contract's own: the account that sent this. The key
@@ -372,11 +373,37 @@ _ ~credit_to(credits, addr, amount) inline_ref {
       return return_stake(s_addr, query_id, 4);
     }
   }
-  ;; A controller topping up or rotating keeps the stake it already placed.
+  ;; Whether this account may hold validator authority at all. The controller is the
+  ;; root of it, and what makes a controller post-quantum is the code it was deployed
+  ;; with, so a first registration proves that code and every later action re-checks that
+  ;; it is still admitted. A profile retired after a controller registered therefore
+  ;; stops it changing anything, rather than merely turning away newcomers.
   var (existing, registered) = pq_members.udict_get?(256, validator_id);
+  (cell admitted_codes, int have_policy) = pq::controller_policy();
+  ifnot (have_policy) {
+    return return_stake(s_addr, query_id, 11);
+  }
+  int controller_code = 0;
   if (registered) {
-    (int placed, _, _, _, _, _, _) = pq::unpack_member(existing);
+    (int placed, _, _, _, _, _, _, int held_code) = pq::unpack_member(existing);
+    ifnot (pq::controller_admitted?(admitted_codes, held_code)) {
+      return return_stake(s_addr, query_id, 12);
+    }
+    controller_code = held_code;
+    ;; A controller topping up or rotating keeps the stake it already placed.
     msg_value += placed;
+  } else {
+    if (cell_null?(controller_proof)) {
+      return return_stake(s_addr, query_id, 8);
+    }
+    (int proved_code, int proved) = pq::controller_code_hash?(controller_proof, validator_id);
+    ifnot (proved) {
+      return return_stake(s_addr, query_id, 9);
+    }
+    ifnot (pq::controller_admitted?(admitted_codes, proved_code)) {
+      return return_stake(s_addr, query_id, 10);
+    }
+    controller_code = proved_code;
   }
   if (msg_value < min_stake) {
     return return_stake(s_addr, query_id, 5);
@@ -394,7 +421,8 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   accept_message();
 
   (pq_members, pq_key_owner) = pq::register_member(pq_members, pq_key_owner, validator_id, msg_value,
-                                                   now(), max_factor, algorithm_id, public_key, adnl_addr);
+                                                   now(), max_factor, algorithm_id, public_key, adnl_addr,
+                                                   controller_code);
   elect = pack_elect(elect_at, elect_close, min_stake, total_stake, members, false, false, pq_members, pq_key_owner);
   set_data(begin_cell().store_dict(elect).store_slice(ds).end_cell());
   if (query_id) {

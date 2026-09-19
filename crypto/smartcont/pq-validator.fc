@@ -23,6 +23,75 @@ const int pq::error::zero_validator_id = 65;
 const int pq::error::zero_adnl = 66;
 const int pq::error::zero_weight = 67;
 
+;; ---------------------------------------------------------------------------
+;; The controller a validator's authority is rooted in.
+;;
+;; An account can only be initialized with a state init whose hash is its address, so a
+;; sender that presents one has proved what it was deployed as. The proof carries the
+;; root's own bits and a pruned branch in place of each child, which is why it is three
+;; cells whatever the controller's code weighs -- and why the hash must be taken at level
+;; zero: `cell_hash` is the highest-level hash, and a tree holding pruned branches has a
+;; level above zero.
+;; ---------------------------------------------------------------------------
+
+const int pq::controller_policy_param = 47;
+
+int pq::hash_level0(cell c) asm "0 CHASHI";
+int pq::cell_level(cell c) asm "CLEVEL";
+
+;; The one accepted shape: split_depth absent, special absent, code present, data
+;; present, library empty. Five bits and two references, and nothing else.
+const int pq::state_init_shape = 0x06;  ;; 0b00110
+
+;; Returns the controller code hash the proof establishes, and whether it established
+;; one. Never throws: a malformed proof is a stake to refuse, not a transaction to bounce.
+(int, int) pq::controller_code_hash?(cell proof, int expected_address) {
+  (slice cs, int special) = pq::parse_maybe_special(proof);
+  if (special) {
+    return (0, false);
+  }
+  if (cs.slice_bits() != 5) {
+    return (0, false);
+  }
+  if (cs.slice_refs() != 2) {
+    return (0, false);
+  }
+  if (cs~load_uint(5) != pq::state_init_shape) {
+    return (0, false);
+  }
+  cell code = cs~load_ref();
+  cell data = cs~load_ref();
+  ;; Both children stand in for the real ones, so both must be pruned branches. A child
+  ;; carried whole would let a proof be built for an account nobody deployed.
+  if (pq::cell_level(code) != 1) {
+    return (0, false);
+  }
+  if (pq::cell_level(data) != 1) {
+    return (0, false);
+  }
+  if (pq::hash_level0(proof) != expected_address) {
+    return (0, false);
+  }
+  return (pq::hash_level0(code), true);
+}
+
+;; The admitted controller codes, and whether the configuration states any. An absent
+;; parameter admits nobody: authority fails closed, never open.
+(cell, int) pq::controller_policy() {
+  cell policy = config_param(pq::controller_policy_param);
+  if (cell_null?(policy)) {
+    return (null(), false);
+  }
+  slice cs = policy.begin_parse();
+  cell codes = cs~load_dict();
+  return (codes, true);
+}
+
+int pq::controller_admitted?(cell codes, int code_hash) inline {
+  (_, int found) = codes.udict_get?(256, code_hash);
+  return found;
+}
+
 ;; validator_pq#b3 validator_id:bits256 algorithm_id:uint16 key_id:bits256
 ;;   public_key:^Cell weight:uint64 adnl_addr:bits256 = ValidatorDescr;
 ;;
@@ -123,7 +192,7 @@ const int pq::error::index_disagrees = 69;
 ;; stake:Tomis registered_at:uint32 max_factor:uint32 algorithm_id:uint16 key_id:uint256
 ;;   public_key:^Cell adnl_addr:uint256
 builder pq::pack_member(int stake, int registered_at, int max_factor, int algorithm_id, int key_id,
-                        cell public_key, int adnl_addr) inline {
+                        cell public_key, int adnl_addr, int controller_code_hash) inline {
   return begin_cell()
     .store_tomis(stake)
     .store_uint(registered_at, 32)
@@ -131,10 +200,18 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
     .store_uint(algorithm_id, 16)
     .store_uint(key_id, 256)
     .store_ref(public_key)
-    .store_uint(adnl_addr, 256);
+    .store_uint(adnl_addr, 256)
+    ;; The code this controller was admitted under, so a profile retired after it
+    ;; registered stops it changing anything and keeps it out of the next set.
+    ;;
+    ;; It goes behind a reference rather than inline. A single-entry dictionary keyed by
+    ;; 256 bits spends about 267 of a cell's 1023 on the label, which leaves a member
+    ;; record about 756 bits to live in; inline this field would put it at 900 and the
+    ;; dictionary write would overflow.
+    .store_ref(begin_cell().store_uint(controller_code_hash, 256).end_cell());
 }
 
-(int, int, int, int, int, cell, int) pq::unpack_member(slice ms) inline {
+(int, int, int, int, int, cell, int, int) pq::unpack_member(slice ms) inline {
   int stake = ms~load_tomis();
   int registered_at = ms~load_uint(32);
   int max_factor = ms~load_uint(32);
@@ -142,8 +219,10 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
   int key_id = ms~load_uint(256);
   cell public_key = ms~load_ref();
   int adnl_addr = ms~load_uint(256);
+  int controller_code_hash = ms~load_ref().begin_parse().preload_uint(256);
   ms.end_parse();
-  return (stake, registered_at, max_factor, algorithm_id, key_id, public_key, adnl_addr);
+  return (stake, registered_at, max_factor, algorithm_id, key_id, public_key, adnl_addr,
+          controller_code_hash);
 }
 
 ;; Registers a controller's key, or replaces the one it already registered, moving the
@@ -155,7 +234,8 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
 ;; validator holding a key the index says is someone else's. A caller cannot get half of
 ;; this, because a refusal throws and the transaction commits nothing.
 (cell, cell) pq::register_member(cell members, cell key_owner, int validator_id, int stake, int registered_at,
-                                 int max_factor, int algorithm_id, cell public_key, int adnl_addr) {
+                                 int max_factor, int algorithm_id, cell public_key, int adnl_addr,
+                                 int controller_code_hash) {
   throw_if(pq::error::zero_validator_id, validator_id == 0);
   throw_if(pq::error::zero_adnl, adnl_addr == 0);
   int key_id = pq::key_id(algorithm_id, public_key);
@@ -175,7 +255,7 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
   ;; record that has no authority over it.
   (slice existing, int registered) = members.udict_get?(256, validator_id);
   if (registered) {
-    (_, _, _, _, int held_key_id, _, _) = pq::unpack_member(existing);
+    (_, _, _, _, int held_key_id, _, _, _) = pq::unpack_member(existing);
     if (held_key_id != key_id) {
       (slice held_by, int indexed) = key_owner.udict_get?(256, held_key_id);
       throw_unless(pq::error::index_disagrees, indexed);
@@ -186,7 +266,8 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
 
   key_owner~udict_set_builder(256, key_id, begin_cell().store_uint(validator_id, 256));
   members~udict_set_builder(256, validator_id,
-    pq::pack_member(stake, registered_at, max_factor, algorithm_id, key_id, public_key, adnl_addr));
+    pq::pack_member(stake, registered_at, max_factor, algorithm_id, key_id, public_key, adnl_addr,
+                    controller_code_hash));
   return (members, key_owner);
 }
 
