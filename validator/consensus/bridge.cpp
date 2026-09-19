@@ -365,6 +365,7 @@ class BridgeImpl final : public IValidatorGroup {
       PublicKeyHash short_id = key.compute_short_id();
 
       bus->validator_set.push_back(PeerValidator{
+          .validator_id = el.validator_id,
           .idx = PeerValidatorId{idx},
           .key = key,
           .short_id = short_id,

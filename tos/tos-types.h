@@ -451,39 +451,6 @@ struct OutMsgQueueProofBroadcast : public td::CntObject {
   }
 };
 
-struct BlockCandidate {
-  Ed25519_PublicKey pubkey;
-  BlockIdExt id;
-  FileHash collated_file_hash;
-  td::BufferSlice data;
-  td::BufferSlice collated_data;
-
-  // used only locally
-  std::vector<td::Ref<OutMsgQueueProofBroadcast>> out_msg_queue_proof_broadcasts = {};
-
-  BlockCandidate clone() const {
-    return BlockCandidate{
-        pubkey, id, collated_file_hash, data.clone(), collated_data.clone(), out_msg_queue_proof_broadcasts};
-  }
-};
-
-struct GeneratedCandidate {
-  BlockCandidate candidate;
-  bool is_cached = false;
-  bool self_collated = false;
-  td::Bits256 collator_node_id = td::Bits256::zero();
-
-  GeneratedCandidate clone() const {
-    return {candidate.clone(), is_cached, self_collated, collator_node_id};
-  }
-};
-
-struct BlockCandidatePriority {
-  td::uint32 round{};
-  td::uint32 first_block_round{};
-  td::int32 priority{};
-};
-
 // Three different 256-bit identities meet on a validator, and code that mixes them
 // up fails in ways nothing catches. They are distinct types so the compiler will not
 // let one stand in for another:
@@ -497,6 +464,10 @@ struct ValidatorId {
   }
   explicit ValidatorId(const Bits256& v) : value(v) {
   }
+  // A key is not an identity. Ed25519_PublicKey converts implicitly to Bits256, which
+  // would otherwise make ValidatorId{some_key} compile and manufacture an identity out
+  // of a key -- the exact confusion these types exist to prevent.
+  ValidatorId(const Ed25519_PublicKey&) = delete;
   bool is_zero() const {
     return value.is_zero();
   }
@@ -518,6 +489,10 @@ struct ConsensusKeyId {
   }
   explicit ConsensusKeyId(const Bits256& v) : value(v) {
   }
+  // A key is not an identity. Ed25519_PublicKey converts implicitly to Bits256, which
+  // would otherwise make ConsensusKeyId{some_key} compile and manufacture an identity out
+  // of a key -- the exact confusion these types exist to prevent.
+  ConsensusKeyId(const Ed25519_PublicKey&) = delete;
   bool is_zero() const {
     return value.is_zero();
   }
@@ -530,6 +505,43 @@ struct ConsensusKeyId {
   bool operator<(const ConsensusKeyId& other) const {
     return value < other.value;
   }
+};
+
+struct BlockCandidate {
+  // Who produced this candidate, named by stable validator identity. It is not a
+  // public key: a producer keeps this identity across a consensus key rotation, and
+  // nothing may turn it back into a key to satisfy an older interface. The transport
+  // identity of whoever sent the candidate is a separate thing and stays separate.
+  ValidatorId producer;
+  BlockIdExt id;
+  FileHash collated_file_hash;
+  td::BufferSlice data;
+  td::BufferSlice collated_data;
+
+  // used only locally
+  std::vector<td::Ref<OutMsgQueueProofBroadcast>> out_msg_queue_proof_broadcasts = {};
+
+  BlockCandidate clone() const {
+    return BlockCandidate{
+        producer, id, collated_file_hash, data.clone(), collated_data.clone(), out_msg_queue_proof_broadcasts};
+  }
+};
+
+struct GeneratedCandidate {
+  BlockCandidate candidate;
+  bool is_cached = false;
+  bool self_collated = false;
+  td::Bits256 collator_node_id = td::Bits256::zero();
+
+  GeneratedCandidate clone() const {
+    return {candidate.clone(), is_cached, self_collated, collator_node_id};
+  }
+};
+
+struct BlockCandidatePriority {
+  td::uint32 round{};
+  td::uint32 first_block_round{};
+  td::int32 priority{};
 };
 
 struct ValidatorDescr {

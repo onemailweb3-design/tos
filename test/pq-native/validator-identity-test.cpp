@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "block/mc-config.h"
@@ -239,6 +240,28 @@ int main() {
     assert(seen >= 5);
   }
 
+  {  // A block is attributed to a producer by stable identity, not by key.
+     //
+     // "Not a key alias" is a property of the types, so it is checked as one: if a
+     // conversion existed in either direction, the old habit of passing a key where an
+     // identity belongs would compile again and nothing would notice.
+    static_assert(!std::is_constructible_v<tos::ValidatorId, tos::Ed25519_PublicKey>,
+                  "a validator identity must not be constructible from a key");
+    static_assert(!std::is_constructible_v<tos::Ed25519_PublicKey, tos::ValidatorId>,
+                  "a key must not be constructible from a validator identity");
+    static_assert(std::is_same_v<decltype(tos::BlockCandidate::producer), tos::ValidatorId>,
+                  "a candidate's producer must be an identity, not a key");
+
+    // The identity a block would be attributed to comes from the descriptor, so it is
+    // the same validator before and after its consensus key changes, while the key
+    // identity moves with the key.
+    const auto* before_descr = set_before.get_validator(tos::ValidatorId{vid});
+    const auto* after_descr = set_after.get_validator(tos::ValidatorId{vid});
+    assert(before_descr != nullptr && after_descr != nullptr);
+    assert(before_descr->validator_id == after_descr->validator_id);
+    assert(before_descr->key_id != after_descr->key_id);
+  }
+
   {  // A consensus session must commit to both identities, so that rotating a key
      // starts a different session while the validator stays the same member.
     auto session_id = [](const std::vector<tos::ValidatorDescr>& nodes) {
@@ -270,6 +293,29 @@ int main() {
     assert(classical_members[0]->get_id() == tos::tos_api::validator_groupMember::ID);
     // a classical member still reports the identity derived from its key
     assert(session_id({classical}) != session_id({pq_node(vid_x, kid_1)}));
+  }
+
+  {  // The shared verdicts: both implementations read these exact encoded sets and must
+     // agree on every one of them.
+    std::ifstream f(SET_CASES_FILE);
+    assert(f);
+    std::string line;
+    int seen = 0;
+    while (std::getline(f, line)) {
+      if (line.empty()) {
+        continue;
+      }
+      auto a = line.find(' '), b = line.find(' ', a + 1);
+      assert(a != std::string::npos && b != std::string::npos);
+      const auto name = line.substr(0, a);
+      const auto verdict = line.substr(a + 1, b - a - 1);
+      auto boc = td::hex_decode(line.substr(b + 1)).move_as_ok();
+      auto set = vm::std_boc_deserialize(boc).move_as_ok();
+      const bool accepted = block::Config::unpack_validator_set(set, false).is_ok();
+      assert(accepted == (verdict == "accept"));
+      seen++;
+    }
+    assert(seen >= 13);
   }
 
   printf("VALIDATOR_IDENTITY_OK rotation keeps validator_id, changes key_id; bindings enforced; session binds both\n");

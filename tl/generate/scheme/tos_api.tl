@@ -580,8 +580,8 @@ db.blockdb.lru id:tosNode.blockIdExt prev:int256 next:int256 = db.blockdb.Lru;
 db.blockdb.key.lru id:tosNode.blockIdExt = db.blockdb.Key;
 db.blockdb.key.value id:tosNode.blockIdExt = db.blockdb.Key;
 
-db.candidate source:PublicKey id:tosNode.blockIdExt data:bytes collated_data:bytes = db.Candidate;
-db.candidate.id source:PublicKey id:tosNode.blockIdExt collated_data_file_hash:int256 = db.candidate.Id;
+db.candidate source:int256 id:tosNode.blockIdExt data:bytes collated_data:bytes = db.Candidate;
+db.candidate.id source:int256 id:tosNode.blockIdExt collated_data_file_hash:int256 = db.candidate.Id;
 
 db.filedb.key.empty = db.filedb.Key;
 db.filedb.key.blockFile block_id:tosNode.blockIdExt = db.filedb.Key;
@@ -1041,9 +1041,9 @@ validatorStats.collatorNodeResponse self:int256 validator_id:int256 timestamp:do
     block_id:tosNode.blockIdExt original_block_id:tosNode.blockIdExt collated_data_hash:int256
     = validatorStats.CollatorNodeResponse;
 
-collatorNode.candidate source:PublicKey id:tosNode.blockIdExt data:bytes collated_data:bytes = collatorNode.Candidate;
-collatorNode.compressedCandidate flags:# source:PublicKey id:tosNode.blockIdExt decompressed_size:int data:bytes = collatorNode.Candidate;
-collatorNode.compressedCandidateV2 flags:# source:PublicKey id:tosNode.blockIdExt data:bytes = collatorNode.Candidate;
+collatorNode.candidate source:int256 id:tosNode.blockIdExt data:bytes collated_data:bytes = collatorNode.Candidate;
+collatorNode.compressedCandidate flags:# source:int256 id:tosNode.blockIdExt decompressed_size:int data:bytes = collatorNode.Candidate;
+collatorNode.compressedCandidateV2 flags:# source:int256 id:tosNode.blockIdExt data:bytes = collatorNode.Candidate;
 collatorNode.pong#5bbf0521 flags:# version:flags.0?int = collatorNode.Pong;
 collatorNode.error code:int message:string = collatorNode.Error;
 

@@ -24,6 +24,8 @@
 
 #include "fileref.hpp"
 
+#include <cstring>
+
 namespace tos {
 
 namespace validator {
@@ -210,7 +212,7 @@ CandidateShort Candidate::shortref() const {
 
 std::string Candidate::filename() const {
   return PSTRING() << "candidate_" << block_id.to_str() << "_" << collated_data_file_hash.to_hex() << "_"
-                   << td::base64url_encode(source.export_as_slice());
+                   << td::base64url_encode(source.value.as_slice());
 }
 
 std::string Candidate::filename_short() const {
@@ -407,8 +409,12 @@ td::Result<FileReference> FileReference::create(std::string filename) {
     std::string rem = ss.str();
 
     TRY_RESULT(source_s, td::base64url_decode(rem));
-    TRY_RESULT(source, PublicKey::import(source_s));
-    return fileref::Candidate{source, block_id, col_hash};
+    if (source_s.size() != 32) {
+      return td::Status::Error(ErrorCode::protoviolation, "invalid producer identity in candidate file name");
+    }
+    td::Bits256 producer;
+    std::memcpy(producer.data(), source_s.data(), 32);
+    return fileref::Candidate{ValidatorId{producer}, block_id, col_hash};
   } else if (token == "info") {
     std::getline(ss, token, '_');
     TRY_RESULT(block_id, BlockIdExt::from_str(token));

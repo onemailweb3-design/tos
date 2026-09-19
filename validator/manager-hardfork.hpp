@@ -310,7 +310,7 @@ class ValidatorManagerImpl : public ValidatorManager {
   void get_block_data_from_db_short(BlockIdExt block_id, td::Promise<td::Ref<BlockData>> promise) override;
   void get_shard_state_from_db(ConstBlockHandle handle, td::Promise<td::Ref<ShardState>> promise) override;
   void get_shard_state_from_db_short(BlockIdExt block_id, td::Promise<td::Ref<ShardState>> promise) override;
-  void get_block_candidate_from_db(PublicKey source, BlockIdExt id, FileHash collated_data_file_hash,
+  void get_block_candidate_from_db(ValidatorId source, BlockIdExt id, FileHash collated_data_file_hash,
                                    td::Promise<BlockCandidate> promise) override;
   void get_candidate_data_by_block_id_from_db(BlockIdExt id, td::Promise<td::BufferSlice> promise) override;
   void get_block_proof_from_db(ConstBlockHandle handle, td::Promise<td::Ref<Proof>> promise) override;
@@ -519,7 +519,7 @@ class ValidatorManagerImpl : public ValidatorManager {
                                         td::Promise<ConstBlockHandle> promise) override {
     get_block_by_seqno_from_db(account, seqno, std::move(promise));
   }
-  void get_block_candidate_for_litequery(PublicKey source, BlockIdExt block_id, FileHash collated_data_hash,
+  void get_block_candidate_for_litequery(ValidatorId source, BlockIdExt block_id, FileHash collated_data_hash,
                                          td::Promise<BlockCandidate> promise) override {
     promise.set_result(td::Status::Error("not implemented"));
   }

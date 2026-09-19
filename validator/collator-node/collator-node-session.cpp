@@ -313,7 +313,7 @@ void CollatorNodeSession::process_result(std::shared_ptr<CacheEntry> cache_entry
 }
 
 void CollatorNodeSession::process_request(adnl::AdnlNodeIdShort src, std::vector<BlockIdExt> prev_blocks,
-                                          BlockCandidatePriority priority, Ed25519_PublicKey creator,
+                                          BlockCandidatePriority priority, ValidatorId creator,
                                           td::Timestamp timeout, td::Promise<BlockCandidate> promise) {
   // The requester chooses the block's created_by (creator); the response path
   // rewrites the candidate to it and persists a record keyed by the resulting
@@ -321,11 +321,8 @@ void CollatorNodeSession::process_request(adnl::AdnlNodeIdShort src, std::vector
   // unbounded distinct records (and pay the rewrite cost) for a single block.
   // Require the creator to be a member of this group's validator set, which
   // bounds the distinct creators -- and thus the stored records -- to the set.
-  // The creator still arrives as a classical key here, so its membership identity is
-  // the one derived from that key. This becomes the stable validator identity when the
-  // block creator field stops being typed as a public key.
-  auto creator_id = PublicKey(pubkeys::Ed25519(creator)).compute_short_id();
-  if (validator_set_->get_validator(tos::ValidatorId{creator_id.bits256_value()}) == nullptr) {
+  // The creator is a stable validator identity, so membership is asked directly.
+  if (validator_set_->get_validator(creator) == nullptr) {
     promise.set_error(td::Status::Error(ErrorCode::error, "collate query: creator is not in the validator set"));
     return;
   }
