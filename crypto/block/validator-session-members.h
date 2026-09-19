@@ -28,11 +28,18 @@ namespace block {
 // A post-quantum member carries both of its identities: the stable one saying which
 // validator this is, and the one naming the consensus key it currently holds. That is
 // what makes a key rotation start a different session while leaving the validator the
-// same member of the set. A classical member keeps the identity derived from its key,
-// so existing sessions are unchanged.
+// same member of the set. A classical member still commits to the identity derived
+// from its key.
 //
 // The two forms are separate constructors of one boxed type, so their encodings carry
 // distinct ids and a classical member can never be read as a post-quantum one.
+//
+// Boxing the member list changes session identifiers for classical sets as well, since
+// every member now carries a constructor id. That is an intentional pre-mainnet break,
+// not something to paper over: session identifiers are per-round and never enter a
+// block, so nothing persisted moves, but two nodes must agree on this encoding to join
+// the same session. There is deliberately no legacy session form and no selection
+// between one and the other.
 std::vector<tos::tl_object_ptr<tos::tos_api::engine_validator_GroupMember>> validator_session_members(
     const std::vector<tos::ValidatorDescr>& nodes);
 

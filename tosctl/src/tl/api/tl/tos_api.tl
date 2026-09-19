@@ -627,9 +627,15 @@ db.files.package.value package_id:int key:Bool temp:Bool firstblocks:(vector db.
 ---types---
 
 validator.groupMember public_key_hash:int256 adnl:int256 weight:long = engine.validator.GroupMember;
-validator.group workchain:int shard:long catchain_seqno:int config_hash:int256 members:(vector validator.groupMember) = validator.Group;
-validator.groupEx workchain:int shard:long vertical_seqno:int catchain_seqno:int config_hash:int256 members:(vector validator.groupMember) = validator.Group;
-validator.groupNew workchain:int shard:long vertical_seqno:int last_key_block_seqno:int catchain_seqno:int config_hash:int256 members:(vector validator.groupMember) = validator.Group;
+// A post-quantum member commits to both of its identities: the stable one that says
+// which validator this is, and the one naming the consensus key it currently holds.
+// Rotating a key therefore changes the session while the validator stays the same
+// member. The member vector is boxed so the two forms carry distinct constructor ids
+// and a classical member can never be read as a post-quantum one.
+validator.groupMemberPQ validator_id:int256 key_id:int256 adnl:int256 weight:long = engine.validator.GroupMember;
+validator.group workchain:int shard:long catchain_seqno:int config_hash:int256 members:(vector engine.validator.GroupMember) = validator.Group;
+validator.groupEx workchain:int shard:long vertical_seqno:int catchain_seqno:int config_hash:int256 members:(vector engine.validator.GroupMember) = validator.Group;
+validator.groupNew workchain:int shard:long vertical_seqno:int last_key_block_seqno:int catchain_seqno:int config_hash:int256 members:(vector engine.validator.GroupMember) = validator.Group;
 
 validator.telemetry flags:# timestamp:double adnl_id:int256
     node_version:string os_version:string node_started_at:int

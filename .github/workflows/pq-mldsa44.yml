@@ -10,6 +10,8 @@ on:
       - 'test/pq-mldsa44/**'
       - 'test/pq-native/**'
       - 'tosctl/src/block/**'
+      - 'tosctl/src/tl/**'
+      - 'tl/generate/scheme/**'
       - 'doc/tvm-mldsa44*'
       - '.github/workflows/pq-mldsa44.yml'
 defaults:
@@ -173,6 +175,7 @@ jobs:
         run: |
           cargo test --manifest-path tosctl/src/block/Cargo.toml --lib pq_bytes -- --nocapture
           cargo test --manifest-path tosctl/src/block/Cargo.toml --lib validators -- --nocapture
+          cargo test --manifest-path tosctl/src/tl/api/Cargo.toml --test session_vectors -- --nocapture
   determinism:
     needs: [native, sanitizers, vm-sanitizers, rust-pqbytes]
     if: always()
