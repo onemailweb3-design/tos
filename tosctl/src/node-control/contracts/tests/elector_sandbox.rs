@@ -156,3 +156,297 @@ fn a_tick_inside_the_window_opens_an_election() {
         "an election is identified by when the set it elects takes over"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Staking
+//
+// A stake is an internal message carrying a signature over fields the contract
+// rebuilds for itself, including the sender's address. The signature is what makes a
+// registration belong to a key; the sender's address in the preimage is what stops the
+// same signed request being replayed from somewhere else.
+// ---------------------------------------------------------------------------
+
+/// The elector's own tags, so a reply is read rather than guessed at.
+const STAKE_ACCEPTED: u32 = 0xf374484c;
+const STAKE_RETURNED: u32 = 0xee6f454c;
+const NEW_STAKE: u32 = 0x4e73744b;
+/// `return_stake` reason 1: the signature did not verify.
+const REASON_BAD_SIGNATURE: u32 = 1;
+const ELECT_REQUEST: u32 = 0x654c5074;
+
+const TOS: u64 = 1_000_000_000;
+
+/// Exactly what the contract signs over: its own tag, the terms, the sender it saw, and
+/// the transport identity being claimed. Built here independently of the contract, so a
+/// change to either side's field order stops the signature verifying.
+///
+/// The bytes are signed as they are. `check_data_signature` verifies Ed25519 over the
+/// slice's raw bytes and does not hash them first, unlike the variant that takes a hash,
+/// so signing a digest here would produce a signature the contract cannot accept.
+fn election_request(
+    stake_at: u32,
+    max_factor: u32,
+    source: &chain_block::AccountId,
+    adnl: &[u8; 32],
+) -> Vec<u8> {
+    let mut preimage = Vec::with_capacity(76);
+    preimage.extend_from_slice(&ELECT_REQUEST.to_be_bytes());
+    preimage.extend_from_slice(&stake_at.to_be_bytes());
+    preimage.extend_from_slice(&max_factor.to_be_bytes());
+    preimage.extend_from_slice(&source.get_bytestring(0));
+    preimage.extend_from_slice(adnl);
+    assert_eq!(preimage.len(), 76, "the signed preimage is four words and two addresses");
+    preimage
+}
+
+fn stake_body(
+    query_id: u64,
+    public_key: &[u8; 32],
+    stake_at: u32,
+    max_factor: u32,
+    adnl: &[u8; 32],
+    signature: &[u8; 64],
+) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut signature_cell = chain_block::BuilderData::new();
+    signature_cell.append_raw(signature, 512).expect("signature bits");
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(NEW_STAKE).expect("operation");
+    body.append_u64(query_id).expect("query id");
+    body.append_raw(public_key, 256).expect("public key");
+    body.append_u32(stake_at).expect("election");
+    body.append_u32(max_factor).expect("max factor");
+    body.append_raw(adnl, 256).expect("adnl address");
+    body.checked_append_reference(signature_cell.into_cell().expect("signature cell"))
+        .expect("signature reference");
+    body.into_cell().expect("stake body")
+}
+
+/// The tag and reason of the first reply the elector sent back. A refusal carries the
+/// reason it refused for, and a test that only read the tag would report every refusal as
+/// the one it was looking for.
+fn reply(result: &tos_sandbox::SendResult) -> (u32, u32) {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    let mut answer = None;
+    transaction
+        .iterate_out_msgs(|message| {
+            if answer.is_none() {
+                if let Some(body) = message.body() {
+                    let mut body = body.clone();
+                    let tag = body.get_next_u32().expect("a reply tag");
+                    let _query = body.get_next_u64().expect("a query id");
+                    answer = Some((tag, body.get_next_u32().unwrap_or(0)));
+                }
+            }
+            Ok(true)
+        })
+        .expect("out messages");
+    answer.expect("the elector always answers a stake")
+}
+
+struct Validator {
+    key: ed25519_dalek::SigningKey,
+    public_key: [u8; 32],
+    adnl: [u8; 32],
+}
+
+impl Validator {
+    fn new(seed: u8) -> Self {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let public_key = key.verifying_key().to_bytes();
+        Self { key, public_key, adnl: [seed ^ 0xff; 32] }
+    }
+}
+
+/// An open election, plus a funded masterchain account to stake from.
+fn open_election(name: &str, balance: u64) -> (Chain, tos_sandbox::Treasury, u32) {
+    let mut chain = launch();
+    let opens = chain.validators_until - chain.elect_begin_before;
+    chain.blockchain.set_now(opens);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    let election = active_election_id(&chain) as u32;
+    assert_ne!(election, 0, "the fixture needs an open election");
+    let treasury = chain.blockchain.treasury(name, balance).expect("a funded sender");
+    (chain, treasury, election)
+}
+
+fn stake_of(chain: &Chain, public_key: &[u8; 32]) -> u128 {
+    let result = chain
+        .blockchain
+        .run_get_method(
+            &chain.elector,
+            "participates_in",
+            vec![tos_vm::stack::StackItem::integer(
+                tos_vm::stack::integer::IntegerData::from_unsigned_bytes_be(public_key),
+            )],
+        )
+        .expect("the elector answers");
+    assert_eq!(result.exit_code, 0, "participates_in failed");
+    result
+        .stack
+        .last()
+        .expect("a stake")
+        .as_integer()
+        .expect("an integer")
+        .to_string()
+        .parse()
+        .expect("a stake")
+}
+
+#[test]
+fn a_signed_stake_registers_the_validator() {
+    let (mut chain, treasury, election) = open_election("validator-a", 20_000 * TOS);
+    let validator = Validator::new(0xa1);
+    let max_factor = 0x10000;
+    let request =
+        election_request(election, max_factor, &treasury.address().address(), &validator.adnl);
+    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&validator.key, &request).to_bytes();
+
+    let body =
+        stake_body(1, &validator.public_key, election, max_factor, &validator.adnl, &signature);
+    let result = chain
+        .blockchain
+        .send_message(treasury.build_message(&chain.elector, 11_000 * TOS, true, Some(body)))
+        .expect("the stake is delivered");
+    result.expect_success();
+
+    assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "the elector refused a correctly signed stake");
+    assert_eq!(
+        stake_of(&chain, &validator.public_key),
+        (11_000 * TOS - TOS) as u128,
+        "the registered stake is what was sent, less the confirmation the elector returns"
+    );
+}
+
+#[test]
+fn a_stake_signed_by_a_different_key_is_returned() {
+    let (mut chain, treasury, election) = open_election("validator-b", 20_000 * TOS);
+    let validator = Validator::new(0xb2);
+    let impostor = Validator::new(0xb3);
+    let max_factor = 0x10000;
+    let request =
+        election_request(election, max_factor, &treasury.address().address(), &validator.adnl);
+    // Signed by a key that is not the one being registered, which is the whole of the
+    // difference between this and the accepted case.
+    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&impostor.key, &request).to_bytes();
+
+    let body =
+        stake_body(2, &validator.public_key, election, max_factor, &validator.adnl, &signature);
+    let result = chain
+        .blockchain
+        .send_message(treasury.build_message(&chain.elector, 11_000 * TOS, true, Some(body)))
+        .expect("the stake is delivered");
+
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_BAD_SIGNATURE),
+        "a stake signed by another key was accepted, or refused for another reason"
+    );
+    assert_eq!(stake_of(&chain, &validator.public_key), 0, "a refused stake was registered anyway");
+}
+
+#[test]
+fn a_stake_signed_for_another_sender_is_returned() {
+    let (mut chain, treasury, election) = open_election("validator-c", 20_000 * TOS);
+    let elsewhere =
+        chain.blockchain.treasury("validator-c-elsewhere", TOS).expect("another account");
+    let validator = Validator::new(0xc4);
+    let max_factor = 0x10000;
+    // A signature that is valid, for the same key and the same election, but made for a
+    // different sender. Without the source address in the preimage this would be
+    // replayable from any account.
+    let request =
+        election_request(election, max_factor, &elsewhere.address().address(), &validator.adnl);
+    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&validator.key, &request).to_bytes();
+
+    let body =
+        stake_body(3, &validator.public_key, election, max_factor, &validator.adnl, &signature);
+    let result = chain
+        .blockchain
+        .send_message(treasury.build_message(&chain.elector, 11_000 * TOS, true, Some(body)))
+        .expect("the stake is delivered");
+
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_BAD_SIGNATURE),
+        "a stake signed for another sender was accepted, or refused for another reason"
+    );
+    assert_eq!(stake_of(&chain, &validator.public_key), 0, "a refused stake was registered anyway");
+}
+
+/// `return_stake` reason 4: a key already staked from a different address.
+const REASON_ANOTHER_ADDRESS: u32 = 4;
+
+/// Sign and send a stake, returning what the elector answered.
+fn stake(
+    chain: &mut Chain,
+    from: &tos_sandbox::Treasury,
+    validator: &Validator,
+    election: u32,
+    query_id: u64,
+    value: u64,
+) -> tos_sandbox::SendResult {
+    let max_factor = 0x10000;
+    let request =
+        election_request(election, max_factor, &from.address().address(), &validator.adnl);
+    let signature: [u8; 64] = ed25519_dalek::Signer::sign(&validator.key, &request).to_bytes();
+    let body = stake_body(
+        query_id,
+        &validator.public_key,
+        election,
+        max_factor,
+        &validator.adnl,
+        &signature,
+    );
+    chain
+        .blockchain
+        .send_message(from.build_message(&chain.elector, value, true, Some(body)))
+        .expect("the stake is delivered")
+}
+
+#[test]
+fn a_second_stake_from_the_same_address_is_added_to_the_first() {
+    let (mut chain, treasury, election) = open_election("validator-d", 40_000 * TOS);
+    let validator = Validator::new(0xd5);
+
+    let first = stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
+    assert_eq!(reply(&first), (STAKE_ACCEPTED, 0), "the first stake was refused");
+    let second = stake(&mut chain, &treasury, &validator, election, 2, 12_000 * TOS);
+    assert_eq!(reply(&second), (STAKE_ACCEPTED, 0), "topping up an own stake was refused");
+
+    assert_eq!(
+        stake_of(&chain, &validator.public_key),
+        (23_000 * TOS - 2 * TOS) as u128,
+        "two stakes from one address must accumulate, less the two confirmations"
+    );
+}
+
+#[test]
+fn the_same_key_cannot_be_staked_from_a_second_address() {
+    let (mut chain, treasury, election) = open_election("validator-e", 40_000 * TOS);
+    let elsewhere =
+        chain.blockchain.treasury("validator-e-second", 40_000 * TOS).expect("an account");
+    let validator = Validator::new(0xe6);
+
+    let first = stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
+    assert_eq!(reply(&first), (STAKE_ACCEPTED, 0), "the first stake was refused");
+    let registered = stake_of(&chain, &validator.public_key);
+
+    // Correctly signed for its own sender, so only the rule that a key belongs to one
+    // controlling address can refuse it.
+    let second = stake(&mut chain, &elsewhere, &validator, election, 2, 11_000 * TOS);
+    assert_eq!(
+        reply(&second),
+        (STAKE_RETURNED, REASON_ANOTHER_ADDRESS),
+        "a key was staked from a second address, or refused for another reason"
+    );
+    assert_eq!(
+        stake_of(&chain, &validator.public_key),
+        registered,
+        "a refused stake changed the registration it was refused for"
+    );
+}
