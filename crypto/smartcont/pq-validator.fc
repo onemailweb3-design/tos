@@ -224,6 +224,7 @@ cell pq::stake_preimage(int stake_at, int max_factor, int validator_id, int algo
 }
 
 const int pq::error::key_owned = 68;
+const int pq::error::index_disagrees = 69;
 
 ;; stake:Tomis registered_at:uint32 max_factor:uint32 algorithm_id:uint16 key_id:uint256
 ;;   public_key:^Cell adnl_addr:uint256
@@ -273,10 +274,18 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
 
   ;; A controller that is rotating releases the key it held, so the index never keeps a
   ;; key nobody is registered with.
+  ;;
+  ;; Which entry to release is read from the member record, so the two halves are required
+  ;; to agree on it first. Both are arguments to this function: releasing an entry that
+  ;; names someone else would take a key from a controller that holds it, on the word of a
+  ;; record that has no authority over it.
   (slice existing, int registered) = members.udict_get?(256, validator_id);
   if (registered) {
     (_, _, _, _, int held_key_id, _, _) = pq::unpack_member(existing);
     if (held_key_id != key_id) {
+      (slice held_by, int indexed) = key_owner.udict_get?(256, held_key_id);
+      throw_unless(pq::error::index_disagrees, indexed);
+      throw_unless(pq::error::index_disagrees, held_by~load_uint(256) == validator_id);
       key_owner~udict_delete?(256, held_key_id);
     }
   }

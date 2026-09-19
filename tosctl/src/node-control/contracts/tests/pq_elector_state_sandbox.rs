@@ -24,6 +24,8 @@ const MLDSA44_PUBLIC_KEY_BYTES: usize = 1312;
 /// A key already registered by another controller.
 const ERROR_KEY_OWNED: i32 = 68;
 const ERROR_ZERO_VALIDATOR_ID: i32 = 65;
+/// The member record and the reverse index disagree about who holds a key.
+const ERROR_INDEX_DISAGREES: i32 = 69;
 
 /// What the same state cost when the storage shape was approved, from
 /// `build/crypto/pq/n3-state-measure`: members plus the reverse index, in cells.
@@ -259,6 +261,47 @@ fn rotating_a_key_releases_the_one_it_replaces() {
 
     // And the released key really is free: another controller may now take it.
     register(&chain, &probe, &rotated, 0xa2, 0x11, 0xc2).expect("the released key is free");
+}
+
+/// A rotation reads which key to release from the member record, and releases it from an
+/// index it is handed. Both are arguments, so the two can be made to disagree, and the
+/// book that results is not one any registration builds.
+///
+/// Releasing on the word of the member record alone would take a key from the controller
+/// the index says holds it. Nothing downstream could notice: the robbed controller keeps
+/// a member record naming a key anyone may now register, and the validator set that
+/// eventually carries two claims to one key is refused by the node after it is already
+/// authoritative.
+#[test]
+fn a_rotation_will_not_release_a_key_the_index_gives_to_someone_else() {
+    let mut chain = chain_at_16();
+    let probe = deploy(&mut chain);
+
+    let mine = register(&chain, &probe, &Book::empty(), 0xa1, 0x11, 0xc1).expect("a registration");
+    let theirs =
+        register(&chain, &probe, &Book::empty(), 0xa2, 0x11, 0xc2).expect("a registration");
+
+    // One controller's records, another's index: the record claims a key the index gives
+    // to someone else.
+    let disagreeing =
+        Book { members: mine.members.clone(), key_owner: theirs.key_owner.clone() };
+    assert_eq!(
+        register(&chain, &probe, &disagreeing, 0xa1, 0x22, 0xc1).err(),
+        Some(ERROR_INDEX_DISAGREES),
+        "a rotation released a key the index had given to another controller"
+    );
+
+    // And the same when the index has forgotten the key entirely, which is the other way
+    // the two halves can part.
+    let unindexed = Book { members: mine.members.clone(), key_owner: StackItem::None };
+    assert_eq!(
+        register(&chain, &probe, &unindexed, 0xa1, 0x22, 0xc1).err(),
+        Some(ERROR_INDEX_DISAGREES),
+        "a rotation released a key the index does not record at all"
+    );
+
+    // The rule is about disagreement, not about rotation: the consistent book still works.
+    register(&chain, &probe, &mine, 0xa1, 0x22, 0xc1).expect("a rotation of a consistent book");
 }
 
 #[test]
