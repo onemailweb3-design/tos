@@ -1854,6 +1854,89 @@ fn a_controller_rotates_its_key_and_releases_the_one_it_held() {
     );
 }
 
+/// Rewrite the open election the way the elector stored it before it carried a
+/// post-quantum book: seven fields, and nothing after them.
+///
+/// This is the storage an upgrade leaves behind. The configuration contract may replace
+/// the elector's code while an election is open, and the upgrade hook sets the new code
+/// without migrating a single cell, so the first thing the new code reads is an election
+/// the old code wrote.
+fn drop_the_post_quantum_book_from_storage(chain: &mut Chain) {
+    use chain_block::IBitstring;
+    let mut account =
+        chain.blockchain.get_account(&chain.elector).expect("the elector is deployed").clone();
+    let data = account.get_data().expect("the elector has storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    let elect = next_dictionary(&mut slice, 32);
+    let root = chain_block::HashmapType::data(&elect).expect("an active election").clone();
+    let mut es = chain_block::SliceData::load_cell(root).expect("the election");
+
+    let mut legacy = chain_block::BuilderData::new();
+    legacy.append_u32(es.get_next_u32().expect("elect_at")).expect("elect_at");
+    legacy.append_u32(es.get_next_u32().expect("elect_close")).expect("elect_close");
+    for _ in 0..2 {
+        let bytes = es.get_next_int(4).expect("an amount length") as usize;
+        legacy.append_bits(bytes, 4).expect("an amount length");
+        if bytes > 0 {
+            let amount = es.get_next_bits(bytes * 8).expect("an amount");
+            legacy.append_raw(&amount, bytes * 8).expect("an amount");
+        }
+    }
+    for field in ["the members dictionary", "failed", "finished"] {
+        if es.get_next_bit().expect(field) {
+            legacy.append_bit_one().expect(field);
+            if field == "the members dictionary" {
+                let members = es.checked_drain_reference().expect("the members");
+                legacy.checked_append_reference(members).expect("the members");
+            }
+        } else {
+            legacy.append_bit_zero().expect(field);
+        }
+    }
+
+    let mut rebuilt = chain_block::BuilderData::new();
+    rebuilt.append_bit_one().expect("an active election");
+    rebuilt
+        .checked_append_reference(legacy.into_cell().expect("the election"))
+        .expect("the election");
+    rebuilt.checked_append_references_and_data(&slice).expect("the rest of the storage");
+    account.set_data(rebuilt.into_cell().expect("storage"));
+    chain.blockchain.set_account(chain.elector.clone(), account);
+}
+
+#[test]
+fn an_election_opened_before_the_upgrade_is_read_and_written_again() {
+    let (mut chain, treasury, election) = open_election("legacy-elect", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let classical = Validator::new(0xf1);
+
+    let opening = stake(&mut chain, &treasury, &classical, election, 1, 11_000 * TOS);
+    assert_eq!(reply(&opening), (STAKE_ACCEPTED, 0), "the fixture needs a member");
+    let placed = stake_of(&chain, &classical.public_key);
+    drop_the_post_quantum_book_from_storage(&mut chain);
+
+    // Every entry point reads the election first, so an unreadable one stops the elector
+    // altogether: no stake is accepted and no election ever closes.
+    assert_eq!(
+        declared_total_stake(&chain),
+        placed,
+        "an election opened by the previous code could not be read back"
+    );
+
+    let validator = PqValidator::new(9);
+    let result = pq_stake(&mut chain, &treasury, &validator, election, 2, 12_000 * TOS);
+    assert_eq!(
+        reply(&result),
+        (STAKE_ACCEPTED, 0),
+        "the elector stopped working on the storage an upgrade leaves behind"
+    );
+    assert_eq!(
+        pq_member_key_id(&chain, &treasury),
+        Some(validator.key_id()),
+        "the book was not created for an election that was opened without one"
+    );
+}
+
 #[test]
 fn a_post_quantum_top_up_adds_only_the_money_it_brings_to_the_election_total() {
     let (mut chain, treasury, election) = open_election("pq-validator-g", 60_000 * TOS);

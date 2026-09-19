@@ -31,9 +31,21 @@
 ;; index that keeps one consensus key to one controller.
 _ unpack_elect(elect) inline_ref {
   var es = elect.begin_parse();
-  var res = (es~load_uint(32), es~load_uint(32), es~load_tomis(), es~load_tomis(), es~load_dict(), es~load_int(1), es~load_int(1), es~load_dict(), es~load_dict());
+  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished) =
+    (es~load_uint(32), es~load_uint(32), es~load_tomis(), es~load_tomis(), es~load_dict(), es~load_int(1), es~load_int(1));
+  ;; An election opened before this code was installed ends here. The configuration
+  ;; contract may replace the elector's code while an election is open, and the upgrade
+  ;; migrates no storage, so the book is read as empty rather than read past the end:
+  ;; that election simply has no post-quantum members, and gains one the moment it is
+  ;; written back.
+  cell pq_members = null();
+  cell pq_key_owner = null();
+  ifnot (es.slice_empty?()) {
+    pq_members = es~load_dict();
+    pq_key_owner = es~load_dict();
+  }
   es.end_parse();
-  return res;
+  return (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner);
 }
 
 cell pack_elect(elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) inline_ref {
