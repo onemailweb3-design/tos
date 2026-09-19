@@ -1814,6 +1814,302 @@ fn a_contract_cannot_send_a_message_carrying_a_pruned_proof() {
     assert_eq!(exit, 8, "the small case was allowed, so size is part of the rule after all");
 }
 
+// ---------------------------------------------------------------------------
+// What a vote must bring, and what an invalid one cannot take
+//
+// Both vote paths verify an ML-DSA-44 signature, which costs about fifty thousand gas
+// and cannot be made cheaper by being wrong: an invalid signature is found only by
+// performing the verification. Anyone may send a vote, so the sender has to pay for it
+// before it happens, and a sender who keeps sending invalid ones must not be able to
+// spend the contract's own balance doing it.
+//
+// The minimum is found by searching for it rather than by recomputing the contract's
+// rule here. A test that derives the boundary the same way the contract does would agree
+// with a contract that had stopped applying it, and the number that matters to an
+// operator is the whole transaction's cost, not the gate constant alone.
+// ---------------------------------------------------------------------------
+
+/// The balance an account holds, in nanotomis.
+fn balance_of(chain: &Chain, address: &MsgAddressInt) -> u128 {
+    chain
+        .blockchain
+        .get_account(address)
+        .expect("the account is deployed")
+        .balance()
+        .expect("an active account has a balance")
+        .coins
+        .as_u128()
+}
+
+/// The smallest value for which `send` succeeds, by bisection over [low, high].
+///
+/// `high` must succeed and `low` must fail, and both are checked: a search whose ends
+/// are both on the same side would return an endpoint and look like an answer.
+fn smallest_value_that_works(
+    chain: &mut Chain,
+    low: u64,
+    high: u64,
+    mut send: impl FnMut(&mut Chain, u64, u64) -> bool,
+) -> u64 {
+    let mut query = 1_000u64;
+    assert!(!send(chain, low, query), "the bottom of the search already works");
+    query += 1;
+    assert!(send(chain, high, query), "the top of the search does not work");
+    let (mut low, mut high) = (low, high);
+    while high - low > 1 {
+        let mid = low + (high - low) / 2;
+        query += 1;
+        if send(chain, mid, query) {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    high
+}
+
+/// What a configuration vote must carry to be counted.
+#[test]
+fn the_minimum_value_a_configuration_vote_must_carry() {
+    let (mut chain, validators, _election) = elect_install_and_rotate();
+    let relay = chain.blockchain.treasury("min-config-relay", 100_000 * TOS).expect("an account");
+
+    // A fresh proposal for each attempt, so a vote that succeeded cannot make a later
+    // attempt fail for having already voted -- which would read as a funding refusal.
+    let voter_index = index_of(&chain, &validators[0]);
+    let mut attempt = |chain: &mut Chain, value: u64, query: u64| -> bool {
+        let proposal = propose(chain, 42, 0x1000 + query as u32);
+        let signature = validators[0]
+            .sign_under(&vote_preimage(chain, voter_index, &proposal), CONFIG_VOTE_CONTEXT);
+        let result = chain
+            .blockchain
+            .send_message(relay.build_message(
+                &chain.config_contract,
+                value,
+                true,
+                Some(vote_body(query, &signature, voter_index, &proposal)),
+            ))
+            .expect("the vote is delivered");
+        exit_code_of(&result) == 0 && proposal_voters(chain, &proposal) == vec![voter_index]
+    };
+
+    let minimum = smallest_value_that_works(&mut chain, TOS / 1000, TOS, &mut attempt);
+
+    // Two-sided, because a one-sided bound passes when the cost collapses as readily as
+    // when it is right, and a verification that stopped happening would do exactly that.
+    // At the configured masterchain gas price a verification costs about half a tomi, so
+    // a vote counted for a tenth of that had none performed.
+    assert!(
+        minimum > TOS / 10,
+        "a configuration vote is counted for {minimum} nanotomis, too little to have paid \
+         for an ML-DSA-44 verification"
+    );
+    assert!(
+        minimum <= 2 * TOS,
+        "a configuration vote now costs {minimum} nanotomis, far more than the \
+         verification it asks for"
+    );
+}
+
+/// The same, for a complaint vote against a past election.
+#[test]
+fn the_minimum_value_a_complaint_vote_must_carry() {
+    let (mut chain, validators, election) = elect_install_and_rotate();
+    let accused = validator_id_at(&chain, index_of(&chain, &validators[3]));
+    let complainant =
+        chain.blockchain.treasury("min-complainant", 10_000 * TOS).expect("an account");
+    let relay = chain.blockchain.treasury("min-complaint-relay", 100_000 * TOS).expect("account");
+    let voter_index = index_of(&chain, &validators[0]);
+
+    let mut attempt = |chain: &mut Chain, value: u64, query: u64| -> bool {
+        // A complaint of its own for each attempt, for the same reason as above: one
+        // already voted on would refuse a later vote for a reason that is not funding.
+        let before: Vec<[u8; 32]> = complaint_hashes(chain, election);
+        let registered = chain
+            .blockchain
+            .send_message(complainant.build_message(
+                &chain.elector,
+                300 * TOS,
+                true,
+                Some(complaint_body(query, election, &accused)),
+            ))
+            .expect("the complaint is delivered");
+        assert!(
+            replies(&registered).contains(&COMPLAINT_ACCEPTED),
+            "the fixture could not register a complaint"
+        );
+        // The dictionary is ordered by hash, not by when each arrived, so the one this
+        // attempt filed is the one that was not there before.
+        let complaint = *complaint_hashes(chain, election)
+            .iter()
+            .find(|hash| !before.contains(hash))
+            .expect("the complaint just filed");
+
+        let signature = validators[0].sign_under(
+            &complaint_vote_preimage(chain, voter_index, election, &complaint),
+            ELECTION_CONTEXT,
+        );
+        let result = chain
+            .blockchain
+            .send_message(relay.build_message(
+                &chain.elector,
+                value,
+                true,
+                Some(complaint_vote_body(query, &signature, voter_index, election, &complaint)),
+            ))
+            .expect("the vote is delivered");
+        exit_code_of(&result) == 0 && replies(&result).contains(&COMPLAINT_VOTE_COUNTED)
+    };
+
+    let minimum = smallest_value_that_works(&mut chain, TOS / 1000, TOS, &mut attempt);
+
+    assert!(
+        minimum > TOS / 10,
+        "a complaint vote is counted for {minimum} nanotomis, too little to have paid for \
+         an ML-DSA-44 verification"
+    );
+    assert!(
+        minimum <= 2 * TOS,
+        "a complaint vote now costs {minimum} nanotomis, far more than the verification it \
+         asks for"
+    );
+}
+
+/// An underfunded vote is refused having done almost none of the work it asked for.
+///
+/// This is the cheapest message an unauthorised sender can repeat without limit: it
+/// carries far less than a verification costs, and its signature is wrong, so nothing
+/// about it is worth the fifty thousand gas it would take to find that out.
+///
+/// What is measured is the work, not a balance. The configuration contract's balance
+/// does not move for any of these messages -- not for a refusal, and not for a vote that
+/// is counted -- so an assertion about it would hold whatever the contract did. The
+/// protection that exists is that the refusal happens before the verification, and that
+/// is visible in gas.
+#[test]
+fn an_underfunded_configuration_vote_is_refused_before_the_verification() {
+    let (mut chain, validators, _election) = elect_install_and_rotate();
+    let proposal = propose(&mut chain, 42, 0xbeef);
+    let idx = index_of(&chain, &validators[0]);
+    // Valid in every respect except who signed it, so each message is refused only after
+    // the verification has been paid for and performed.
+    let stolen =
+        validators[1].sign_under(&vote_preimage(&chain, idx, &proposal), CONFIG_VOTE_CONTEXT);
+    let relay = chain.blockchain.treasury("drain-relay", 1_000_000 * TOS).expect("an account");
+    // Well under what a verification costs, which the minimum-value test measures.
+    let too_little = TOS / 100;
+
+    // What the same message costs when it is funded and the verification does happen.
+    // Measured rather than assumed, so the comparison below follows the contract.
+    let verified = chain
+        .blockchain
+        .send_message(relay.build_message(
+            &chain.config_contract,
+            VOTE_VALUE,
+            true,
+            Some(vote_body(499, &stolen, idx, &proposal)),
+        ))
+        .expect("the vote is delivered");
+    assert_eq!(exit_code_of(&verified), ERROR_BAD_VOTE_SIGNATURE, "the fixture needs a refusal");
+    let cost_of_verifying = compute_gas(&verified);
+
+    let balance = balance_of(&chain, &chain.config_contract);
+    let mut refusal = 0u64;
+    for round in 0..16u64 {
+        let result = chain
+            .blockchain
+            .send_message(relay.build_message(
+                &chain.config_contract,
+                too_little,
+                true,
+                Some(vote_body(500 + round, &stolen, idx, &proposal)),
+            ))
+            .expect("the vote is delivered");
+        result.expect_aborted().expect_exit_code(ERROR_VOTE_UNDERFUNDED);
+        refusal = compute_gas(&result);
+    }
+
+    assert!(
+        refusal * 8 < cost_of_verifying,
+        "refusing an underfunded vote costs {refusal} gas against {cost_of_verifying} for \
+         one that is verified, so the verification is happening before the refusal"
+    );
+    assert!(refusal > 0, "the refusal cost nothing, so the contract never ran");
+    assert_eq!(
+        balance_of(&chain, &chain.config_contract),
+        balance,
+        "the balance moved, so it is worth asserting on after all"
+    );
+    assert!(proposal_voters(&chain, &proposal).is_empty(), "an invalid vote was registered");
+}
+
+/// The same, for the elector's complaint votes.
+#[test]
+fn an_underfunded_complaint_vote_is_refused_before_the_verification() {
+    let (mut chain, validators, election) = elect_install_and_rotate();
+    let accused = validator_id_at(&chain, index_of(&chain, &validators[3]));
+    let complainant =
+        chain.blockchain.treasury("drain-complainant", 10_000 * TOS).expect("an account");
+    let registered = chain
+        .blockchain
+        .send_message(complainant.build_message(
+            &chain.elector,
+            300 * TOS,
+            true,
+            Some(complaint_body(1, election, &accused)),
+        ))
+        .expect("the complaint is delivered");
+    assert!(replies(&registered).contains(&COMPLAINT_ACCEPTED), "the complaint was refused");
+    let complaint = complaint_hashes(&chain, election)[0];
+
+    let idx = index_of(&chain, &validators[0]);
+    let stolen = validators[1]
+        .sign_under(&complaint_vote_preimage(&chain, idx, election, &complaint), ELECTION_CONTEXT);
+    let relay = chain.blockchain.treasury("drain-relay-b", 1_000_000 * TOS).expect("an account");
+    let too_little = TOS / 100;
+
+    let verified = chain
+        .blockchain
+        .send_message(relay.build_message(
+            &chain.elector,
+            VOTE_VALUE,
+            true,
+            Some(complaint_vote_body(599, &stolen, idx, election, &complaint)),
+        ))
+        .expect("the vote is delivered");
+    assert_eq!(exit_code_of(&verified), ERROR_BAD_VOTE_SIGNATURE, "the fixture needs a refusal");
+    let cost_of_verifying = compute_gas(&verified);
+
+    let balance = balance_of(&chain, &chain.elector);
+    let mut refusal = 0u64;
+    for round in 0..16u64 {
+        let result = chain
+            .blockchain
+            .send_message(relay.build_message(
+                &chain.elector,
+                too_little,
+                true,
+                Some(complaint_vote_body(600 + round, &stolen, idx, election, &complaint)),
+            ))
+            .expect("the vote is delivered");
+        result.expect_aborted().expect_exit_code(ERROR_VOTE_UNDERFUNDED);
+        refusal = compute_gas(&result);
+    }
+
+    assert!(
+        refusal * 8 < cost_of_verifying,
+        "refusing an underfunded complaint vote costs {refusal} gas against \
+         {cost_of_verifying} for one that is verified, so the verification is happening \
+         before the refusal"
+    );
+    assert!(refusal > 0, "the refusal cost nothing, so the contract never ran");
+    assert_eq!(
+        balance_of(&chain, &chain.elector),
+        balance,
+        "the balance moved, so it is worth asserting on after all"
+    );
+}
+
 /// A controller policy holding `count` distinct code hashes.
 fn controller_policy(count: usize) -> chain_block::Cell {
     use chain_block::IBitstring;
@@ -1924,7 +2220,7 @@ fn complaint_body(query_id: u64, election: u32, accused: &[u8; 32]) -> chain_blo
     // `accused` is a validator identity: the account the elector saw place the stake.
     use chain_block::IBitstring;
     let mut description = chain_block::BuilderData::new();
-    description.append_u32(0).expect("an empty description");
+    description.append_u64(query_id).expect("what distinguishes one complaint from another");
 
     let mut body = chain_block::BuilderData::new();
     body.append_u32(NEW_COMPLAINT).expect("operation");
