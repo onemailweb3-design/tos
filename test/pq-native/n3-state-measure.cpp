@@ -2,11 +2,17 @@
 // What a post-quantum validator set and a post-quantum elector actually cost in account
 // state, measured with the accounting the node itself applies rather than estimated.
 //
-// A masterchain account's state is bounded by SizeLimitsConfig::max_mc_acc_state_cells,
-// checked per transaction in transaction.cpp. The elector and the configuration contract
-// are both masterchain accounts, and a 1312-byte consensus key does not fit in a cell, so
-// every key is a chain of them. Whether the chosen storage shape fits is therefore a
-// measurement, and it has to be taken before contract code is written against the shape.
+// These figures are a resource budget, not a pass or fail against a ceiling. The elector
+// and the configuration contract are special accounts, and the action phase exempts
+// special accounts from the account-state cell limit in both executors: transaction.cpp's
+// enforce_state_limits returns early for them, and the Rust executor guards its check with
+// !is_special. So max_mc_acc_state_cells does not bound either account. It is printed only
+// as the yardstick an ordinary masterchain account is held to, which is the nearest thing
+// to a scale these numbers have.
+//
+// What they do say is how much state every node carries and re-serialises whenever the
+// configuration changes, which is a validator-resource question for N6. A 1312-byte
+// consensus key does not fit in a cell, so every key is a chain of them.
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
@@ -19,6 +25,7 @@
 
 #include "crypto/pq/pq-bytes.h"
 #include "crypto/pq/pq-consensus.h"
+#include "crypto/pq/pq-elector.h"
 #include "td/utils/crypto.h"
 #include "vm/boc.h"
 #include "vm/cells/CellBuilder.h"
@@ -26,9 +33,10 @@
 
 namespace {
 
-// Defaults from SizeLimitsConfig, which apply because the zerostate does not set
-// ConfigParam 43. Stated here so the verdict says what it was measured against.
-constexpr unsigned long long mc_account_state_cell_limit = 1u << 11;
+// What an ORDINARY masterchain account may hold, from SizeLimitsConfig, which applies
+// because the zerostate does not set ConfigParam 43. Not enforced for the two accounts
+// measured here.
+constexpr unsigned long long ordinary_mc_account_state_cell_limit = 1u << 11;
 constexpr unsigned long long message_cell_limit = 1u << 13;
 constexpr unsigned long long message_bit_limit = 1u << 21;
 
@@ -216,8 +224,8 @@ ElectorState elector_state(std::size_t count, const std::vector<std::string>& ke
 }
 
 void report(const char* what, std::size_t count, const Size& size, unsigned long long limit) {
-  std::printf("%-34s %4zu  cells=%-7llu bits=%-9llu  %5.1f%% of %llu  (%.0f TOS/yr if billed)\n", what, count,
-              size.cells, size.bits, 100.0 * static_cast<double>(size.cells) / static_cast<double>(limit), limit,
+  std::printf("%-34s %4zu  cells=%-7llu bits=%-9llu  %5.2fx an ordinary account's %llu  (%.0f TOS/yr if billed)\n",
+              what, count, size.cells, size.bits, static_cast<double>(size.cells) / static_cast<double>(limit), limit,
               nanotomi_per_year(size) / 1e9);
 }
 
@@ -231,10 +239,11 @@ int main() {
   }
 
   std::printf("== Config34 validator set in the configuration account ==\n");
-  std::printf("   limit: max_mc_acc_state_cells = %llu (SizeLimitsConfig default, ConfigParam 43 unset)\n",
-              mc_account_state_cell_limit);
-  std::printf("   the configuration and elector accounts are special, so storage is not billed to them;\n");
-  std::printf("   the cell limit is what binds, and it is checked per transaction\n\n");
+  std::printf("   yardstick: max_mc_acc_state_cells = %llu, what an ORDINARY masterchain account may\n",
+              ordinary_mc_account_state_cell_limit);
+  std::printf("   hold. It is NOT enforced here: these are special accounts, exempted by the action\n");
+  std::printf("   phase in both executors, and not billed for storage either. Nothing below is a\n");
+  std::printf("   limit being approached; it is state every node carries.\n\n");
   for (std::size_t count : {21u, 45u, 100u, 400u}) {
     std::vector<td::Ref<vm::Cell>> pq, classical;
     for (std::size_t i = 0; i < count; i++) {
@@ -243,15 +252,15 @@ int main() {
     }
     auto pq_size = measure(validator_set(pq));
     auto classical_size = measure(validator_set(classical));
-    report("post-quantum set, validators", count, pq_size, mc_account_state_cell_limit);
-    report("classical set, validators", count, classical_size, mc_account_state_cell_limit);
+    report("post-quantum set, validators", count, pq_size, ordinary_mc_account_state_cell_limit);
+    report("classical set, validators", count, classical_size, ordinary_mc_account_state_cell_limit);
     // The configuration account rotates 36 -> 34 -> 32 and only then drops 36, so between
     // an election closing and the next set activating it holds three sets at once. The
     // peak is what has to fit, not the steady state.
     Size both{pq_size.cells * 2, pq_size.bits * 2};
-    report("post-quantum 34+36", count, both, mc_account_state_cell_limit);
+    report("post-quantum 34+36", count, both, ordinary_mc_account_state_cell_limit);
     Size peak{pq_size.cells * 3, pq_size.bits * 3};
-    report("post-quantum 32+34+36 peak", count, peak, mc_account_state_cell_limit);
+    report("post-quantum 32+34+36 peak", count, peak, ordinary_mc_account_state_cell_limit);
     std::printf("\n");
   }
 
@@ -261,22 +270,22 @@ int main() {
     auto members = measure(state.members);
     auto owner = measure(state.key_owner);
     Size total{members.cells + owner.cells, members.bits + owner.bits};
-    report("members dictionary, candidates", count, members, mc_account_state_cell_limit);
-    report("key_owner reverse index", count, owner, mc_account_state_cell_limit);
-    report("elector registration total", count, total, mc_account_state_cell_limit);
+    report("members dictionary, candidates", count, members, ordinary_mc_account_state_cell_limit);
+    report("key_owner reverse index", count, owner, ordinary_mc_account_state_cell_limit);
+    report("elector registration total", count, total, ordinary_mc_account_state_cell_limit);
     auto classical_members = measure(classical_dict(count, false));
     auto classical_frozen = measure(classical_dict(count, true));
-    report("classical members (today)", count, classical_members, mc_account_state_cell_limit);
-    report("one past election, frozen", count, classical_frozen, mc_account_state_cell_limit);
+    report("classical members (today)", count, classical_members, ordinary_mc_account_state_cell_limit);
+    report("one past election, frozen", count, classical_frozen, ordinary_mc_account_state_cell_limit);
     std::printf("\n");
   }
 
   std::printf("== One stake request message body ==\n\n");
   {
     vm::CellBuilder cb;
-    cb.store_long(0x4e73744b, 32);  // operation tag stands in for the one N3.0 allocates
-    cb.store_long(0, 64);           // query_id
-    cb.store_long(1, 16);           // algorithm_id
+    cb.store_long(tos::pq::elector_pq_stake_op, 32);
+    cb.store_long(0, 64);  // query_id
+    cb.store_long(1, 16);  // algorithm_id
     cb.store_ref(tos::pq::pack_pq_bytes(td::Slice(keys[0]), tos::pq::pq_bytes_hard_max).move_as_ok());
     cb.store_long(1789434000, 32);  // stake_at
     cb.store_long(0x10000, 32);     // max_factor

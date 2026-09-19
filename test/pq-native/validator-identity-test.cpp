@@ -21,6 +21,7 @@
 #include "block/validator-set.h"
 #include "crypto/pq/pq-bytes.h"
 #include "crypto/pq/pq-consensus.h"
+#include "crypto/pq/pq-elector.h"
 #include "td/utils/misc.h"
 #include "tl-utils/tl-utils.hpp"
 #include "vm/cells/CellBuilder.h"
@@ -403,13 +404,19 @@ int main() {
       assert(it != frozen.end());
       return it->second;
     };
-    assert(frozen.size() == 7);
+    assert(frozen.size() == 13);
     assert(tos::pq::pq_bytes_chunk == frozen_value("pq_bytes_chunk"));
     assert(tos::pq::pq_bytes_hard_max == frozen_value("pq_bytes_hard_max"));
     assert(tos::pq::mldsa44_public_key_bytes == frozen_value("mldsa44_public_key_bytes"));
     assert(tos::pq::mldsa44_signature_bytes == frozen_value("mldsa44_signature_bytes"));
     assert(static_cast<unsigned long long>(tos::pq::PQAlgorithmId::mldsa44) == frozen_value("mldsa44_algorithm_id"));
     assert(block::validator_set_hash_magic_v2 == frozen_value("validator_set_hash_magic_v2"));
+    assert(tos::pq::elector_pq_stake_op == frozen_value("elector_pq_stake_op"));
+    assert(tos::pq::elector_pq_stake_sign_tag == frozen_value("elector_pq_stake_sign_tag"));
+    assert(tos::pq::config_pq_vote_op == frozen_value("config_pq_vote_op"));
+    assert(tos::pq::config_pq_vote_sign_tag == frozen_value("config_pq_vote_sign_tag"));
+    assert(tos::pq::elector_pq_complaint_op == frozen_value("elector_pq_complaint_op"));
+    assert(tos::pq::elector_pq_complaint_sign_tag == frozen_value("elector_pq_complaint_sign_tag"));
     // The descriptor tag comes from the schema itself rather than a copy of it.
     const auto& tags = block::gen::ValidatorDescr::cons_tag;
     assert(std::find(std::begin(tags), std::end(tags), frozen_value("validator_descr_pq_tag")) != std::end(tags));

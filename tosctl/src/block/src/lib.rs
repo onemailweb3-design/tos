@@ -22,6 +22,9 @@ pub use dictionary::*;
 
 pub mod boc;
 
+pub mod pq_elector;
+pub use pq_elector::*;
+
 pub mod pq_bytes;
 pub use boc::*;
 use smallvec::SmallVec;

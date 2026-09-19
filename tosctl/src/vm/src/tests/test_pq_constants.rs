@@ -63,6 +63,21 @@ fn frozen_constants_match_cpp() {
         frozen_value(&mut frozen, "validator_set_hash_magic_v2")
     );
 
+    use chain_block::pq_elector::{
+        CONFIG_PQ_VOTE_OP, CONFIG_PQ_VOTE_SIGN_TAG, ELECTOR_PQ_COMPLAINT_OP,
+        ELECTOR_PQ_COMPLAINT_SIGN_TAG, ELECTOR_PQ_STAKE_OP, ELECTOR_PQ_STAKE_SIGN_TAG,
+    };
+    for (name, value) in [
+        ("elector_pq_stake_op", ELECTOR_PQ_STAKE_OP),
+        ("elector_pq_stake_sign_tag", ELECTOR_PQ_STAKE_SIGN_TAG),
+        ("config_pq_vote_op", CONFIG_PQ_VOTE_OP),
+        ("config_pq_vote_sign_tag", CONFIG_PQ_VOTE_SIGN_TAG),
+        ("elector_pq_complaint_op", ELECTOR_PQ_COMPLAINT_OP),
+        ("elector_pq_complaint_sign_tag", ELECTOR_PQ_COMPLAINT_SIGN_TAG),
+    ] {
+        assert_eq!(value as u64, frozen_value(&mut frozen, name), "{name}");
+    }
+
     // A row added to the shared file without a Rust definition to hold it fails
     // here, rather than looking locked while nothing on this side reads it.
     let unchecked: Vec<&String> = frozen.keys().collect();
