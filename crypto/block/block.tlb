@@ -862,6 +862,13 @@ precompiled_smc#b0 gas_usage:uint64 = PrecompiledSmc;
 precompiled_contracts_config#c0 list:(HashmapE 256 PrecompiledSmc) = PrecompiledContractsConfig;
 _ PrecompiledContractsConfig = ConfigParam 45;
 
+// The controller codes a validator's account may have been born with. A validator's
+// authority is rooted in its controller account, and what makes that account
+// post-quantum is the code it was deployed with, so this is the list of codes that
+// count. The configuration contract refuses more than eight.
+validator_controller_policy_v1#_ controller_codes:(HashmapE 256 True) = ValidatorControllerPolicy;
+_ ValidatorControllerPolicy = ConfigParam 47;
+
 oracle_bridge_params#_ bridge_address:bits256 oracle_mutlisig_address:bits256 oracles:(HashmapE 256 uint256) external_chain_address:bits256 = OracleBridgeParams;
 _ OracleBridgeParams = ConfigParam 71; // Oracle bridge
 _ OracleBridgeParams = ConfigParam 72; // Binance Smart Chain bridge

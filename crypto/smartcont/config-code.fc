@@ -97,12 +97,61 @@ _ get_vote_config(int critical?) inline {
 () after_code_upgrade(slice param, cont old_code) impure method_id(1666) {
 }
 
+;; ---------------------------------------------------------------------------
+;; ConfigParam 47 -- the validator controller codes an account may have been born
+;; with. A validator's authority is rooted in its controller account, and what makes
+;; that account post-quantum is the code it was deployed with, so this parameter is
+;; the list of codes that count.
+;;
+;; The bound is part of the parameter rather than a note about it: a hashmap carries no
+;; cardinality of its own, and an authority registry nobody can see growing is one that
+;; grows. Eight is the frozen ceiling.
+;; ---------------------------------------------------------------------------
+
+const int config::validator_controller_policy = 47;
+const int config::max_controller_codes = 8;
+
+int valid_controller_policy?(cell value) inline_ref {
+  if (cell_null?(value)) {
+    ;; Removing the parameter is allowed by this check; admission then fails closed,
+    ;; because no code is admitted rather than every code being admitted.
+    return true;
+  }
+  slice cs = value.begin_parse();
+  cell codes = cs~load_dict();
+  ifnot (cs.slice_empty?()) {
+    return false;  ;; trailing data: not this parameter's shape
+  }
+  int count = 0;
+  int key = -1;
+  int scanning = true;
+  while (scanning) {
+    (int next, slice entry, int found) = codes.udict_get_next?(256, key);
+    if (found) {
+      ifnot (entry.slice_empty?()) {
+        return false;  ;; the value is True, which carries nothing
+      }
+      count += 1;
+      if (count > config::max_controller_codes) {
+        return false;
+      }
+      key = next;
+    } else {
+      scanning = false;
+    }
+  }
+  return true;
+}
+
 _ perform_action(cfg_dict, public_key, action, cs) inline_ref {
   if (action == 0x43665021) {
     ;; change one configuration parameter
     var param_index = cs~load_int(32);
     var param_value = cs~load_ref();
     cs.end_parse();
+    if (param_index == config::validator_controller_policy) {
+      throw_unless(45, valid_controller_policy?(param_value));
+    }
     cfg_dict~idict_set_ref(32, param_index, param_value);
     return (cfg_dict, public_key);
   } elseif (action == 0x4e436f64) {
@@ -191,6 +240,13 @@ _ perform_action(cfg_dict, public_key, action, cs) inline_ref {
   if (found? < critical?) {
     ;; trying to set a critical parameter after a non-critical voting
     return (cfg_dict, 0, null());
+  }
+  if (param_id == config::validator_controller_policy) {
+    ifnot (valid_controller_policy?(param_val)) {
+      ;; A policy past its ceiling is refused the way every other rejected proposal is:
+      ;; the configuration is returned unchanged.
+      return (cfg_dict, 0, null());
+    }
   }
   ;; CHANGE ONE CONFIGURATION PARAMETER (!)
   cfg_dict~idict_set_ref(32, param_id, param_val);

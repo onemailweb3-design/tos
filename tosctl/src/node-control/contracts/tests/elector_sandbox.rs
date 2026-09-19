@@ -1150,6 +1150,113 @@ fn the_administrator_key_alone_can_change_a_configuration_parameter() {
     );
 }
 
+/// A controller policy holding `count` distinct code hashes.
+fn controller_policy(count: usize) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut dict = chain_block::HashmapE::with_bit_len(256);
+    for index in 0..count {
+        let mut key = [0u8; 32];
+        key[31] = index as u8;
+        dict.set(
+            chain_block::SliceData::load_builder(
+                chain_block::BuilderData::with_raw(key.to_vec(), 256).expect("a key"),
+            )
+            .expect("a key slice"),
+            &chain_block::SliceData::default(),
+        )
+        .expect("insert");
+    }
+    let mut value = chain_block::BuilderData::new();
+    match chain_block::HashmapType::data(&dict) {
+        Some(root) => {
+            value.append_bit_one().expect("a non-empty policy");
+            value.checked_append_reference(root.clone()).expect("the codes");
+        }
+        None => {
+            value.append_bit_zero().expect("an empty policy");
+        }
+    }
+    value.into_cell().expect("a controller policy")
+}
+
+/// Install a configuration parameter through the administrator path.
+fn admin_set_parameter(
+    chain: &mut Chain,
+    admin: &ed25519_dalek::SigningKey,
+    parameter: i32,
+    value: chain_block::Cell,
+) -> tos_sandbox::SendResult {
+    use chain_block::{GetRepresentationHash, IBitstring};
+    let mut signed = chain_block::BuilderData::new();
+    signed.append_u32(ADMIN_CHANGE_PARAMETER).expect("action");
+    signed.append_u32(config_seqno(chain) as u32).expect("sequence number");
+    signed.append_u32(chain.blockchain.now() + 600).expect("valid until");
+    signed.append_i32(parameter).expect("parameter");
+    signed.checked_append_reference(value).expect("value");
+    let signed_cell = signed.into_cell().expect("the signed part");
+    let digest = signed_cell.hash(0);
+    let signature: [u8; 64] = ed25519_dalek::Signer::sign(admin, digest.as_slice()).to_bytes();
+
+    let mut body = chain_block::BuilderData::new();
+    body.append_raw(&signature, 512).expect("signature");
+    body.checked_append_references_and_data(
+        &chain_block::SliceData::load_cell(signed_cell).expect("the signed part"),
+    )
+    .expect("the signed part follows the signature");
+
+    chain
+        .blockchain
+        .send_message(
+            tos_sandbox::MessageBuilder::external(&chain.config_contract)
+                .body(body.into_cell().expect("administrator message"))
+                .build(),
+        )
+        .expect("the administrator message is delivered")
+}
+
+/// The ceiling on admitted controller codes is part of the parameter, not a note about it.
+///
+/// A hashmap carries no cardinality, so a bound that lives only in prose is a bound that
+/// is never reached by anything. This is the configuration contract refusing the ninth.
+#[test]
+fn the_controller_policy_cannot_grow_past_its_ceiling() {
+    let (mut chain, _validators, _election) = elect_install_and_rotate();
+    let admin = ed25519_dalek::SigningKey::from_bytes(&[0x5a; 32]);
+    install_admin_key(&mut chain, &admin.verifying_key().to_bytes());
+
+    // Eight is the ceiling, and it is admitted.
+    let result = admin_set_parameter(&mut chain, &admin, 47, controller_policy(8));
+    assert_eq!(exit_code_of(&result), 0, "a policy at the ceiling was refused");
+    assert!(
+        parameter_present(&configuration_from_contract(&chain), 47),
+        "the policy was not installed"
+    );
+
+    // The ninth is not, and the configuration is left as it was.
+    let refused = admin_set_parameter(&mut chain, &admin, 47, controller_policy(9));
+    assert_ne!(
+        exit_code_of(&refused),
+        0,
+        "a ninth controller code was admitted, so the ceiling is prose"
+    );
+
+    // What is installed is still the policy of eight.
+    let installed = configuration_from_contract(&chain).config(47).expect("parameter 47").is_some();
+    assert!(installed, "the refused policy removed the one that was there");
+}
+
+/// The compute-phase exit code of the first transaction a message produced.
+fn exit_code_of(result: &tos_sandbox::SendResult) -> i32 {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    match transaction.read_description().expect("description") {
+        chain_block::TransactionDescr::Ordinary(descr) => match descr.compute_ph {
+            chain_block::TrComputePhase::Vm(vm) => vm.exit_code,
+            other => panic!("the compute phase did not run: {other:?}"),
+        },
+        other => panic!("not an ordinary transaction: {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Complaints
 //
