@@ -15,10 +15,11 @@ use std::mem;
 use chain_block::{
     tos_method_id, Account, ConfigParams, CurrencyCollection, Deserializable, McStateExtra,
     MerkleProof, Message, MsgAddressInt, Serializable, ShardIdent, ShardStateUnsplit,
-    SizeLimitsConfig, Transaction,
+    SizeLimitsConfig, Transaction, TransactionTickTock,
 };
 use tos_executor::{
-    BlockchainConfig, ExecuteParams, OrdinaryTransactionExecutor, TransactionExecutor,
+    BlockchainConfig, ExecuteParams, OrdinaryTransactionExecutor, TickTockTransactionExecutor,
+    TransactionExecutor,
 };
 use tos_vm::{
     executor::{gas::gas_state::Gas, Engine},
@@ -291,10 +292,71 @@ impl Blockchain {
     pub fn send_message(&mut self, msg: Message) -> SandboxResult<SendResult> {
         let mut queue: VecDeque<Message> = VecDeque::new();
         queue.push_back(msg);
+        self.drain(queue, Vec::new(), Vec::new())
+    }
 
-        let mut all_txs: Vec<(MsgAddressInt, Transaction)> = Vec::new();
+    /// Run a tick or tock transaction on an account, then deliver what it sends.
+    ///
+    /// Contracts whose state machine advances on its own — the elector announces,
+    /// conducts and forgets elections this way — are only reachable through this
+    /// transaction kind. Driving them with ordinary messages would test a contract the
+    /// chain does not run.
+    ///
+    /// # Errors
+    /// - [`SandboxError::AccountNotFound`] if nothing is deployed at `address`.
+    pub fn tick_tock(
+        &mut self,
+        address: &MsgAddressInt,
+        tick_tock: TransactionTickTock,
+    ) -> SandboxResult<SendResult> {
+        let addr_key = address.to_string();
+        let mut account = self
+            .accounts
+            .get(&addr_key)
+            .cloned()
+            .ok_or_else(|| SandboxError::AccountNotFound(addr_key.clone()))?;
+
+        let executor = TickTockTransactionExecutor::new(self.config.clone(), tick_tock);
+        let transaction = executor
+            .execute_with_params(None, &mut account, self.execute_params())
+            .map_err(|e| SandboxError::ExecutionFailed(e.into()))?;
+
+        let mut out_messages: Vec<Message> = Vec::new();
+        transaction
+            .iterate_out_msgs(|out_msg| {
+                out_messages.push(out_msg);
+                Ok(true)
+            })
+            .map_err(|e| {
+                SandboxError::Serialization(format!("failed to iterate out messages: {e}"))
+            })?;
+
+        self.accounts.insert(addr_key, account);
+        let tx_lt = transaction.logical_time();
+        if tx_lt >= self.next_lt {
+            self.next_lt = tx_lt + 1;
+        }
+
+        self.transaction_log.push((address.clone(), transaction.clone()));
+        let mut queue: VecDeque<Message> = VecDeque::new();
         let mut ext_outs: Vec<Message> = Vec::new();
+        for out in out_messages {
+            if out.is_internal() {
+                queue.push_back(out);
+            } else {
+                ext_outs.push(out);
+            }
+        }
+        self.drain(queue, vec![(address.clone(), transaction)], ext_outs)
+    }
 
+    /// Deliver queued internal messages until nothing is left to deliver.
+    fn drain(
+        &mut self,
+        mut queue: VecDeque<Message>,
+        mut all_txs: Vec<(MsgAddressInt, Transaction)>,
+        mut ext_outs: Vec<Message>,
+    ) -> SandboxResult<SendResult> {
         while let Some(m) = queue.pop_front() {
             if all_txs.len() >= self.max_message_depth {
                 return Err(SandboxError::MaxDepthExceeded(self.max_message_depth));
