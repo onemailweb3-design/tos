@@ -533,7 +533,13 @@ struct ConsensusKeyId {
 };
 
 struct ValidatorDescr {
+ private:
+  // A post-quantum descriptor has no classical key at all. Keeping this private means
+  // no code can read a zero key out of one by accident and then verify nothing
+  // against it; classical_key() refuses instead.
   /* tos::validator::ValidatorFullId */ Ed25519_PublicKey key;
+
+ public:
   ValidatorWeight weight;
   /* adnl::AdnlNodeIdShort */ Bits256 addr;
   // Stable membership identity. For a classical descriptor this is the identity
@@ -569,6 +575,13 @@ struct ValidatorDescr {
 
   bool is_pq() const {
     return algorithm_id != 0;
+  }
+  // The classical consensus key. Asking a post-quantum descriptor for one is a
+  // programming error, not untrusted input: malformed descriptors are already refused
+  // when a set is decoded. So this fails loudly rather than returning a zero key.
+  const Ed25519_PublicKey& classical_key() const {
+    CHECK(!is_pq());
+    return key;
   }
   bool operator==(const ValidatorDescr& other) const {
     return key == other.key && weight == other.weight && addr == other.addr &&

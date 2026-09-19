@@ -5951,7 +5951,7 @@ void ValidatorEngine::get_current_validator_perm_key(td::Promise<std::pair<tos::
   auto vec = validator_set_->export_vector();
   for (size_t idx = 0; idx < vec.size(); idx++) {
     auto &el = vec[idx];
-    tos::PublicKey pub{tos::pubkeys::Ed25519{el.key.as_bits256()}};
+    tos::PublicKey pub{tos::pubkeys::Ed25519{el.classical_key().as_bits256()}};
     auto pubkey_hash = pub.compute_short_id();
 
     auto it = config_.validators.find(pubkey_hash);

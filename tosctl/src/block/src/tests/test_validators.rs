@@ -312,9 +312,12 @@ fn accepted_descriptor_tags_match_the_shared_set() {
     }
 }
 
+fn sample_validator_id() -> UInt256 {
+    UInt256::from([1u8; 32])
+}
+
 fn sample_pq_key() -> PqConsensusKey {
     PqConsensusKey {
-        validator_id: UInt256::from([1u8; 32]),
         algorithm_id: 1,
         key_id: UInt256::from([2u8; 32]),
         public_key: vec![3u8; 1312],
@@ -326,7 +329,12 @@ fn sample_pq_key() -> PqConsensusKey {
 // cell encoding because it cannot fit inline.
 #[test]
 fn pq_descriptor_round_trip() {
-    let descr = ValidatorDescr::with_pq_params(sample_pq_key(), 4242, UInt256::from([9u8; 32]));
+    let descr = ValidatorDescr::with_pq_params(
+        sample_validator_id(),
+        sample_pq_key(),
+        4242,
+        UInt256::from([9u8; 32]),
+    );
 
     let mut b = BuilderData::new();
     descr.write_to(&mut b).unwrap();
@@ -335,7 +343,7 @@ fn pq_descriptor_round_trip() {
 
     assert_eq!(back, descr);
     let key = back.pq_key().expect("post-quantum key");
-    assert_eq!(key.validator_id, UInt256::from([1u8; 32]));
+    assert_eq!(back.validator_id().unwrap(), sample_validator_id());
     assert_eq!(key.algorithm_id, 1);
     assert_eq!(key.key_id, UInt256::from([2u8; 32]));
     assert_eq!(key.public_key.len(), 1312);
@@ -347,12 +355,8 @@ fn pq_descriptor_round_trip() {
 
     // A post-quantum descriptor without an explicit ADNL address cannot be written,
     // because an ADNL identity is never derived from a consensus key.
-    let no_adnl = ValidatorDescr {
-        key: ValidatorKey::Pq(sample_pq_key()),
-        weight: 1,
-        adnl_addr: None,
-        prev_weight_sum: 0,
-    };
+    let no_adnl =
+        ValidatorDescr::with_key(sample_validator_id(), ValidatorKey::Pq(sample_pq_key()), 1, None);
     assert!(no_adnl.write_to(&mut BuilderData::new()).is_err());
 
     // The writer emits the frozen tag.
@@ -396,7 +400,7 @@ fn pq_descriptor_matches_shared_cpp_vectors() {
         let mut cs = SliceData::load_cell_ref(&cell).unwrap();
         let descr = ValidatorDescr::construct_from(&mut cs).unwrap();
         let key = descr.pq_key().expect("post-quantum key");
-        assert_eq!(key.validator_id, vid);
+        assert_eq!(descr.validator_id().unwrap(), vid);
         assert_eq!(key.algorithm_id, alg);
         assert_eq!(key.key_id, kid);
         assert_eq!(key.public_key, public_key);
@@ -448,8 +452,8 @@ fn validator_set_hash_matches_shared_cpp_vectors() {
                 let p: Vec<&str> = entry.split(':').collect();
                 assert_eq!(p.len(), 4);
                 ValidatorDescr::with_pq_params(
+                    u256(p[0]),
                     PqConsensusKey {
-                        validator_id: u256(p[0]),
                         algorithm_id: 1,
                         key_id: u256(p[1]),
                         public_key: vec![1u8; 1312],

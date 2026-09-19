@@ -64,7 +64,7 @@ ValidatorSet::ValidatorSet(tos::CatchainSeqno cc_seqno, tos::ShardIdFull from, s
     // the set commitment.
     if (!ids_[i].is_pq() && ids_[i].validator_id.is_zero()) {
       auto derived = tos::ValidatorId{
-          tos::PublicKey{tos::pubkeys::Ed25519{ids_[i].key}}.compute_short_id().bits256_value()};
+          tos::PublicKey{tos::pubkeys::Ed25519{ids_[i].classical_key()}}.compute_short_id().bits256_value()};
       ids_[i].validator_id = derived;
       ids_[i].key_id = tos::ConsensusKeyId{derived.value};
     }

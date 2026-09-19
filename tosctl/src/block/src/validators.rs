@@ -138,16 +138,18 @@ that the C++ side rejects; it has been removed so both implementations accept
 exactly the same constructors.
 */
 
-/// Key material carried by a post-quantum validator descriptor.
+/// The post-quantum consensus key a validator currently holds.
 ///
-/// `validator_id` is the stable membership identity and does not change when the
-/// consensus key rotates. `key_id` identifies the current key and must equal the
-/// frozen derivation over `algorithm_id` and `public_key`. The suite key itself is
-/// 1312 bytes for ML-DSA-44, far past what fits inline, so on the wire it travels
-/// through the canonical bounded-bytes cell encoding.
+/// This describes a key and nothing else. The validator that holds it is named by
+/// `ValidatorDescr::validator_id`, deliberately outside this struct: replacing a
+/// validator's key must never be able to replace the validator's identity along
+/// with it, which is the whole reason the two are kept apart.
+///
+/// `key_id` must equal the frozen derivation over `algorithm_id` and `public_key`.
+/// The suite key is 1312 bytes for ML-DSA-44, far past what fits inline, so on the
+/// wire it travels through the canonical bounded-bytes cell encoding.
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct PqConsensusKey {
-    pub validator_id: UInt256,
     pub algorithm_id: u16,
     pub key_id: UInt256,
     pub public_key: Vec<u8>,
@@ -179,6 +181,11 @@ impl Default for ValidatorKey {
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct ValidatorDescr {
     pub weight: u64,
+    /// Stable membership identity, carried on the wire only by a post-quantum
+    /// descriptor. A classical one has none to carry, so its identity is derived from
+    /// its key instead. Private because the raw field is meaningless for a classical
+    /// descriptor: ask `validator_id()`, which answers correctly for both.
+    validator_id: UInt256,
     pub key: ValidatorKey,
     /// before first election this filed is None
     pub adnl_addr: Option<UInt256>,
@@ -194,7 +201,7 @@ impl std::hash::Hash for ValidatorDescr {
         match &self.key {
             ValidatorKey::Ed25519(pk) => pk.as_slice().hash(state),
             ValidatorKey::Pq(k) => {
-                k.validator_id.hash(state);
+                self.validator_id.hash(state);
                 k.key_id.hash(state);
             }
         }
@@ -209,12 +216,9 @@ impl ValidatorDescr {
         Self::default()
     }
 
-    pub const fn with_params(
-        public_key: SigPubKey,
-        weight: u64,
-        adnl_addr: Option<UInt256>,
-    ) -> Self {
+    pub fn with_params(public_key: SigPubKey, weight: u64, adnl_addr: Option<UInt256>) -> Self {
         ValidatorDescr {
+            validator_id: UInt256::default(),
             key: ValidatorKey::Ed25519(public_key),
             weight,
             adnl_addr,
@@ -222,12 +226,23 @@ impl ValidatorDescr {
         }
     }
 
-    pub fn with_key(key: ValidatorKey, weight: u64, adnl_addr: Option<UInt256>) -> Self {
-        ValidatorDescr { key, weight, adnl_addr, prev_weight_sum: 0 }
+    pub fn with_key(
+        validator_id: UInt256,
+        key: ValidatorKey,
+        weight: u64,
+        adnl_addr: Option<UInt256>,
+    ) -> Self {
+        ValidatorDescr { validator_id, key, weight, adnl_addr, prev_weight_sum: 0 }
     }
 
-    pub fn with_pq_params(key: PqConsensusKey, weight: u64, adnl_addr: UInt256) -> Self {
+    pub fn with_pq_params(
+        validator_id: UInt256,
+        key: PqConsensusKey,
+        weight: u64,
+        adnl_addr: UInt256,
+    ) -> Self {
         ValidatorDescr {
+            validator_id,
             key: ValidatorKey::Pq(key),
             weight,
             adnl_addr: Some(adnl_addr),
@@ -253,7 +268,7 @@ impl ValidatorDescr {
     pub fn validator_id(&self) -> Result<UInt256> {
         match &self.key {
             ValidatorKey::Ed25519(pk) => Ok(pk.pub_key().id().data().into()),
-            ValidatorKey::Pq(k) => Ok(k.validator_id.clone()),
+            ValidatorKey::Pq(_) => Ok(self.validator_id.clone()),
         }
     }
 
@@ -318,7 +333,7 @@ impl Serializable for ValidatorDescr {
                     None => fail!("a post-quantum descriptor requires an explicit adnl address"),
                 };
                 cell.append_u8(VALIDATOR_DESC_PQ_TAG)?;
-                key.validator_id.write_to(cell)?;
+                self.validator_id.write_to(cell)?;
                 cell.append_bits(key.algorithm_id as usize, 16)?;
                 key.key_id.write_to(cell)?;
                 cell.checked_append_reference(pack_pq_bytes(&key.public_key, PQ_BYTES_HARD_MAX)?)?;
@@ -334,6 +349,7 @@ impl Deserializable for ValidatorDescr {
     fn construct_from(slice: &mut SliceData) -> Result<Self> {
         let tag = slice.get_next_byte()?;
         let (key, weight, adnl_addr);
+        let mut validator_id = UInt256::default();
         match tag {
             VALIDATOR_DESC_TAG => {
                 key = ValidatorKey::Ed25519(Deserializable::construct_from(slice)?);
@@ -346,23 +362,18 @@ impl Deserializable for ValidatorDescr {
                 adnl_addr = Some(Deserializable::construct_from(slice)?);
             }
             VALIDATOR_DESC_PQ_TAG => {
-                let validator_id = Deserializable::construct_from(slice)?;
+                validator_id = Deserializable::construct_from(slice)?;
                 let algorithm_id = slice.get_next_int(16)? as u16;
                 let key_id = Deserializable::construct_from(slice)?;
                 let public_key =
                     unpack_pq_bytes(&slice.checked_drain_reference()?, PQ_BYTES_HARD_MAX)?;
-                key = ValidatorKey::Pq(PqConsensusKey {
-                    validator_id,
-                    algorithm_id,
-                    key_id,
-                    public_key,
-                });
+                key = ValidatorKey::Pq(PqConsensusKey { algorithm_id, key_id, public_key });
                 weight = Deserializable::construct_from(slice)?;
                 adnl_addr = Some(Deserializable::construct_from(slice)?);
             }
             tag => fail!(Self::invalid_tag(tag as u32)),
         }
-        Ok(Self { key, weight, adnl_addr, prev_weight_sum: 0 })
+        Ok(Self { validator_id, key, weight, adnl_addr, prev_weight_sum: 0 })
     }
 }
 
@@ -594,6 +605,7 @@ impl ValidatorSet {
                 let next_validator = full_list.at_weight(p);
 
                 subset.push(ValidatorDescr::with_key(
+                    next_validator.validator_id.clone(),
                     next_validator.key.clone(),
                     1, // NB: shardchain validator lists have all weights = 1
                     next_validator.adnl_addr.clone(),

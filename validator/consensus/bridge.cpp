@@ -359,7 +359,9 @@ class BridgeImpl final : public IValidatorGroup {
     size_t idx = 0;
     ValidatorWeight total_weight = 0;
     for (const auto& el : params_.validator_set->export_vector()) {
-      PublicKey key{pubkeys::Ed25519{el.key}};
+      // Peer verification still uses the classical key; the post-quantum path
+      // arrives when Simplex itself is converted.
+      PublicKey key{pubkeys::Ed25519{el.classical_key()}};
       PublicKeyHash short_id = key.compute_short_id();
 
       bus->validator_set.push_back(PeerValidator{
@@ -650,7 +652,7 @@ td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
   // consensus key never doubles as a transport identity.
   CHECK(!descr->is_pq() || !descr->addr.is_zero());
   auto local_adnl_id = adnl::AdnlNodeIdShort{
-      descr->addr.is_zero() ? ValidatorFullId{descr->key}.compute_short_id().bits256_value() : descr->addr};
+      descr->addr.is_zero() ? ValidatorFullId{descr->classical_key()}.compute_short_id().bits256_value() : descr->addr};
   consensus::BridgeCreationParams params{
       .name = name_with_seqno,
       .is_create_session_called = create_session,

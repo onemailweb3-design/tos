@@ -128,7 +128,9 @@ void CollatorNode::new_masterchain_block_notification(td::Ref<MasterchainState> 
         for (const ValidatorDescr& descr : vals->export_vector()) {
           if (descr.addr.is_zero()) {
             validator_adnl_ids_.insert(
-                adnl::AdnlNodeIdShort(PublicKey(pubkeys::Ed25519{descr.key.as_bits256()}).compute_short_id()));
+                // Only a classical descriptor can reach this; see shard-block-retainer.
+                adnl::AdnlNodeIdShort(
+                    PublicKey(pubkeys::Ed25519{descr.classical_key().as_bits256()}).compute_short_id()));
           } else {
             validator_adnl_ids_.insert(adnl::AdnlNodeIdShort(descr.addr));
           }

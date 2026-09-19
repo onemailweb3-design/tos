@@ -632,7 +632,7 @@ void FullNodeFastSyncOverlays::update_overlays(
         continue;
       }
       for (const ValidatorDescr &val : val_set->export_vector()) {
-        PublicKeyHash public_key_hash = ValidatorFullId{val.key}.compute_short_id();
+        PublicKeyHash public_key_hash = ValidatorFullId{val.classical_key()}.compute_short_id();
         root_public_keys_.push_back(public_key_hash);
         current_validators_adnl_.emplace_back(val.addr.is_zero() ? public_key_hash.bits256_value() : val.addr);
       }

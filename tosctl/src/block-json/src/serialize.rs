@@ -957,7 +957,11 @@ fn serialize_validators_set(
                 // A post-quantum descriptor is reported with both identities, because the
                 // stable membership identity and the current key identity are different
                 // facts and a reader must not have to guess which one it is looking at.
-                serialize_field(&mut map, "validator_id", key.validator_id.to_hex_string());
+                serialize_field(
+                    &mut map,
+                    "validator_id",
+                    v.validator_id().unwrap_or_default().to_hex_string(),
+                );
                 serialize_field(&mut map, "algorithm_id", key.algorithm_id);
                 serialize_field(&mut map, "key_id", key.key_id.to_hex_string());
                 serialize_field(&mut map, "public_key", hex::encode(&key.public_key));

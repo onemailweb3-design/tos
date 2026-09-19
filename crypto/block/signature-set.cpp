@@ -166,7 +166,7 @@ class BlockSignatureSetBase : public BlockSignatureSet {
                                  "classical signature offered for a post-quantum validator");
       }
 
-      auto E = tos::PublicKey{tos::pubkeys::Ed25519{validator->key}}.create_encryptor().move_as_ok();
+      auto E = tos::PublicKey{tos::pubkeys::Ed25519{validator->classical_key()}}.create_encryptor().move_as_ok();
       TRY_STATUS(E->check_signature(data, sig.signature.as_slice()));
       weight += validator->weight;
     }

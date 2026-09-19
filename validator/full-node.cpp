@@ -588,7 +588,7 @@ void FullNodeImpl::got_key_block_config(td::Ref<ConfigHolder> config) {
     if (r.not_null()) {
       auto vec = r->export_vector();
       for (auto &el : vec) {
-        auto key = ValidatorFullId{el.key}.compute_short_id();
+        auto key = ValidatorFullId{el.classical_key()}.compute_short_id();
         keys.push_back(key);
         if (local_keys_.count(key)) {
           l = key;
