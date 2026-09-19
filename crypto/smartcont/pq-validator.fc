@@ -140,3 +140,84 @@ cell pq::election_context() inline {
 cell pq::config_vote_context() inline {
   return begin_cell().store_slice("TOS-VALIDATOR-CONFIG-VOTE-v1").end_cell();
 }
+
+;; ---------------------------------------------------------------------------
+;; Elector state: a member is a controller account, and a key belongs to one of them
+;;
+;; Membership is keyed by the stable validator identity, which is the controlling account
+;; the elector saw, so rotating a key does not move a validator in or out of the set. The
+;; reverse index exists for the other direction: two controllers must not register the
+;; same consensus key, because the set that would produce is one the node refuses for
+;; duplicate key identity.
+;; ---------------------------------------------------------------------------
+
+const int pq::error::key_owned = 68;
+
+;; stake:Tomis registered_at:uint32 max_factor:uint32 algorithm_id:uint16 key_id:uint256
+;;   public_key:^Cell adnl_addr:uint256
+builder pq::pack_member(int stake, int registered_at, int max_factor, int algorithm_id, int key_id,
+                        cell public_key, int adnl_addr) inline {
+  return begin_cell()
+    .store_tomis(stake)
+    .store_uint(registered_at, 32)
+    .store_uint(max_factor, 32)
+    .store_uint(algorithm_id, 16)
+    .store_uint(key_id, 256)
+    .store_ref(public_key)
+    .store_uint(adnl_addr, 256);
+}
+
+(int, int, int, int, int, cell, int) pq::unpack_member(slice ms) inline {
+  int stake = ms~load_tomis();
+  int registered_at = ms~load_uint(32);
+  int max_factor = ms~load_uint(32);
+  int algorithm_id = ms~load_uint(16);
+  int key_id = ms~load_uint(256);
+  cell public_key = ms~load_ref();
+  int adnl_addr = ms~load_uint(256);
+  ms.end_parse();
+  return (stake, registered_at, max_factor, algorithm_id, key_id, public_key, adnl_addr);
+}
+
+;; Registers a controller's key, or replaces the one it already registered, moving the
+;; reverse index with it.
+;;
+;; Both directions are decided here, together, because they are one fact: a key belongs to
+;; a controller. Updating the member record without the reverse index would let a released
+;; key stay claimed; updating the reverse index without the member record would leave a
+;; validator holding a key the index says is someone else's. A caller cannot get half of
+;; this, because a refusal throws and the transaction commits nothing.
+(cell, cell) pq::register_member(cell members, cell key_owner, int validator_id, int stake, int registered_at,
+                                 int max_factor, int algorithm_id, cell public_key, int adnl_addr) {
+  throw_if(pq::error::zero_validator_id, validator_id == 0);
+  throw_if(pq::error::zero_adnl, adnl_addr == 0);
+  int key_id = pq::key_id(algorithm_id, public_key);
+
+  ;; A key already claimed by another controller is refused before anything is written.
+  (slice owner, int claimed) = key_owner.udict_get?(256, key_id);
+  if (claimed) {
+    throw_unless(pq::error::key_owned, owner~load_uint(256) == validator_id);
+  }
+
+  ;; A controller that is rotating releases the key it held, so the index never keeps a
+  ;; key nobody is registered with.
+  (slice existing, int registered) = members.udict_get?(256, validator_id);
+  if (registered) {
+    (_, _, _, _, int held_key_id, _, _) = pq::unpack_member(existing);
+    if (held_key_id != key_id) {
+      key_owner~udict_delete?(256, held_key_id);
+    }
+  }
+
+  key_owner~udict_set_builder(256, key_id, begin_cell().store_uint(validator_id, 256));
+  members~udict_set_builder(256, validator_id,
+    pq::pack_member(stake, registered_at, max_factor, algorithm_id, key_id, public_key, adnl_addr));
+  return (members, key_owner);
+}
+
+;; Which controller holds a key, or zero. Zero is not a validator identity, so it cannot
+;; be mistaken for an answer.
+int pq::key_holder(cell key_owner, int key_id) inline {
+  (slice owner, int claimed) = key_owner.udict_get?(256, key_id);
+  return claimed ? owner~load_uint(256) : 0;
+}
