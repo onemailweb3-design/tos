@@ -391,7 +391,10 @@ target_link_libraries(src_parser PUBLIC tos_crypto_core)
 add_library(tos_block STATIC ${BLOCK_SOURCE})
 target_include_directories(tos_block PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/block> $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>)
-target_link_libraries(tos_block PUBLIC tos_crypto_core tdactor tl_api tos_pq_consensus)
+# Decoding a validator set settles a classical validator's identity from its key, so
+# the block library genuinely depends on the key library rather than hoping every
+# consumer happens to link it in the right order.
+target_link_libraries(tos_block PUBLIC tos_crypto_core tdactor tl_api tos_pq_consensus keys)
 if (MINGW)
   # Resolve circular static linking between tos_block and tos_crypto on MinGW.
   target_link_libraries(tos_block PUBLIC tos_crypto)

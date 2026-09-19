@@ -82,6 +82,31 @@ fn test_validator_set_serialize() {
     write_read_and_assert(vset);
 }
 
+// The block proofs under src/tests/data were recorded from an inherited upstream
+// chain whose blocks committed to their validator set with the previous preimage,
+// which hashed a validator's raw classical key. They are kept because they check the
+// subset-selection algorithm against real recorded data rather than against something
+// this repository made up, and the hash is how that check is expressed.
+//
+// This reader exists only to read those recordings. Production commits with the
+// version 2 preimage and nothing here is reachable from it.
+fn legacy_recorded_hash_short(subset: &[ValidatorDescr], cc_seqno: u32) -> u32 {
+    const LEGACY_MAGIC: u32 = 0x901660ED;
+    let mut hasher = crate::Crc32::new();
+    hasher.update(LEGACY_MAGIC.to_le_bytes());
+    hasher.update(cc_seqno.to_le_bytes());
+    hasher.update((subset.len() as u32).to_le_bytes());
+    for vd in subset.iter() {
+        hasher.update(vd.public_key().expect("recorded sets are classical").as_slice());
+        hasher.update(vd.weight.to_le_bytes());
+        match vd.adnl_addr.as_ref() {
+            Some(addr) => hasher.update(addr.as_slice()),
+            None => hasher.update(UInt256::default().as_slice()),
+        }
+    }
+    hasher.finalize()
+}
+
 fn check_block_proof(key_block_file_name: &str, proof_file_name: &str) {
     let key_block = Block::construct_from_file(key_block_file_name).unwrap();
     let proof = BlockProof::construct_from_file(proof_file_name).unwrap();
@@ -106,23 +131,28 @@ fn check_block_proof(key_block_file_name: &str, proof_file_name: &str) {
 
     let virt_info = virt_block.read_info().unwrap();
 
-    let (validators, hash_short) = cur_validator_set
+    let cc_seqno_of_proof = proof
+        .signatures
+        .as_ref()
+        .map(|s| s.validator_info().catchain_seqno)
+        .unwrap_or_else(|| virt_info.gen_catchain_seqno());
+
+    let (validators, _hash_short) = cur_validator_set
         .calc_subset(
             &cc_config,
             proof.proof_for.shard_id.shard_prefix_with_tag(),
             proof.proof_for.shard_id.workchain_id(),
-            proof
-                .signatures
-                .as_ref()
-                .map(|s| s.validator_info().catchain_seqno)
-                .unwrap_or_else(|| virt_info.gen_catchain_seqno()),
+            cc_seqno_of_proof,
         )
         .unwrap();
 
     if let Some(signatures) = proof.signatures.as_ref() {
         assert_eq!(signatures.validator_info().catchain_seqno, virt_info.gen_catchain_seqno());
 
-        assert_eq!(signatures.validator_info().validator_list_hash_short, hash_short);
+        assert_eq!(
+            signatures.validator_info().validator_list_hash_short,
+            legacy_recorded_hash_short(&validators, cc_seqno_of_proof)
+        );
 
         let pure_signatures = signatures.pure_signatures();
 
@@ -131,7 +161,10 @@ fn check_block_proof(key_block_file_name: &str, proof_file_name: &str) {
         let weight = pure_signatures.check_signatures(&validators, &data).unwrap();
         assert_eq!(weight, pure_signatures.weight());
     } else {
-        assert_eq!(virt_info.gen_validator_list_hash_short(), hash_short);
+        assert_eq!(
+            virt_info.gen_validator_list_hash_short(),
+            legacy_recorded_hash_short(&validators, cc_seqno_of_proof)
+        );
     }
 }
 
@@ -377,4 +410,72 @@ fn pq_descriptor_matches_shared_cpp_vectors() {
         checked += 1;
     }
     assert!(checked >= 3, "expected the full vector set, saw {checked}");
+}
+
+// The version 2 validator-set commitment is produced authoritatively by the C++ side
+// and recorded in test/pq-native/validator-set-hash-vectors.txt. Rust rebuilds the same
+// descriptors and must produce the identical preimage bytes and the identical hash, so
+// the two implementations of one consensus preimage cannot drift apart.
+#[test]
+fn validator_set_hash_matches_shared_cpp_vectors() {
+    fn u256(hex_str: &str) -> UInt256 {
+        let mut a = [0u8; 32];
+        a.copy_from_slice(&hex::decode(hex_str).unwrap());
+        UInt256::from(a)
+    }
+
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../test/pq-native/validator-set-hash-vectors.txt"
+    );
+    let text = std::fs::read_to_string(path).expect("shared validator-set hash vectors");
+    let mut by_name = std::collections::HashMap::new();
+    let mut checked = 0;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split(' ').collect();
+        assert_eq!(f.len(), 5, "bad vector line");
+        let (name, cc_seqno) = (f[0], f[1].parse::<u32>().unwrap());
+        let (preimage, hash) = (hex::decode(f[3]).unwrap(), u32::from_str_radix(f[4], 16).unwrap());
+
+        // The commitment only depends on the two identities, the weight and the ADNL
+        // address, so the key material here is a placeholder and must not affect it.
+        let subset: Vec<ValidatorDescr> = f[2]
+            .split(';')
+            .map(|entry| {
+                let p: Vec<&str> = entry.split(':').collect();
+                assert_eq!(p.len(), 4);
+                ValidatorDescr::with_pq_params(
+                    PqConsensusKey {
+                        validator_id: u256(p[0]),
+                        algorithm_id: 1,
+                        key_id: u256(p[1]),
+                        public_key: vec![1u8; 1312],
+                    },
+                    p[2].parse::<u64>().unwrap(),
+                    u256(p[3]),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            ValidatorSet::hash_preimage(&subset, cc_seqno).unwrap(),
+            preimage,
+            "preimage mismatch for {name}"
+        );
+        assert_eq!(
+            ValidatorSet::calc_subset_hash_short(&subset, cc_seqno).unwrap(),
+            hash,
+            "hash mismatch for {name}"
+        );
+        by_name.insert(name.to_string(), hash);
+        checked += 1;
+    }
+    assert!(checked >= 5, "expected the full vector set, saw {checked}");
+
+    // The property the whole split exists for: holding the membership identity fixed and
+    // rotating only the key identity has to move the commitment.
+    assert_ne!(by_name["single"], by_name["rotated"]);
 }

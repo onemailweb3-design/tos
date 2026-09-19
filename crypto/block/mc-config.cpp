@@ -32,6 +32,7 @@
 #include <stack>
 
 #include "block/block-auto.h"
+#include <keys/keys.hpp>
 #include "crypto/pq/pq-bytes.h"
 #include "crypto/pq/pq-consensus.h"
 #include "block/block-parse.h"
@@ -770,6 +771,12 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
         return false;
       }
       pubkey = tos::Ed25519_PublicKey{sig_pubkey.pubkey};
+      // A classical validator's membership identity and key identity are both the one
+      // derived from its Ed25519 key. Settling that here means every consumer of a
+      // decoded set sees populated identities, including the ones that hash them.
+      auto classical_id = tos::PublicKey{tos::pubkeys::Ed25519{pubkey}}.compute_short_id().bits256_value();
+      validator_id = tos::ValidatorId{classical_id};
+      key_id = tos::ConsensusKeyId{classical_id};
       adnl_addr = descr.adnl_addr;
       weight = descr.weight;
     }
@@ -790,6 +797,8 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
                              adnl_addr);
     } else {
       ptr->list.emplace_back(pubkey, weight, weight_offset, adnl_addr);
+      ptr->list.back().validator_id = validator_id;
+      ptr->list.back().key_id = key_id;
     }
     return true;
   };
@@ -2095,7 +2104,10 @@ tos::ValidatorDescr to_validator_descr(const ValidatorDescr& node, tos::Validato
     return tos::ValidatorDescr{node.validator_id, node.algorithm_id, node.key_id,
                                node.pq_public_key,  weight,          node.adnl_addr};
   }
-  return tos::ValidatorDescr{node.pubkey, weight, node.adnl_addr};
+  tos::ValidatorDescr out{node.pubkey, weight, node.adnl_addr};
+  out.validator_id = node.validator_id;
+  out.key_id = node.key_id;
+  return out;
 }
 }  // namespace
 

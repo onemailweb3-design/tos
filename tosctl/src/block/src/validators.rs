@@ -247,6 +247,24 @@ impl ValidatorDescr {
         }
     }
 
+    /// Stable membership identity. For a classical descriptor this is the identity
+    /// derived from its Ed25519 key; for a post-quantum one it is carried explicitly
+    /// and does not change when the consensus key rotates.
+    pub fn validator_id(&self) -> Result<UInt256> {
+        match &self.key {
+            ValidatorKey::Ed25519(pk) => Ok(pk.pub_key().id().data().into()),
+            ValidatorKey::Pq(k) => Ok(k.validator_id.clone()),
+        }
+    }
+
+    /// Identity of the consensus key currently held. This is what moves on rotation.
+    pub fn consensus_key_id(&self) -> Result<UInt256> {
+        match &self.key {
+            ValidatorKey::Ed25519(pk) => Ok(pk.pub_key().id().data().into()),
+            ValidatorKey::Pq(k) => Ok(k.key_id.clone()),
+        }
+    }
+
     pub fn pq_key(&self) -> Option<&PqConsensusKey> {
         match &self.key {
             ValidatorKey::Pq(k) => Some(k),
@@ -606,26 +624,42 @@ impl ValidatorSet {
         Ok((subset, hash_short))
     }
 
-    const HASH_SHORT_MAGIC: u32 = 0x901660ED;
+    /// Frozen magic for the version 2 validator-set commitment preimage. Deliberately
+    /// not the inherited value, so a preimage from either version can never be mistaken
+    /// for the other: SHA-256("TOS-VALIDATOR-SET-v2")[0..4) = 0x79ae62d2.
+    /// Must stay equal to `validator_set_hash_magic_v2` in crypto/block/block.h.
+    const HASH_SHORT_MAGIC_V2: u32 = 0x79AE62D2;
+
+    /// Version 2 of the validator-set commitment, the exact counterpart of
+    /// `compute_validator_set_hash` in crypto/block/block.cpp.
+    ///
+    /// It commits to both identities rather than to a raw key: the stable membership
+    /// identity, and the identity of the key currently held. Rotating a key changes the
+    /// commitment while the validator keeps its place in the set. The public key is not
+    /// repeated, because the key identity is already a hash over the algorithm and key.
+    /// The exact bytes the commitment is taken over, the counterpart of
+    /// `validator_set_hash_preimage` in crypto/block/block.cpp. Built separately from
+    /// the hash so the two languages can be compared byte for byte, not just by result.
+    pub fn hash_preimage(subset: &[ValidatorDescr], cc_seqno: u32) -> Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(12 + subset.len() * 104);
+        out.extend_from_slice(&Self::HASH_SHORT_MAGIC_V2.to_le_bytes());
+        out.extend_from_slice(&cc_seqno.to_le_bytes());
+        out.extend_from_slice(&(subset.len() as u32).to_le_bytes());
+        for vd in subset.iter() {
+            out.extend_from_slice(vd.validator_id()?.as_slice());
+            out.extend_from_slice(vd.consensus_key_id()?.as_slice());
+            out.extend_from_slice(&vd.weight.to_le_bytes());
+            match vd.adnl_addr.as_ref() {
+                Some(addr) => out.extend_from_slice(addr.as_slice()),
+                None => out.extend_from_slice(UInt256::default().as_slice()),
+            }
+        }
+        Ok(out)
+    }
 
     pub fn calc_subset_hash_short(subset: &[ValidatorDescr], cc_seqno: u32) -> Result<u32> {
         let mut hasher = Crc32::new();
-        hasher.update(Self::HASH_SHORT_MAGIC.to_le_bytes());
-        hasher.update(cc_seqno.to_le_bytes());
-        hasher.update((subset.len() as u32).to_le_bytes());
-        for vd in subset.iter() {
-            // This preimage can only represent a 32-byte classical key. A post-quantum
-            // descriptor must not be squeezed into it: that would produce a plausible
-            // but wrong commitment. The v2 preimage that binds validator_id and key_id
-            // replaces this for PQ sets.
-            hasher.update(vd.public_key()?.as_slice());
-            hasher.update(vd.weight.to_le_bytes());
-            if let Some(addr) = vd.adnl_addr.as_ref() {
-                hasher.update(addr.as_slice());
-            } else {
-                hasher.update(UInt256::default().as_slice());
-            }
-        }
+        hasher.update(Self::hash_preimage(subset, cc_seqno)?);
         Ok(hasher.finalize())
     }
 }

@@ -14,6 +14,9 @@
 #include "crypto/pq/pq-consensus.h"
 #include "vm/cells/CellBuilder.h"
 #include "vm/dict.h"
+#include <fstream>
+#include "block/block.h"
+#include "td/utils/misc.h"
 
 namespace {
 
@@ -128,6 +131,59 @@ int main() {
   assert(block::Config::unpack_validator_set(
              validator_set_cell({pq_descriptor(fill(0), 1, kid_a, key_a, 5, adnl)}, 5), false)
              .is_error());
+
+  {  // The recorded version 2 commitment vectors must still be what this code produces.
+    std::ifstream f(SET_HASH_VECTORS_FILE);
+    assert(f);
+    std::string line;
+    int seen = 0;
+    while (std::getline(f, line)) {
+      if (line.empty()) {
+        continue;
+      }
+      std::vector<std::string> field;
+      for (std::size_t p = 0, q; p <= line.size(); p = q + 1) {
+        q = line.find(' ', p);
+        if (q == std::string::npos) {
+          q = line.size();
+        }
+        field.push_back(line.substr(p, q - p));
+      }
+      assert(field.size() == 5);
+      const auto cc_seqno = static_cast<tos::CatchainSeqno>(std::stoul(field[1]));
+      std::vector<tos::ValidatorDescr> nodes;
+      for (std::size_t p = 0, q; p <= field[2].size(); p = q + 1) {
+        q = field[2].find(';', p);
+        if (q == std::string::npos) {
+          q = field[2].size();
+        }
+        auto entry = field[2].substr(p, q - p);
+        std::vector<std::string> part;
+        for (std::size_t a = 0, b; a <= entry.size(); a = b + 1) {
+          b = entry.find(':', a);
+          if (b == std::string::npos) {
+            b = entry.size();
+          }
+          part.push_back(entry.substr(a, b - a));
+        }
+        assert(part.size() == 4);
+        td::Bits256 vid, kid, adnl;
+        std::memcpy(vid.data(), td::hex_decode(part[0]).move_as_ok().data(), 32);
+        std::memcpy(kid.data(), td::hex_decode(part[1]).move_as_ok().data(), 32);
+        std::memcpy(adnl.data(), td::hex_decode(part[3]).move_as_ok().data(), 32);
+        nodes.push_back(tos::ValidatorDescr{tos::ValidatorId{vid}, 1, tos::ConsensusKeyId{kid},
+                                            std::string(tos::pq::mldsa44_public_key_bytes, '\x01'),
+                                            std::stoull(part[2]), adnl});
+      }
+      assert(td::hex_encode(td::Slice(block::validator_set_hash_preimage(cc_seqno, nodes))) == field[3]);
+      char got[16];
+      std::snprintf(got, sizeof got, "%08x",
+                    block::compute_validator_set_hash(cc_seqno, tos::ShardIdFull{tos::masterchainId}, nodes));
+      assert(std::string(got) == field[4]);
+      seen++;
+    }
+    assert(seen >= 5);
+  }
 
   printf("VALIDATOR_IDENTITY_OK rotation keeps validator_id, changes key_id; bindings enforced\n");
   return 0;

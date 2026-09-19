@@ -59,7 +59,10 @@ ValidatorSet::ValidatorSet(tos::CatchainSeqno cc_seqno, tos::ShardIdFull from, s
     // A classical descriptor's identities are the one derived from its Ed25519 key, so
     // existing sets keep exactly the membership they had. A post-quantum descriptor
     // carries both identities explicitly, and they are different values.
-    if (!ids_[i].is_pq()) {
+    // Decoding already settles both identities. This only covers descriptors built
+    // directly by tests and tooling, which would otherwise carry zero identities into
+    // the set commitment.
+    if (!ids_[i].is_pq() && ids_[i].validator_id.is_zero()) {
       auto derived = tos::ValidatorId{
           tos::PublicKey{tos::pubkeys::Ed25519{ids_[i].key}}.compute_short_id().bits256_value()};
       ids_[i].validator_id = derived;
