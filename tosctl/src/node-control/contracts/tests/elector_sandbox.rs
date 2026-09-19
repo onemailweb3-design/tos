@@ -2161,6 +2161,44 @@ fn a_stake_below_the_minimum_is_returned() {
 /// finds `now() >= elect_close` is what conducts the election and marks it finished.
 /// Admitting a stake, or a rotation, for as long as that tick has not landed would make
 /// membership depend on scheduling rather than on the election's own boundary.
+/// Every distinct cell in a tree, and the bits they hold.
+fn tree_size(root: &chain_block::Cell) -> (usize, usize) {
+    fn walk(
+        cell: &chain_block::Cell,
+        seen: &mut std::collections::HashSet<chain_block::UInt256>,
+        bits: &mut usize,
+    ) {
+        if !seen.insert(cell.repr_hash()) {
+            return;
+        }
+        *bits += cell.bit_length();
+        for index in 0..cell.references_count() {
+            walk(&cell.reference(index).expect("a reference"), seen, bits);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut bits = 0;
+    walk(root, &mut seen, &mut bits);
+    (seen.len(), bits)
+}
+
+/// What a stake actually costs to carry, measured on the request the contract now reads.
+///
+/// The design was sized against an estimate of this message before the request had its
+/// final shape. The figures below are the shape that shipped, so a change to the carrier
+/// has to be re-approved rather than absorbed.
+#[test]
+fn a_stake_request_is_the_size_the_design_was_sized_for() {
+    let validator = PqValidator::new(23);
+    let body = pq_stake_body(1, &validator, 1_789_434_000, 0x10000, &vec![0u8; 2420]);
+    let (cells, bits) = tree_size(&body);
+    assert_eq!(
+        (cells, bits),
+        (34, 30_352),
+        "the stake request changed shape: {cells} cells and {bits} bits"
+    );
+}
+
 /// The weight factor a member registered with, as its own record holds it.
 fn pq_member_max_factor(chain: &Chain, controller: &tos_sandbox::Treasury) -> u32 {
     let (members, _) = pq_book(chain);
