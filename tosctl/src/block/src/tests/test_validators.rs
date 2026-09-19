@@ -515,30 +515,6 @@ fn validator_set_verdicts_match_cpp() {
     assert!(checked >= 13, "expected the full case set, saw {checked}");
 }
 
-// Constants that exist once per language. Each side checks its own against the shared
-// file, so a value changed on one side alone fails here instead of leaving two
-// implementations that quietly disagree about the wire.
-#[test]
-fn frozen_constants_match_cpp() {
-    use crate::pq_bytes::{PQ_BYTES_CHUNK, PQ_BYTES_HARD_MAX};
-
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../test/pq-native/frozen-constants.tsv");
-    let text = std::fs::read_to_string(path).expect("shared frozen constants");
-    let mut frozen = std::collections::HashMap::new();
-    for line in text.lines() {
-        if line.starts_with('#') || line.trim().is_empty() {
-            continue;
-        }
-        let (name, value) = line.split_once('\t').expect("bad constant line");
-        frozen.insert(name.to_string(), value.trim().parse::<u64>().expect("decimal value"));
-    }
-    assert_eq!(frozen.len(), 7, "expected the full constant set");
-    let value_of = |name: &str| *frozen.get(name).unwrap_or_else(|| panic!("missing {name}"));
-
-    assert_eq!(PQ_BYTES_CHUNK as u64, value_of("pq_bytes_chunk"));
-    assert_eq!(PQ_BYTES_HARD_MAX as u64, value_of("pq_bytes_hard_max"));
-    assert_eq!(MLDSA44_PUBLIC_KEY_BYTES as u64, value_of("mldsa44_public_key_bytes"));
-    assert_eq!(MLDSA44_ALGORITHM_ID as u64, value_of("mldsa44_algorithm_id"));
-    assert_eq!(VALIDATOR_DESC_PQ_TAG as u64, value_of("validator_descr_pq_tag"));
-    assert_eq!(ValidatorSet::HASH_SHORT_MAGIC_V2 as u64, value_of("validator_set_hash_magic_v2"));
-}
+// The Rust check of the shared frozen-constants file lives in the VM crate, the only
+// place Rust defines the ML-DSA-44 signature length, and the one that can also reach
+// the constants defined here: tosctl/src/vm/src/tests/test_pq_constants.rs.

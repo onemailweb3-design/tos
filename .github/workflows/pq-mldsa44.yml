@@ -179,6 +179,7 @@ jobs:
           cargo test --manifest-path tosctl/src/block/Cargo.toml --lib pq_bytes -- --nocapture
           cargo test --manifest-path tosctl/src/block/Cargo.toml --lib validators -- --nocapture
           cargo test --manifest-path tosctl/src/tl/api/Cargo.toml --test session_vectors -- --nocapture
+          cargo test --manifest-path tosctl/src/vm/Cargo.toml --lib executor::pq -- --nocapture
   determinism:
     needs: [native, sanitizers, vm-sanitizers, rust-pqbytes]
     if: always()
