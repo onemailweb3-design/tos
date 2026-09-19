@@ -167,6 +167,10 @@ _ get_vote_config(int critical?) inline {
 const int config::validator_controller_policy = 47;
 const int config::max_controller_codes = 8;
 
+;; The proposal that used to appoint or depose a single administrator. It is named here
+;; so it can be refused by name rather than merely happening not to be handled.
+const int config::appoint_administrator_param = -999;
+
 ;; Installing a parameter goes through here, from the administrator action and from an
 ;; accepted proposal alike, so the rules about what may be installed live once. A rule
 ;; each path carries its own copy of is a rule one of them will eventually be missing.
@@ -205,6 +209,14 @@ int valid_controller_policy?(cell value) inline_ref {
 }
 
 (cell, int) install_param(cell cfg_dict, int param_id, cell param_val) inline_ref {
+  ;; Governance may change what this chain does. It may not vote itself something that
+  ;; can then change the chain without it. The proposal is rejected the way any value the
+  ;; rules refuse is -- returned unchanged, with nothing installed -- rather than by
+  ;; throwing: a throw here would roll back the vote that carried it, leaving the
+  ;; proposal pending and every later vote on it aborting.
+  if (param_id == config::appoint_administrator_param) {
+    return (cfg_dict, false);
+  }
   if (param_id == config::validator_controller_policy) {
     ifnot (valid_controller_policy?(param_val)) {
       return (cfg_dict, false);
@@ -289,13 +301,9 @@ int valid_controller_policy?(cell value) inline_ref {
 
 ;; What an accepted proposal is allowed to do beyond installing a parameter.
 ;;
-;; Appointing an administrator is not among them. The parameter that did it is refused
-;; here rather than left unhandled, so a proposal asking for one cannot be accepted and
-;; then quietly do nothing: governance must not be able to vote itself a single key.
-const int config::appoint_administrator_param = -999;
-
+;; A proposal to appoint an administrator never reaches here: `install_param` refuses it,
+;; so the proposal is rejected and this is not called for it at all.
 cell perform_proposed_action(cell cfg_dict, int param_id, cell param_val) inline_ref {
-  throw_if(46, param_id == config::appoint_administrator_param);
   if (param_val.null?()) {
     return cfg_dict;
   }

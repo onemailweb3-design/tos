@@ -187,13 +187,118 @@ MUTANTS = [
         "elector_sandbox",
         "the_controller_policy_cannot_grow",
     ),
+    # ---------------------------------------------------------------------------
+    # The post-quantum authority cutover
+    #
+    # Each of these is a rule that, if it stopped holding, would leave the chain
+    # authorising validators with something other than the current post-quantum set.
+    # None of them announces itself when it breaks: a vote counted for the wrong
+    # validator, a set installed that the node cannot read, an operation that quietly
+    # comes back.
+    # ---------------------------------------------------------------------------
     (
-        "config-ceiling-refusal",
+        "vote-signature",
         "config-code.fc",
-        "  (cfg_dict, int installed) = install_param(cfg_dict, param_index, param_value);\n    throw_unless(45, installed);",
-        "  (cfg_dict, int installed) = install_param(cfg_dict, param_index, param_value);\n    throw_unless(45, true);",
+        "    throw_unless(34, pq_check_mldsa44(\n      pq::config_vote_preimage(vset.cell_hash(), validator_id, idx, phash),",
+        "    throw_unless(34, true | pq_check_mldsa44(\n      pq::config_vote_preimage(vset.cell_hash(), validator_id, idx, phash),",
         "elector_sandbox",
-        "the_controller_policy_cannot_grow",
+        "a_vote_signed_by_a_key_that_is_not_at_that_index_is_refused",
+    ),
+    (
+        "vote-identity-from-the-set",
+        "pq-validator.fc",
+        "    .store_uint(validator_set_id, 256)\n    .store_uint(validator_id, 256)\n    .store_uint(idx, 16)\n    .store_uint(proposal_hash, 256)",
+        "    .store_uint(validator_set_id, 256)\n    .store_uint(idx, 16)\n    .store_uint(proposal_hash, 256)",
+        "elector_sandbox",
+        "a_validator_votes_for_a_proposal_with_the_key_in_the_current_set",
+    ),
+    (
+        "vote-bound-to-its-set",
+        "pq-validator.fc",
+        "    .store_uint(pq::tag::config_vote_sign, 32)\n    .store_int(pq::global_id(), 32)\n    .store_uint(validator_set_id, 256)",
+        "    .store_uint(pq::tag::config_vote_sign, 32)\n    .store_int(pq::global_id(), 32)\n    .store_uint(0, 256)",
+        "elector_sandbox",
+        "a_validator_votes_for_a_proposal_with_the_key_in_the_current_set",
+    ),
+    (
+        "vote-funding",
+        "config-code.fc",
+        "    throw_unless(47, msg_value >= pq::verification_value(-1));\n\n    (cell vset, int total_weight, cell list) = get_current_vset();",
+        "    throw_unless(47, true);\n\n    (cell vset, int total_weight, cell list) = get_current_vset();",
+        "elector_sandbox",
+        "a_vote_costs_what_the_verification_it_asks_for_costs",
+    ),
+    (
+        "complaint-vote-signature",
+        "elector-code.fc",
+        "    throw_unless(34, pq_check_mldsa44(\n      pq::complaint_vote_preimage(vset.cell_hash(), validator_id, idx, elect_id, chash),",
+        "    throw_unless(34, true | pq_check_mldsa44(\n      pq::complaint_vote_preimage(vset.cell_hash(), validator_id, idx, elect_id, chash),",
+        "elector_sandbox",
+        "a_complaint_vote_signed_by_another_validator_is_refused",
+    ),
+    (
+        "complaint-vote-identity",
+        "pq-validator.fc",
+        "    .store_uint(validator_set_id, 256)\n    .store_uint(validator_id, 256)\n    .store_uint(idx, 16)\n    .store_uint(election_id, 32)",
+        "    .store_uint(validator_set_id, 256)\n    .store_uint(idx, 16)\n    .store_uint(election_id, 32)",
+        "elector_sandbox",
+        "a_validator_votes_to_punish_a_validator_of_a_past_election",
+    ),
+    (
+        "set-duplicate-validator",
+        "config-code.fc",
+        "      (_, int duplicate_validator) = seen_validators.udict_get?(256, validator_id);\n      throw_if(9, duplicate_validator);",
+        "      (_, int duplicate_validator) = seen_validators.udict_get?(256, validator_id);\n      throw_if(9, false);",
+        "elector_sandbox",
+        "a_set_the_node_would_refuse_is_refused_before_it_is_installed",
+    ),
+    (
+        "set-duplicate-key",
+        "config-code.fc",
+        "      (_, int duplicate_key) = seen_keys.udict_get?(256, key_id);\n      throw_if(9, duplicate_key);",
+        "      (_, int duplicate_key) = seen_keys.udict_get?(256, key_id);\n      throw_if(9, false);",
+        "elector_sandbox",
+        "a_set_the_node_would_refuse_is_refused_before_it_is_installed",
+    ),
+    (
+        "set-weight-sum",
+        "config-code.fc",
+        "  throw_unless(9, weight_sum == total_weight);",
+        "  throw_unless(9, true);",
+        "elector_sandbox",
+        "a_set_the_node_would_refuse_is_refused_before_it_is_installed",
+    ),
+    (
+        "set-count-agreement",
+        "config-code.fc",
+        "  throw_unless(9, counted == total);",
+        "  throw_unless(9, true);",
+        "elector_sandbox",
+        "a_set_the_node_would_refuse_is_refused_before_it_is_installed",
+    ),
+    (
+        "no-administrator-appointment",
+        "config-code.fc",
+        "  if (param_id == config::appoint_administrator_param) {\n    return (cfg_dict, false);\n  }",
+        "  if (false) {\n    return (cfg_dict, false);\n  }",
+        "elector_sandbox",
+        "governance_cannot_vote_itself_an_administrator",
+    ),
+    (
+        "no-external-authority",
+        "config-code.fc",
+        "() recv_external(slice in_msg) impure {\n  throw(32);\n}",
+        "() recv_external(slice in_msg) impure {\n  accept_message();\n}",
+        "elector_sandbox",
+        "an_external_validator_vote_has_no_authorization_path",
+    ),
+    (
+        "readiness-on-effective-stake",
+        "elector-code.fc",
+        "  if (pq::effective_stake(pq_by_code, admitted_codes) < min_total_stake) {",
+        "  if (total_stake < min_total_stake) {",
+        "elector_sandbox",
+        "a_retired_profile_cannot_make_an_election_look_ready",
     ),
 ]
 

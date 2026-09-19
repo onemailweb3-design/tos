@@ -105,8 +105,68 @@
     "test": "elector_sandbox::the_controller_policy_cannot_grow"
   },
   {
-    "guard": "config-ceiling-refusal",
+    "guard": "vote-signature",
     "killed": true,
-    "test": "elector_sandbox::the_controller_policy_cannot_grow"
+    "test": "elector_sandbox::a_vote_signed_by_a_key_that_is_not_at_that_index_is_refused"
+  },
+  {
+    "guard": "vote-identity-from-the-set",
+    "killed": true,
+    "test": "elector_sandbox::a_validator_votes_for_a_proposal_with_the_key_in_the_current_set"
+  },
+  {
+    "guard": "vote-bound-to-its-set",
+    "killed": true,
+    "test": "elector_sandbox::a_validator_votes_for_a_proposal_with_the_key_in_the_current_set"
+  },
+  {
+    "guard": "vote-funding",
+    "killed": true,
+    "test": "elector_sandbox::a_vote_costs_what_the_verification_it_asks_for_costs"
+  },
+  {
+    "guard": "complaint-vote-signature",
+    "killed": true,
+    "test": "elector_sandbox::a_complaint_vote_signed_by_another_validator_is_refused"
+  },
+  {
+    "guard": "complaint-vote-identity",
+    "killed": true,
+    "test": "elector_sandbox::a_validator_votes_to_punish_a_validator_of_a_past_election"
+  },
+  {
+    "guard": "set-duplicate-validator",
+    "killed": true,
+    "test": "elector_sandbox::a_set_the_node_would_refuse_is_refused_before_it_is_installed"
+  },
+  {
+    "guard": "set-duplicate-key",
+    "killed": true,
+    "test": "elector_sandbox::a_set_the_node_would_refuse_is_refused_before_it_is_installed"
+  },
+  {
+    "guard": "set-weight-sum",
+    "killed": true,
+    "test": "elector_sandbox::a_set_the_node_would_refuse_is_refused_before_it_is_installed"
+  },
+  {
+    "guard": "set-count-agreement",
+    "killed": true,
+    "test": "elector_sandbox::a_set_the_node_would_refuse_is_refused_before_it_is_installed"
+  },
+  {
+    "guard": "no-administrator-appointment",
+    "killed": true,
+    "test": "elector_sandbox::governance_cannot_vote_itself_an_administrator"
+  },
+  {
+    "guard": "no-external-authority",
+    "killed": true,
+    "test": "elector_sandbox::an_external_validator_vote_has_no_authorization_path"
+  },
+  {
+    "guard": "readiness-on-effective-stake",
+    "killed": true,
+    "test": "elector_sandbox::a_retired_profile_cannot_make_an_election_look_ready"
   }
 ]

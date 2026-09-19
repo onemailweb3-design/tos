@@ -713,6 +713,43 @@ fn proposal_cell(param_id: i32, value: chain_block::Cell) -> chain_block::Cell {
     proposal.into_cell().expect("proposal")
 }
 
+/// The cell a configuration parameter holds, as the contract stores it.
+fn raw_parameter(chain: &Chain, index: i32) -> Option<chain_block::Cell> {
+    use chain_block::IBitstring;
+    let mut key = chain_block::BuilderData::new();
+    key.append_i32(index).expect("the parameter index");
+    configuration_from_contract(chain)
+        .config_params
+        .get(chain_block::SliceData::load_builder(key).expect("a key slice"))
+        .expect("lookup")
+        .and_then(|slice| slice.reference_opt(0))
+}
+
+/// Whether a parameter is one the configuration marks critical. A proposal for one has
+/// to say so, and the contract refuses it outright if it does not, so the fixture asks
+/// the chain rather than carrying its own list.
+fn is_critical(chain: &Chain, param_id: i32) -> bool {
+    use chain_block::IBitstring;
+    let mut key = chain_block::BuilderData::new();
+    key.append_i32(10).expect("the parameter index");
+    let critical = chain
+        .blockchain
+        .config_params()
+        .config_params
+        .get(chain_block::SliceData::load_builder(key).expect("a key slice"))
+        .expect("lookup");
+    let root = match critical {
+        Some(slice) => slice.reference(0).expect("the list is stored behind a reference"),
+        None => return false,
+    };
+    let dict = chain_block::HashmapE::with_hashmap(32, Some(root));
+    let mut wanted = chain_block::BuilderData::new();
+    wanted.append_i32(param_id).expect("the parameter");
+    dict.get(chain_block::SliceData::load_builder(wanted).expect("a key slice"))
+        .expect("lookup")
+        .is_some()
+}
+
 /// The index of a validator in the current set, found by the consensus key it holds,
 /// because a vote names an index and the contract reads the descriptor stored at it.
 fn index_of(chain: &Chain, validator: &PqValidator) -> u16 {
@@ -827,7 +864,13 @@ fn propose_cell(
     // requires a proposal to be stored for at least a million seconds.
     body.append_u32(chain.blockchain.now() + 2_000_000).expect("expiry");
     body.checked_append_reference(proposal).expect("proposal");
-    body.append_bit_zero().expect("not a critical parameter");
+    // A proposal for a critical parameter that does not declare itself critical is
+    // refused before anyone votes on it.
+    if is_critical(chain, param_id) {
+        body.append_bit_one().expect("a critical parameter");
+    } else {
+        body.append_bit_zero().expect("not a critical parameter");
+    }
 
     let proposer = chain.blockchain.treasury("proposer", 1_000 * TOS).expect("a funded account");
     let result = chain
@@ -974,7 +1017,6 @@ fn no_key_alone_can_change_a_configuration_parameter() {
     signed.checked_append_reference(value.into_cell().expect("value")).expect("value");
     let signed_cell = signed.into_cell().expect("the signed part");
 
-    use chain_block::GetRepresentationHash;
     let digest = signed_cell.hash(0);
     let signature: [u8; 64] = ed25519_dalek::Signer::sign(&admin, digest.as_slice()).to_bytes();
 
@@ -1127,6 +1169,294 @@ fn govern_install(
     Governed { decided, installed }
 }
 
+// ---------------------------------------------------------------------------
+// The rules the cutover rests on
+//
+// Each of these covers something that fails silently: a vote paid for by the chain, a
+// set the node cannot read installed anyway, an administrator voted in, an election that
+// looks ready on stake it cannot use. None of them announces itself when it stops
+// holding, so each has a test that goes red when the rule is removed.
+// ---------------------------------------------------------------------------
+
+/// A vote brings the price of the verification it asks for.
+///
+/// Anyone can send one. Without this, an unauthorised sender could make every
+/// masterchain block pay fifty thousand gas per message, for as many messages as it
+/// cared to send, and the signatures would never have to be valid.
+#[test]
+fn a_vote_costs_what_the_verification_it_asks_for_costs() {
+    let (mut chain, validators, _election) = elect_install_and_rotate();
+    let proposal = propose(&mut chain, 42, 0xfeed);
+    let voter = &validators[0];
+    let idx = index_of(&chain, voter);
+    let signature = voter.sign_under(&vote_preimage(&chain, idx, &proposal), CONFIG_VOTE_CONTEXT);
+    let sender = chain.blockchain.treasury("underfunded-relay", 100 * TOS).expect("an account");
+
+    // Correctly signed by the validator at that index, so only the funding rule can
+    // refuse it.
+    chain
+        .blockchain
+        .send_message(sender.build_message(
+            &chain.config_contract,
+            TOS / 100,
+            true,
+            Some(vote_body(7, &signature, idx, &proposal)),
+        ))
+        .expect("the vote is delivered")
+        .expect_aborted()
+        .expect_exit_code(ERROR_VOTE_UNDERFUNDED);
+    assert!(proposal_voters(&chain, &proposal).is_empty(), "an underfunded vote was registered");
+
+    // The same vote, carrying enough, is counted.
+    let result = chain
+        .blockchain
+        .send_message(sender.build_message(
+            &chain.config_contract,
+            VOTE_VALUE,
+            true,
+            Some(vote_body(8, &signature, idx, &proposal)),
+        ))
+        .expect("the vote is delivered");
+    assert_eq!(exit_code_of(&result), 0, "a funded vote was refused");
+    assert_eq!(proposal_voters(&chain, &proposal), vec![idx], "a funded vote was not registered");
+}
+
+/// A set that breaks any rule the node applies is refused before it can become
+/// ConfigParam 36.
+///
+/// The configuration contract installs what the election sends it, and the node refuses
+/// to start from a set it cannot read. A set that passes here and fails there is a set
+/// that halts the chain at the moment it takes over, which is the one moment nothing can
+/// be done about it.
+#[test]
+fn a_set_the_node_would_refuse_is_refused_before_it_is_installed() {
+    let (mut chain, _election, validators) = elect_four();
+
+    fn offer(chain: &mut Chain, set: chain_block::Cell, query: u64) -> Vec<u32> {
+        let result = chain
+            .blockchain
+            .send_message(
+                tos_sandbox::MessageBuilder::internal(
+                    &chain.elector.clone(),
+                    &chain.config_contract.clone(),
+                    10 * TOS,
+                )
+                .body(set_next_validators_body(query, set))
+                .build(),
+            )
+            .expect("the message is delivered");
+        replies(&result)
+    }
+
+    // The control. Without it every refusal below could be the fixture's own doing.
+    let honest = validator_set_cell(&chain, &validators, Flaw::None);
+    let tags = offer(&mut chain, honest, 1);
+    assert!(
+        tags.contains(&VALIDATOR_SET_INSTALLED),
+        "the fixture's own set was refused: {tags:02x?}"
+    );
+
+    for (query, flaw, what) in [
+        (2, Flaw::DuplicateValidator, "naming one validator twice"),
+        (3, Flaw::DuplicateKey, "holding one consensus key twice"),
+        (4, Flaw::WeightSumDisagrees, "stating a total weight its descriptors do not sum to"),
+        (5, Flaw::CountDisagrees, "stating a count its list does not hold"),
+    ] {
+        let set = validator_set_cell(&chain, &validators, flaw);
+        let tags = offer(&mut chain, set, query);
+        assert!(tags.contains(&VALIDATOR_SET_REFUSED), "a set {what} was installed: {tags:02x?}");
+        assert!(
+            !tags.contains(&VALIDATOR_SET_INSTALLED),
+            "a set {what} was both refused and installed: {tags:02x?}"
+        );
+    }
+}
+
+/// `0x4e565354`: the elector asking the configuration contract to install a set.
+fn set_next_validators_body(query_id: u64, vset: chain_block::Cell) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(0x4e565354).expect("operation");
+    body.append_u64(query_id).expect("query id");
+    body.checked_append_reference(vset).expect("the set");
+    body.into_cell().expect("a set-next-validators body")
+}
+
+/// One way a validator set can be wrong. Each breaks exactly one rule, so a set refused
+/// for `DuplicateValidator` cannot have been refused for holding a repeated key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flaw {
+    /// Nothing wrong: the fixture's own control.
+    None,
+    /// Two descriptors naming one account, each with its own consensus key, so one
+    /// validator's weight would be counted twice.
+    DuplicateValidator,
+    /// Two accounts holding one consensus key, which the node cannot tell apart.
+    DuplicateKey,
+    /// The header's total weight is not the weight the descriptors carry.
+    WeightSumDisagrees,
+    /// The header states a count the list does not hold.
+    CountDisagrees,
+}
+
+/// A validator set carrying the given validators, with one stated flaw.
+fn validator_set_cell(chain: &Chain, validators: &[PqValidator], flaw: Flaw) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let since = chain.blockchain.now() + 1000;
+    let mut list = chain_block::HashmapE::with_bit_len(16);
+    let mut total_weight = 0u64;
+    for (index, validator) in validators.iter().enumerate() {
+        let weight = 1u64 << 40;
+
+        // The account this descriptor names, and the key it holds. Only the stated flaw
+        // makes either of them repeat.
+        let mut identity = [0u8; 32];
+        identity[31] = (index + 1) as u8;
+        if flaw == Flaw::DuplicateValidator && index == 1 {
+            identity[31] = 1;
+        }
+        let key = if flaw == Flaw::DuplicateKey && index == 1 {
+            &validators[0].public_key
+        } else {
+            &validator.public_key
+        };
+
+        let mut descr = chain_block::BuilderData::new();
+        descr.append_u8(0xb3).expect("tag");
+        descr.append_raw(&identity, 256).expect("validator identity");
+        descr.append_u16(1).expect("algorithm");
+        descr
+            .append_raw(chain_block::derive_consensus_key_id(1, key).as_slice(), 256)
+            .expect("key identity");
+        descr.checked_append_reference(stored_bytes(key)).expect("the key");
+        descr.append_u64(weight).expect("weight");
+        descr.append_raw(&validator.adnl, 256).expect("transport identity");
+
+        let mut key_bits = chain_block::BuilderData::new();
+        key_bits.append_u16(index as u16).expect("the index");
+        list.set_builder(
+            chain_block::SliceData::load_builder(key_bits).expect("a key slice"),
+            &descr,
+        )
+        .expect("the descriptor is stored");
+        total_weight += weight;
+    }
+
+    let stated_total = match flaw {
+        Flaw::CountDisagrees => validators.len() as u16 + 1,
+        _ => validators.len() as u16,
+    };
+    let stated_weight = match flaw {
+        Flaw::WeightSumDisagrees => total_weight + 1,
+        _ => total_weight,
+    };
+
+    let mut set = chain_block::BuilderData::new();
+    set.append_u8(0x12).expect("validators_ext#12");
+    set.append_u32(since).expect("utime_since");
+    set.append_u32(since + 100_000).expect("utime_until");
+    set.append_u16(stated_total).expect("total");
+    set.append_u16(validators.len() as u16).expect("main");
+    set.append_u64(stated_weight).expect("total weight");
+    set.append_bit_one().expect("a non-empty list");
+    set.checked_append_reference(
+        chain_block::HashmapType::data(&list).expect("a non-empty list").clone(),
+    )
+    .expect("the list");
+    set.into_cell().expect("a validator set")
+}
+
+/// Governance may change what the chain does. It may not vote itself something that can
+/// then change the chain without it.
+#[test]
+fn governance_cannot_vote_itself_an_administrator() {
+    let (mut chain, validators, _election) = elect_install_and_rotate();
+    require_one_winning_round(&mut chain);
+
+    use chain_block::IBitstring;
+    let mut key = chain_block::BuilderData::new();
+    key.append_raw(&[0x5au8; 32], 256).expect("an administrator key");
+
+    let outcome =
+        govern_install(&mut chain, &validators, -999, key.into_cell().expect("a key"), 300);
+    assert!(outcome.decided, "the fixture needs a proposal the validators actually carried");
+    assert!(
+        !outcome.installed,
+        "the validators voted an administrator in, so nothing stops governance ending itself"
+    );
+}
+
+/// Stake behind a controller profile the configuration has retired cannot make an
+/// election look ready.
+///
+/// The money is still there and still refundable, and the running total still counts it.
+/// What decides whether an election may close is the stake it can stand behind, so a
+/// profile withdrawn after its stake arrived must take that stake out of the decision.
+#[test]
+fn a_retired_profile_cannot_make_an_election_look_ready() {
+    let (mut chain, treasury, election) = open_election("readiness-retired", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+
+    // Enough stake, from enough members, that the election would close.
+    let mut accounts = Vec::new();
+    for index in 0..4u8 {
+        let account = chain
+            .blockchain
+            .treasury(&format!("readiness-{index}"), 40_000 * TOS)
+            .expect("a funded account");
+        let result = pq_stake(
+            &mut chain,
+            &account,
+            &PqValidator::new(0x60 + index),
+            election,
+            10 + index as u64,
+            11_000 * TOS,
+        );
+        assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "validator {index} could not stake");
+        accounts.push(account);
+    }
+    let _ = treasury;
+    let placed = declared_total_stake(&chain);
+    assert!(placed > 40_000 * TOS as u128, "the fixture needs enough stake to close on");
+
+    // Retire the profile every one of them was admitted under.
+    set_contract_parameter(&mut chain, 47, controller_policy(1));
+
+    let closes = election - chain.elect_end_before;
+    chain.blockchain.set_now(closes);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+
+    assert!(
+        !parameter_present(&configuration_from_contract(&chain), 36),
+        "an election closed on stake behind a profile the configuration had retired"
+    );
+    // The money is untouched: retiring a profile withdraws authority, not deposits.
+    assert_eq!(
+        declared_total_stake(&chain),
+        placed,
+        "retiring a profile took the stake that had been placed"
+    );
+
+    // And the election is postponed, not failed. The difference is the whole point of
+    // judging readiness on the stake the election can stand behind: an election that
+    // was marked failed would not retry until new stake arrived, so putting the profile
+    // back would leave it stuck for a reason the configuration had already undone.
+    admit_sender_code(&mut chain, &accounts[0]);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    assert!(
+        parameter_present(&configuration_from_contract(&chain), 36),
+        "re-admitting the profile did not revive the election, so it had been given up on"
+    );
+}
+
 /// A controller policy holding `count` distinct code hashes.
 fn controller_policy(count: usize) -> chain_block::Cell {
     use chain_block::IBitstring;
@@ -1162,27 +1492,37 @@ fn controller_policy(count: usize) -> chain_block::Cell {
 /// is never reached by anything. This is the configuration contract refusing the ninth.
 #[test]
 fn the_controller_policy_cannot_grow_past_its_ceiling() {
+    use chain_block::GetRepresentationHash;
     let (mut chain, validators, _election) = elect_install_and_rotate();
     require_one_winning_round(&mut chain);
 
-    // Eight is the ceiling, and a vote of the validators installs it.
-    assert_eq!(
-        govern_install(&mut chain, &validators, 47, controller_policy(8), 100),
-        Governed { decided: true, installed: true },
-        "a policy at the ceiling was refused"
-    );
-    let at_ceiling = configuration_from_contract(&chain).config(47).expect("parameter 47");
+    // The fixture already put a policy in place to admit its own senders, so being
+    // present proves nothing here. What each vote is judged on is the value stored
+    // afterwards.
+    let before = raw_parameter(&chain, 47).expect("the fixture installs a policy");
 
-    // The ninth is refused by the rule, not by the vote: the validators carried the
-    // proposal and the contract still declined to install it.
-    assert_eq!(
-        govern_install(&mut chain, &validators, 47, controller_policy(9), 200),
-        Governed { decided: true, installed: true },
+    // Eight is the ceiling, and a vote of the validators installs it.
+    let eight = controller_policy(8);
+    assert!(
+        govern_install(&mut chain, &validators, 47, eight.clone(), 100).decided,
         "the fixture needs a proposal the validators actually carried"
     );
     assert_eq!(
-        configuration_from_contract(&chain).config(47).expect("parameter 47"),
-        at_ceiling,
+        raw_parameter(&chain, 47),
+        Some(eight.clone()),
+        "a policy at the ceiling was refused"
+    );
+    assert_ne!(raw_parameter(&chain, 47), Some(before), "the fixture proved nothing");
+
+    // The ninth is refused by the rule, not by the vote: the validators carried the
+    // proposal and the contract still declined to install what it asked for.
+    assert!(
+        govern_install(&mut chain, &validators, 47, controller_policy(9), 200).decided,
+        "the fixture needs a proposal the validators actually carried"
+    );
+    assert_eq!(
+        raw_parameter(&chain, 47),
+        Some(eight),
         "a ninth controller code was admitted, so the ceiling is prose"
     );
 }
