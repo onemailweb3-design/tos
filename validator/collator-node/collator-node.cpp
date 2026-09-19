@@ -20,6 +20,7 @@
 #include "tos/tos-tl.hpp"
 
 #include "block-auto.h"
+#include "block/validator-session-members.h"
 #include "block-db.h"
 #include "checksum.h"
 #include "collator-node.hpp"
@@ -126,14 +127,7 @@ void CollatorNode::new_masterchain_block_notification(td::Ref<MasterchainState> 
       td::Ref<block::ValidatorSet> vals = state->get_total_validator_set(next);
       if (vals.not_null()) {
         for (const ValidatorDescr& descr : vals->export_vector()) {
-          if (descr.addr.is_zero()) {
-            validator_adnl_ids_.insert(
-                // Only a classical descriptor can reach this; see shard-block-retainer.
-                adnl::AdnlNodeIdShort(
-                    PublicKey(pubkeys::Ed25519{descr.classical_key().as_bits256()}).compute_short_id()));
-          } else {
-            validator_adnl_ids_.insert(adnl::AdnlNodeIdShort(descr.addr));
-          }
+          validator_adnl_ids_.insert(adnl::AdnlNodeIdShort{block::validator_adnl_identity(descr)});
         }
       }
     }

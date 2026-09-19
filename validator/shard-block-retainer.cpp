@@ -14,8 +14,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include "block/validator-session-members.h"
 #include "common/delay.h"
-#include "interfaces/validator-full-id.h"
 
 #include "shard-block-retainer.hpp"
 
@@ -68,13 +68,7 @@ void ShardBlockRetainer::update_masterchain_state(td::Ref<MasterchainState> stat
         continue;
       }
       for (auto& val : vset->export_vector()) {
-        adnl::AdnlNodeIdShort adnl_id{val.addr};
-        if (adnl_id.is_zero()) {
-          // Only a classical descriptor can reach this: a post-quantum one always
-          // carries an explicit address, so a consensus key never becomes a transport id.
-          adnl_id = adnl::AdnlNodeIdShort{ValidatorFullId{val.classical_key()}.short_id()};
-        }
-        validator_adnl_ids_.insert(adnl_id);
+        validator_adnl_ids_.insert(adnl::AdnlNodeIdShort{block::validator_adnl_identity(val)});
       }
     }
     LOG(INFO) << "Updating validator set: " << validator_adnl_ids_.size() << " adnl ids";
