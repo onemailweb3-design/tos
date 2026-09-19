@@ -544,20 +544,17 @@ impl VoteOfferCastCmd {
         }
 
         // --- Build and sign the vote ---
-        println!("{}", "Signing vote...".cyan());
-        let unsigned_body =
-            config_contract::messages::unsigned_vote(validator_idx, &proposal.hash)?;
+        let _ = (&client, &key_id);
+        anyhow::bail!(
+            "a configuration vote is authorised by the current post-quantum validator set, \
+             and producing one needs two things this node cannot yet supply: a signature \
+             from its ML-DSA-44 consensus key, and the hash of the stored ConfigParam 34 \
+             cell that the vote is bound to. The control protocol carries neither, so the \
+             vote is not sent rather than sent in a form the chain refuses"
+        );
 
-        let signature = client
-            .sign(&SignRq { key_hash: key_id, data: unsigned_body.data().to_vec() })
-            .await
-            .context("sign vote")?;
-        println!("  {} Vote signed", "OK".green().bold());
-
-        // Build the signed vote message body
-        let query_id = 0u64;
-        let vote_body =
-            config_contract::messages::signed_vote(query_id, &unsigned_body, &signature)?;
+        #[allow(unreachable_code)]
+        let vote_body: chain_block::Cell = unreachable!();
 
         // --- Send via wallet ---
         println!("{}", "Sending vote transaction...".cyan());
