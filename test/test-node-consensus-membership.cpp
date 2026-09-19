@@ -29,7 +29,9 @@
 
 #include "tos/tos-types.h"
 
+#include <cstring>
 #include <cstdio>
+#include <memory>
 #include <set>
 #include <utility>
 #include <vector>
@@ -89,36 +91,53 @@ int main() {
   }
 
   // A post-quantum validator: its identity has nothing to do with any Ed25519 key, and
-  // membership follows what this node custodies for it.
+  // membership follows the consensus key this node actually holds. Custody is taken by
+  // handing over a key store, so these cases have to generate real keys; naming an
+  // identity and a key identity is not something the type allows.
   {
+    auto held_store = std::make_shared<const tos::pq::ValidatorPQKeyStore>(
+        tos::pq::ValidatorPQKeyStore::from_seed(std::string(32, '\x01')).value());
+    auto other_store = std::make_shared<const tos::pq::ValidatorPQKeyStore>(
+        tos::pq::ValidatorPQKeyStore::from_seed(std::string(32, '\x02')).value());
+
+    auto key_id_of = [](const tos::pq::ValidatorPQKeyStore& store) {
+      td::Bits256 out;
+      const auto& raw = store.consensus_key().key_id;
+      std::memcpy(out.data(), raw.data(), raw.size());
+      return tos::ConsensusKeyId{out};
+    };
     const auto pq_id = tos::ValidatorId{bits_with_first_byte(0xa0)};
-    const auto held_key = tos::ConsensusKeyId{bits_with_first_byte(0xb0)};
-    const auto rotated_key = tos::ConsensusKeyId{bits_with_first_byte(0xb1)};
+    const auto held_key = key_id_of(*held_store);
+
+    // The set records the key this node holds.
     std::vector<ValidatorDescr> pq_nodes;
-    pq_nodes.emplace_back(pq_id, /*algorithm_id=*/1, held_key, std::string(1312, '\x01'), /*weight=*/1,
-                          bits_with_first_byte(0xc0));
+    pq_nodes.emplace_back(pq_id, /*algorithm_id=*/1, held_key, held_store->consensus_key().public_key,
+                          /*weight=*/1, bits_with_first_byte(0xc0));
     block::ValidatorSet pq_set(/*cc_seqno=*/0, ShardIdFull{masterchainId}, std::move(pq_nodes));
 
-    // Holding the key the set records for that validator is what makes this node it.
-    validator::PqConsensusCustody holding{{pq_id, held_key}};
+    validator::PqConsensusCustody holding;
+    holding.install(pq_id, held_store);
     expect("pq_custodied_key_is_member", validator::node_validator_membership(pq_set, {}, {}, holding), true, true);
 
-    // Holding a key that is no longer the one recorded does not: a validator that has
-    // rotated away from this key is not us any more.
-    validator::PqConsensusCustody stale{{pq_id, rotated_key}};
+    // Holding a different key for that validator does not: a validator that has rotated
+    // away from this key is not us any more, and the key identity is read from the key
+    // rather than taken on our word.
+    validator::PqConsensusCustody stale;
+    stale.install(pq_id, other_store);
     expect("pq_stale_key_is_not_member", validator::node_validator_membership(pq_set, {}, {}, stale), true, false);
 
     // The back door this phase exists to close: every Ed25519 key in the world, and no
     // custody, must not make this node a post-quantum consensus validator. The keys
-    // offered here include one whose identity is the validator's own identity, which is
-    // exactly what the old membership rule would have accepted.
+    // offered here include ones whose identities are the validator's own identity and
+    // its key identity, which is exactly what the old membership rule would have taken.
     std::set<PublicKeyHash> every_ed25519{member_key, outsider_key, PublicKeyHash{pq_id.value},
                                           PublicKeyHash{held_key.value}};
     expect("ed25519_keys_alone_are_not_pq_membership",
            validator::node_validator_membership(pq_set, every_ed25519, every_ed25519, {}), true, false);
 
-    // And custody for some other validator is not custody for this one.
-    validator::PqConsensusCustody elsewhere{{tos::ValidatorId{bits_with_first_byte(0xa9)}, held_key}};
+    // And holding the right key for some other validator is not holding it for this one.
+    validator::PqConsensusCustody elsewhere;
+    elsewhere.install(tos::ValidatorId{bits_with_first_byte(0xa9)}, held_store);
     expect("custody_of_another_validator_is_not_membership",
            validator::node_validator_membership(pq_set, {}, {}, elsewhere), true, false);
   }

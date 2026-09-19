@@ -101,13 +101,14 @@ class ValidatorManagerImpl : public ValidatorManager {
   void del_temp_key(PublicKeyHash key, td::Promise<td::Unit> promise) override {
     UNREACHABLE();
   }
-  void add_pq_consensus_key(tos::ValidatorId validator_id, tos::ConsensusKeyId key_id,
+  void add_pq_consensus_key(tos::ValidatorId validator_id,
+                            std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store,
                             td::Promise<td::Unit> promise) override {
-    pq_custody_[validator_id] = key_id;
+    pq_custody_.install(validator_id, std::move(store));
     promise.set_value(td::Unit());
   }
   void del_pq_consensus_key(tos::ValidatorId validator_id, td::Promise<td::Unit> promise) override {
-    pq_custody_.erase(validator_id);
+    pq_custody_.remove(validator_id);
     promise.set_value(td::Unit());
   }
 

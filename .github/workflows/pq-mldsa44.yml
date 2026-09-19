@@ -9,6 +9,8 @@ on:
       - 'CMakeLists.txt'
       - 'test/pq-mldsa44/**'
       - 'test/pq-native/**'
+      - 'validator/node-consensus-status.h'
+      - 'test/test-node-consensus-membership.cpp'
       - 'tosctl/src/block/**'
       - 'tosctl/src/tl/**'
       - 'tl/generate/scheme/**'
@@ -49,7 +51,7 @@ jobs:
           cmake -LA -N build | grep -E '(CMAKE_.*COMPILER|CMAKE_BUILD_TYPE|TOS_ARCH)'
           cmake --build build --target test-pq-mldsa44 test-pq-mldsa44-wrapper \
             test-pq-consensus test-pq-signer test-pq-bytes test-validator-descr-tags \
-            test-validator-identity \
+            test-validator-identity test-node-consensus-membership \
             func fift tol -j2
       - name: Verify PQ consensus identity, signer and PQBytes codec
         id: n1
@@ -63,6 +65,7 @@ jobs:
         run: |
           build/crypto/pq/test-validator-descr-tags
           build/crypto/pq/test-validator-identity
+          build/test-node-consensus-membership
       - name: Prepare pinned public vectors
         id: vectors
         run: python3 test/pq-mldsa44/prepare_vectors.py --out pq-results

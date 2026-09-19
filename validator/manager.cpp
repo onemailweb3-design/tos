@@ -300,7 +300,7 @@ td::actor::Task<> ValidatorManagerImpl::validated_accepted_block_broadcast(Block
 
 td::actor::Task<> ValidatorManagerImpl::generate_shard_block_description(BlockIdExt block_id,
                                                                          Ref<block::BlockSignatureSet> sig_set) {
-  if (!is_validator()) {
+  if (!has_local_validator_keys()) {
     co_return td::Unit{};
   }
   if (!shard_client_handle_ || shard_client_handle_->unix_time() <= (UnixTime)td::Clocks::system() - 60) {
@@ -505,7 +505,7 @@ td::actor::Task<> ValidatorManagerImpl::new_external_message_broadcast(td::Buffe
   }
   auto r_check_result =
       co_await td::actor::ask(ext_message_pool_, &ExtMessagePool::check_add_external_message, std::move(data), priority,
-                              /* add_to_mempool = */ is_validator() || !collator_nodes_.empty(), std::move(source_peer))
+                              /* add_to_mempool = */ has_local_validator_keys() || !collator_nodes_.empty(), std::move(source_peer))
           .wrap();
   if (r_check_result.is_error()) {
     VLOG(VALIDATOR_DEBUG) << "Dropping external message broadcast (prio=" << priority
@@ -528,7 +528,7 @@ td::actor::Task<> ValidatorManagerImpl::new_external_message_query(td::BufferSli
                                                                    td::optional<PublicKeyHash> source_peer) {
   auto [message, wait_allow_broadcast] = co_await td::actor::ask(
       ext_message_pool_, &ExtMessagePool::check_add_external_message, std::move(data), 0,
-      /* add_to_mempool = */ is_validator() || !collator_nodes_.empty(), std::move(source_peer));
+      /* add_to_mempool = */ has_local_validator_keys() || !collator_nodes_.empty(), std::move(source_peer));
   new_external_message_query_cont(std::move(message), std::move(wait_allow_broadcast)).start().detach();
   co_return td::Unit{};
 }
@@ -555,7 +555,7 @@ void ValidatorManagerImpl::new_shard_block_description_broadcast(BlockIdExt bloc
     VLOG(VALIDATOR_DEBUG) << "dropping shard block description broadcast: not inited";
     return;
   }
-  if (!is_validator() && !opts_->need_monitor(block_id.shard_full(), last_masterchain_state_)) {
+  if (!has_local_validator_keys() && !opts_->need_monitor(block_id.shard_full(), last_masterchain_state_)) {
     return;
   }
   if (cached_checked_shard_block_descriptions_.contains(block_id)) {
@@ -674,7 +674,7 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
     co_return td::Unit{};
   }
 
-  if (!finality.block_id.is_masterchain() && finality.sig_set->is_final() && is_validator()) {
+  if (!finality.block_id.is_masterchain() && finality.sig_set->is_final() && has_local_validator_keys()) {
     generate_shard_block_description(finality.block_id, finality.sig_set).start().detach();
   }
   if (!finality.block_id.is_masterchain() && finality.sig_set->is_final()) {
@@ -710,7 +710,7 @@ void ValidatorManagerImpl::add_shard_block_description(td::Ref<ShardTopBlockDesc
                               desc->catchain_seqno());
     }
   }
-  if (!is_validator() && !opts_->nonfinal_ls_queries_enabled()) {
+  if (!has_local_validator_keys() && !opts_->nonfinal_ls_queries_enabled()) {
     return;
   }
   auto it = shard_blocks_.find(ShardTopBlockDescriptionId{desc->shard(), desc->catchain_seqno()});
@@ -3292,7 +3292,7 @@ void ValidatorManagerImpl::update_shards() {
   }
   if (!serializer_.empty()) {
     td::actor::send_closure(serializer_, &AsyncStateSerializer::auto_disable_serializer,
-                            (is_validator() || !collator_nodes_.empty()) &&
+                            (has_local_validator_keys() || !collator_nodes_.empty()) &&
                                 last_masterchain_state_->get_global_id() == 1);  // TOS mainnet only
   }
   init_shard_block_verifier(mc_validator_adnl_id);
@@ -3441,7 +3441,6 @@ std::vector<adnl::AdnlNodeIdShort> ValidatorManagerImpl::get_all_validator_adnl_
       continue;
     }
     for (const auto &descr : total_set->export_vector()) {
-      auto key_hash = ValidatorFullId{descr.classical_key()}.compute_short_id();
       result.emplace_back(block::validator_adnl_identity(descr));
     }
   }
@@ -3777,7 +3776,7 @@ void ValidatorManagerImpl::get_archive_slice(td::uint64 archive_id, td::uint64 o
   td::actor::send_closure(db_, &Db::get_archive_slice, archive_id, offset, limit, std::move(promise));
 }
 
-bool ValidatorManagerImpl::is_validator() {
+bool ValidatorManagerImpl::has_local_validator_keys() {
   return temp_keys_.size() > 0 || permanent_keys_.size() > 0 || !pq_custody_.empty();
 }
 
@@ -3807,7 +3806,7 @@ bool ValidatorManagerImpl::is_shard_collator(ShardIdFull shard) {
       return true;
     }
   }
-  return is_validator() && opts_->get_collators_list()->self_collate;
+  return has_local_validator_keys() && opts_->get_collators_list()->self_collate;
 }
 
 bool ValidatorManagerImpl::Collator::can_collate_shard(ShardIdFull shard) const {
@@ -3922,14 +3921,14 @@ void ValidatorManagerImpl::prepare_stats(td::Promise<std::vector<std::pair<std::
                                                               << " error:" << total_validated_blocks_master_error_);
   vec.emplace_back("total.validated_blocks.shard", PSTRING() << "ok:" << total_validated_blocks_shard_ok_
                                                              << " error:" << total_validated_blocks_shard_error_);
-  if (is_validator()) {
+  if (has_local_validator_keys()) {
     vec.emplace_back("active_validator_groups", PSTRING() << "master:" << active_validator_groups_master_
                                                           << " shard:" << active_validator_groups_shard_);
   }
   vec.emplace_back("active_observer_groups", td::to_string(observer_groups_.size()));
 
   bool serializer_enabled = opts_->get_state_serializer_enabled();
-  if (is_validator() && last_masterchain_state_.not_null() && last_masterchain_state_->get_global_id() == 1) {
+  if (has_local_validator_keys() && last_masterchain_state_.not_null() && last_masterchain_state_->get_global_id() == 1) {
     serializer_enabled = false;
   }
   vec.emplace_back("stateserializerenabled", serializer_enabled ? "true" : "false");

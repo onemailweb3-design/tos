@@ -376,13 +376,14 @@ class ValidatorManagerImpl : public ValidatorManager {
   // what makes it that validator; the Ed25519 setters above cannot. The key identity is
   // recorded so membership lapses on its own once the set records a different one,
   // rather than a node continuing to act for a validator that has rotated away from it.
-  void add_pq_consensus_key(tos::ValidatorId validator_id, tos::ConsensusKeyId key_id,
+  void add_pq_consensus_key(tos::ValidatorId validator_id,
+                            std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store,
                             td::Promise<td::Unit> promise) override {
-    pq_custody_[validator_id] = key_id;
+    pq_custody_.install(validator_id, std::move(store));
     promise.set_value(td::Unit());
   }
   void del_pq_consensus_key(tos::ValidatorId validator_id, td::Promise<td::Unit> promise) override {
-    pq_custody_.erase(validator_id);
+    pq_custody_.remove(validator_id);
     promise.set_value(td::Unit());
   }
 
@@ -647,7 +648,13 @@ class ValidatorManagerImpl : public ValidatorManager {
   td::actor::Task<> finish_start_up();
   td::actor::Task<> start_up_advance_mc();
 
-  bool is_validator();
+  // Whether this node holds any validator keys at all, which decides operational
+  // behaviour such as mempool admission, monitoring and non-final queries.
+  //
+  // This is NOT consensus membership and must never be used as it. Holding an Ed25519
+  // network or operator key says nothing about whether this node is a validator in a
+  // given set; get_validator() and local_consensus_member() answer that, from custody.
+  bool has_local_validator_keys();
   bool validating_masterchain();
   PublicKeyHash get_validator(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set);
   bool is_shard_collator(ShardIdFull shard);

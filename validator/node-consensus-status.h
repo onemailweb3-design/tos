@@ -18,12 +18,15 @@
 */
 #pragma once
 
+#include <cstring>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <utility>
 
 #include "block/validator-set.h"
+#include "crypto/pq/consensus-pq-signer.h"
 #include "keys/keys.hpp"
 
 namespace tos::validator {
@@ -38,11 +41,42 @@ namespace tos::validator {
 // temp_/permanent_ sets each call), so it can never go stale against an online key change.
 // Membership here is set membership of a configured identity; it does NOT assert that the
 // node is actively signing or has recovered full consensus participation.
-// What this node holds for a post-quantum validator: for a validator identity it is
-// custodian of, the identity of the consensus key it actually has. Holding the key for
-// an identity is what makes a node that validator, and the key must still be the one
-// the set records, so a stale key does not keep a node validating.
-using PqConsensusCustody = std::map<tos::ValidatorId, tos::ConsensusKeyId>;
+// The post-quantum consensus keys this node actually holds, by the validator identity
+// each belongs to.
+//
+// An entry cannot be made by naming an identity and a key identity: it takes the key
+// store itself, and the key identity is read back out of the key rather than supplied.
+// That is the difference between custodying a key and claiming to. A node that cannot
+// sign for a validator must not conclude that it is that validator.
+class PqConsensusCustody {
+ public:
+  void install(const tos::ValidatorId& validator_id, std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store) {
+    if (store) {
+      stores_[validator_id] = std::move(store);
+    }
+  }
+  void remove(const tos::ValidatorId& validator_id) {
+    stores_.erase(validator_id);
+  }
+  bool empty() const {
+    return stores_.empty();
+  }
+  // The identity of the key held for this validator, derived from the key itself when
+  // the store was built. Nothing here is taken on the caller's word.
+  std::optional<tos::ConsensusKeyId> held_key_id(const tos::ValidatorId& validator_id) const {
+    auto it = stores_.find(validator_id);
+    if (it == stores_.end()) {
+      return std::nullopt;
+    }
+    td::Bits256 key_id;
+    const auto& raw = it->second->consensus_key().key_id;
+    std::memcpy(key_id.data(), raw.data(), raw.size());
+    return tos::ConsensusKeyId{key_id};
+  }
+
+ private:
+  std::map<tos::ValidatorId, std::shared_ptr<const tos::pq::ValidatorPQKeyStore>> stores_;
+};
 
 // The validator identity this node is a member of `set` as, if any.
 //
@@ -57,8 +91,8 @@ inline std::optional<tos::ValidatorId> local_consensus_member(const block::Valid
                                                               const PqConsensusCustody& pq_custody) {
   for (const auto& descr : set.export_vector()) {
     if (descr.is_pq()) {
-      auto held = pq_custody.find(descr.validator_id);
-      if (held != pq_custody.end() && held->second == descr.key_id) {
+      auto held = pq_custody.held_key_id(descr.validator_id);
+      if (held && *held == descr.key_id) {
         return descr.validator_id;
       }
       continue;
