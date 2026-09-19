@@ -92,6 +92,41 @@ int pq::controller_admitted?(cell codes, int code_hash) inline {
   return found;
 }
 
+;; The stake standing behind each admitted controller code.
+;;
+;; Retiring a code has to take its stake out of the election's accounting, and scanning
+;; every member on every stake would make that cost grow with the set. The aggregate is
+;; keyed by the code, of which there are at most eight, so a retirement takes effect by
+;; the sum skipping one key.
+cell pq::add_stake_by_code(cell by_code, int code_hash, int delta) {
+  (slice current, int found) = by_code.udict_get?(256, code_hash);
+  int total = found ? current~load_tomis() : 0;
+  total += delta;
+  throw_if(pq::error::malformed_key, total < 0);
+  by_code~udict_set_builder(256, code_hash, begin_cell().store_tomis(total));
+  return by_code;
+}
+
+;; What the election counts: the stake behind codes the configuration still admits.
+int pq::effective_stake(cell by_code, cell admitted) {
+  int total = 0;
+  int key = -1;
+  int scanning = true;
+  while (scanning) {
+    (int next, slice entry, int found) = admitted.udict_get_next?(256, key);
+    if (found) {
+      (slice standing, int present) = by_code.udict_get?(256, next);
+      if (present) {
+        total += standing~load_tomis();
+      }
+      key = next;
+    } else {
+      scanning = false;
+    }
+  }
+  return total;
+}
+
 ;; validator_pq#b3 validator_id:bits256 algorithm_id:uint16 key_id:bits256
 ;;   public_key:^Cell weight:uint64 adnl_addr:bits256 = ValidatorDescr;
 ;;

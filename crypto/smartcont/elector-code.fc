@@ -40,15 +40,19 @@ _ unpack_elect(elect) inline_ref {
   ;; written back.
   cell pq_members = null();
   cell pq_key_owner = null();
+  cell pq_by_code = null();
   ifnot (es.slice_empty?()) {
     pq_members = es~load_dict();
     pq_key_owner = es~load_dict();
+    pq_by_code = es~load_dict();
   }
   es.end_parse();
-  return (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner);
+  return (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members,
+          pq_key_owner, pq_by_code);
 }
 
-cell pack_elect(elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) inline_ref {
+cell pack_elect(elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members,
+                pq_key_owner, pq_by_code) inline_ref {
   return begin_cell()
     .store_uint(elect_at, 32)
     .store_uint(elect_close, 32)
@@ -59,6 +63,9 @@ cell pack_elect(elect_at, elect_close, min_stake, total_stake, members, failed, 
     .store_int(finished, 1)
     .store_dict(pq_members)
     .store_dict(pq_key_owner)
+    ;; The stake standing behind each admitted controller code, so retiring one takes its
+    ;; stake out of the election without walking every member.
+    .store_dict(pq_by_code)
   .end_cell();
 }
 
@@ -248,7 +255,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     return return_stake(s_addr, query_id, 6);
   }
   ;; parse current election data
-  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) = elect.unpack_elect();
+  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner, pq_by_code) = elect.unpack_elect();
   ;; elect_at~dump();
   msg_value -= 1000000000;   ;; deduct TM$1 for sending confirmation
   if ((msg_value << 12) < total_stake) {
@@ -289,7 +296,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     .store_uint(src_addr, 256)
     .store_uint(adnl_addr, 256));
   ;; gather and save election data
-  elect = pack_elect(elect_at, elect_close, min_stake, total_stake, members, false, false, pq_members, pq_key_owner);
+  elect = pack_elect(elect_at, elect_close, min_stake, total_stake, members, false, false, pq_members, pq_key_owner, pq_by_code);
   set_data(begin_cell().store_dict(elect).store_slice(ds).end_cell());
   ;; return confirmation message
   if (query_id) {
@@ -334,16 +341,8 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     return return_stake(s_addr, query_id, 7);
   }
 
-  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) = elect.unpack_elect();
+  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner, pq_by_code) = elect.unpack_elect();
   msg_value -= 1000000000;   ;; deduct TM$1 for sending confirmation
-  if ((msg_value << 12) < total_stake) {
-    ;; stake smaller than 1/4096 of the total accumulated stakes, return
-    return return_stake(s_addr, query_id, 2);
-  }
-  ;; The running total counts the money this message brings, and is taken before the
-  ;; stake already placed is merged below: a top-up that re-counted what it merges would
-  ;; let an election reach the minimum total stake on money nobody placed.
-  total_stake += msg_value;
   if (stake_at != elect_at) {
     return return_stake(s_addr, query_id, 3);
   }
@@ -383,9 +382,20 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   ifnot (have_policy) {
     return return_stake(s_addr, query_id, 11);
   }
+  ;; The floor under a stake is measured against the stake this election actually
+  ;; counts: what stands behind codes the configuration still admits. Classical stake
+  ;; cannot raise it, and neither can a profile that has been retired.
+  int effective = pq::effective_stake(pq_by_code, admitted_codes);
+  if ((msg_value << 12) < effective) {
+    ;; stake smaller than 1/4096 of the post-quantum stake already placed, return
+    return return_stake(s_addr, query_id, 2);
+  }
+  total_stake += msg_value;
   int controller_code = 0;
+  int placed_before = 0;
   if (registered) {
     (int placed, _, _, _, _, _, _, int held_code) = pq::unpack_member(existing);
+    placed_before = placed;
     ifnot (pq::controller_admitted?(admitted_codes, held_code)) {
       return return_stake(s_addr, query_id, 12);
     }
@@ -420,10 +430,13 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   }
   accept_message();
 
+  ;; Only the money this message brings moves the aggregate: what the member already
+  ;; placed is already counted under the same code.
+  pq_by_code = pq::add_stake_by_code(pq_by_code, controller_code, msg_value - placed_before);
   (pq_members, pq_key_owner) = pq::register_member(pq_members, pq_key_owner, validator_id, msg_value,
                                                    now(), max_factor, algorithm_id, public_key, adnl_addr,
                                                    controller_code);
-  elect = pack_elect(elect_at, elect_close, min_stake, total_stake, members, false, false, pq_members, pq_key_owner);
+  elect = pack_elect(elect_at, elect_close, min_stake, total_stake, members, false, false, pq_members, pq_key_owner, pq_by_code);
   set_data(begin_cell().store_dict(elect).store_slice(ds).end_cell());
   if (query_id) {
     return send_confirmation(s_addr, query_id, 0);
@@ -510,7 +523,7 @@ _ unfreeze_all(credits, past_elections, elect_id) inline_ref {
     ;; or no elections active (or just completed)
     return ();
   }
-  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) = elect.unpack_elect();
+  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner, pq_by_code) = elect.unpack_elect();
   if ((elect_at != query_id) | ~ finished) {
     ;; not these elections, or elections not finished yet
     return ();
@@ -959,7 +972,7 @@ _ compute_total_stake(l, n, m_stake) inline_ref {
 }
 
 int conduct_elections(ds, elect, credits) impure {
-  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) = elect.unpack_elect();
+  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner, pq_by_code) = elect.unpack_elect();
   if (now() < elect_close) {
     ;; elections not finished yet
     return false;
@@ -990,7 +1003,7 @@ int conduct_elections(ds, elect, credits) impure {
   ;; pack elections; if cnt==0, set failed=true, finished=false.
   failed = (cnt == 0);
   finished = ~ failed;
-  elect = pack_elect(elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner);
+  elect = pack_elect(elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner, pq_by_code);
   ifnot (cnt) {
     ;; elections failed, set elect_failed to true
     set_data(begin_cell().store_dict(elect).store_dict(credits).store_slice(ds).end_cell());
@@ -1086,7 +1099,7 @@ int cell_hash_eq?(cell vset, int expected_vset_hash) inline_ref {
 }
 
 int validator_set_installed(ds, elect, credits) impure {
-  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) = elect.unpack_elect();
+  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner, pq_by_code) = elect.unpack_elect();
   ifnot (finished) {
     ;; elections not finished yet
     return false;
@@ -1169,7 +1182,7 @@ int announce_new_elections(ds, elect, credits) {
   var elect_at = t + elect_begin_before;
   ;; elect_at~dump();
   var elect_close = elect_at - elect_end_before;
-  elect = pack_elect(elect_at, elect_close, min_stake, 0, new_dict(), false, false, new_dict(), new_dict());
+  elect = pack_elect(elect_at, elect_close, min_stake, 0, new_dict(), false, false, new_dict(), new_dict(), new_dict());
   set_data(begin_cell().store_dict(elect).store_dict(credits).store_slice(ds).end_cell());
   return true;
 }
@@ -1203,7 +1216,7 @@ int participates_in(int validator_pubkey) method_id {
   if (elect.null?()) {
     return 0;
   }
-  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) = elect.unpack_elect();
+  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner, pq_by_code) = elect.unpack_elect();
   var (mem, found) = members.udict_get?(256, validator_pubkey);
   return found ? mem~load_tomis() : 0;
 }
@@ -1214,7 +1227,7 @@ _ participant_list() method_id {
   if (elect.null?()) {
     return nil;
   }
-  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) = elect.unpack_elect();
+  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner, pq_by_code) = elect.unpack_elect();
   var l = nil;
   var id = (1 << 255) + ((1 << 255) - 1);
   do {
@@ -1232,7 +1245,7 @@ _ participant_list_extended() method_id {
   if (elect.null?()) {
     return (0, 0, 0, 0, nil, 0, 0);
   }
-  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner) = elect.unpack_elect();
+  var (elect_at, elect_close, min_stake, total_stake, members, failed, finished, pq_members, pq_key_owner, pq_by_code) = elect.unpack_elect();
   var l = nil;
   var id = (1 << 255) + ((1 << 255) - 1);
   do {

@@ -2848,6 +2848,129 @@ fn a_stake_carrying_another_accounts_proof_is_returned() {
     );
 }
 
+/// An account with a controller code of its own, which the sandbox's shared treasury code
+/// cannot provide: every treasury is born from the same code.
+///
+/// The account is never deployed. The elector cannot read a sender's state in any case;
+/// what it needs is a message from that address and a proof of what the address commits
+/// to, and the fixture can produce both.
+fn account_with_code(seed: u8) -> (MsgAddressInt, chain_block::Cell, chain_block::UInt256) {
+    use chain_block::{GetRepresentationHash, IBitstring, Serializable};
+    let mut code = chain_block::BuilderData::new();
+    code.append_raw(&vec![seed; 32], 256).expect("code bits");
+    let code = code.into_cell().expect("a code cell");
+    let mut data = chain_block::BuilderData::new();
+    data.append_u32(seed as u32).expect("data");
+    let state = chain_block::StateInit::with_code_and_data(
+        code.clone(),
+        data.into_cell().expect("a data cell"),
+    );
+    let root = state.write_to_new_cell().expect("state init").into_cell().expect("cell");
+    let address = MsgAddressInt::with_params(-1, root.hash(0)).expect("address");
+
+    let mut partial = chain_block::BuilderData::with_raw(root.data().to_vec(), root.bit_length())
+        .expect("the root's own bits");
+    for index in 0..root.references_count() {
+        let child = root.reference(index).expect("a child");
+        let mut branch = chain_block::BuilderData::new();
+        branch.set_type(chain_block::CellType::PrunedBranch);
+        branch.append_u8(u8::from(chain_block::CellType::PrunedBranch)).expect("the type byte");
+        branch.append_u8(1).expect("one stored hash");
+        branch.append_raw(child.repr_hash().as_slice(), 256).expect("the pruned hash");
+        branch.append_u16(child.repr_depth()).expect("the pruned depth");
+        partial
+            .checked_append_reference(branch.into_cell().expect("a pruned branch"))
+            .expect("a pruned child");
+    }
+    (address, partial.into_cell().expect("a proof"), code.repr_hash())
+}
+
+/// Send a stake from an address the fixture names, with the proof that address commits to.
+fn pq_stake_as(
+    chain: &mut Chain,
+    sender: &MsgAddressInt,
+    proof: chain_block::Cell,
+    validator: &PqValidator,
+    election: u32,
+    query_id: u64,
+    value: u64,
+) -> tos_sandbox::SendResult {
+    let global_id = match chain.blockchain.config_params().config(19).expect("parameter 19") {
+        Some(chain_block::ConfigParamEnum::ConfigParam19(id)) => id as i32,
+        _ => panic!("the chain states no network id"),
+    };
+    let validator_id = chain_block::UInt256::from_slice(&sender.address().get_bytestring(0));
+    let preimage = pq_stake_preimage(
+        global_id,
+        election,
+        0x10000,
+        &validator_id,
+        &validator.key_id(),
+        &validator.adnl,
+    );
+    let signature = validator.sign(&preimage);
+    chain
+        .blockchain
+        .send_message(
+            tos_sandbox::MessageBuilder::internal(sender, &chain.elector, value)
+                .bounce(true)
+                .body(pq_stake_body(
+                    query_id,
+                    validator,
+                    election,
+                    0x10000,
+                    &signature,
+                    Some(proof),
+                ))
+                .build(),
+        )
+        .expect("the stake is delivered")
+}
+
+/// The floor under a stake is measured over the stake the election still counts.
+///
+/// Retiring a controller code takes the stake behind it out of that measurement, which is
+/// what the aggregate exists for: the same small stake is refused as too small while a
+/// large retired profile is counted, and clears that floor once it is not.
+#[test]
+fn a_retired_profile_stops_raising_the_floor_under_everyone_else() {
+    let (mut chain, treasury, election) = open_election("pq-effective", 4_000_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let (other, other_proof, other_code) = account_with_code(0x7e);
+    let treasury_code = sender_code_hash(&chain, &treasury);
+    set_policy(&mut chain, &[treasury_code, other_code.clone()]);
+
+    assert_eq!(
+        reply(&pq_stake(
+            &mut chain,
+            &treasury,
+            &PqValidator::new(29),
+            election,
+            1,
+            3_000_000 * TOS
+        )),
+        (STAKE_ACCEPTED, 0),
+        "the fixture needs a large member"
+    );
+
+    let small = PqValidator::new(30);
+    let refused =
+        pq_stake_as(&mut chain, &other, other_proof.clone(), &small, election, 2, 100 * TOS);
+    assert_eq!(
+        reply(&refused),
+        (STAKE_RETURNED, 2),
+        "the floor was not measured over the post-quantum stake already placed"
+    );
+
+    set_policy(&mut chain, &[other_code]);
+    let after = pq_stake_as(&mut chain, &other, other_proof, &small, election, 3, 100 * TOS);
+    assert_eq!(
+        reply(&after),
+        (STAKE_RETURNED, REASON_BELOW_MINIMUM),
+        "a retired profile is still counted in the floor it raises"
+    );
+}
+
 /// Retiring a controller code stops the controllers already using it, not only new ones.
 #[test]
 fn retiring_a_controller_code_stops_the_members_that_used_it() {
