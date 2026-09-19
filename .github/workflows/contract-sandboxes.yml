@@ -63,6 +63,14 @@ jobs:
       - name: Build FunC, Fift and the zerostate tooling
         run: cmake --build build --target func fift create-state gen_fif -j2
 
+      # The post-quantum elector suite signs real ML-DSA-44 requests. Signing is
+      # deliberately absent from the node's libraries, so it shells out to the operator
+      # key tool, which is its own project.
+      - name: Build the post-quantum key tool
+        run: |
+          cmake -S crypto/pq/tools -B build-pq-key -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-pq-key -j2
+
       # Runs every file under contracts/tests/, which is where the sandbox
       # suites live. Do not narrow this to a single --test target: the point
       # is that adding a suite should not require editing CI to have it run.

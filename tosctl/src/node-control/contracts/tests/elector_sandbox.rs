@@ -1384,3 +1384,447 @@ fn a_complaint_vote_signed_by_another_validator_is_refused() {
         .expect_aborted()
         .expect_exit_code(ERROR_BAD_VOTE_SIGNATURE);
 }
+
+// ---------------------------------------------------------------------------
+// Post-quantum staking
+//
+// A separate operation, never a reinterpretation of the classical one. The request
+// carries a key and a signature; the contract supplies both identities itself -- the
+// validator is the account that sent the message, and the key identity is derived from
+// the key presented -- so a request cannot name one validator while carrying another's
+// key.
+// ---------------------------------------------------------------------------
+
+const PQ_STAKE_OP: u32 = 0x5051_7374;
+const PQ_STAKE_SIGN_TAG: u32 = 0x5051_5354;
+const ELECTION_CONTEXT: &[u8] = b"TOS-VALIDATOR-ELECTION-v1";
+const MLDSA44_PUBLIC_KEY_BYTES: usize = 1312;
+/// `return_stake` reason 7: no transport address was stated.
+const REASON_NO_ADNL: u32 = 7;
+
+/// The key tool from `crypto/pq/tools`. Signing is deliberately absent from the node's
+/// libraries, so a test that needs a signature shells out to the tool operators use.
+fn key_tool() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("PQ_KEY_TOOL") {
+        return std::path::PathBuf::from(path);
+    }
+    let root = std::env::var("TOS_ROOT").map(std::path::PathBuf::from).unwrap_or_else(|_| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(4)
+            .expect("repository root")
+            .to_path_buf()
+    });
+    for candidate in ["build-pq-key/tos-pq-key", "build/tos-pq-key"] {
+        let path = root.join(candidate);
+        if path.exists() {
+            return path;
+        }
+    }
+    panic!(
+        "the ML-DSA-44 key tool is needed for post-quantum staking: build it with \
+         `cmake -S crypto/pq/tools -B build-pq-key && cmake --build build-pq-key`, \
+         or point PQ_KEY_TOOL at it"
+    );
+}
+
+fn run_key_tool(args: &[&str]) -> Vec<String> {
+    let out =
+        std::process::Command::new(key_tool()).args(args).output().expect("the key tool runs");
+    assert!(out.status.success(), "the key tool failed: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).lines().map(|line| line.trim().to_string()).collect()
+}
+
+/// A post-quantum validator: a key of its own, and the transport address it claims.
+struct PqValidator {
+    key_file: std::path::PathBuf,
+    public_key: Vec<u8>,
+    adnl: [u8; 32],
+}
+
+impl PqValidator {
+    fn new(index: u8) -> Self {
+        let key_file = std::env::temp_dir().join(format!("tos-pq-elector-test-{index}.key"));
+        if !key_file.exists() {
+            run_key_tool(&["keygen", key_file.to_str().expect("path")]);
+        }
+        let public_key =
+            hex::decode(&run_key_tool(&["public", key_file.to_str().expect("path")])[0])
+                .expect("hex");
+        assert_eq!(public_key.len(), MLDSA44_PUBLIC_KEY_BYTES);
+        PqValidator { key_file, public_key, adnl: [0xd0 ^ index; 32] }
+    }
+
+    fn sign(&self, message: &[u8]) -> Vec<u8> {
+        let signature = hex::decode(
+            &run_key_tool(&[
+                "sign",
+                self.key_file.to_str().expect("path"),
+                &hex::encode(message),
+                &hex::encode(ELECTION_CONTEXT),
+            ])[0],
+        )
+        .expect("hex");
+        assert_eq!(signature.len(), 2420);
+        signature
+    }
+
+    fn key_id(&self) -> chain_block::UInt256 {
+        chain_block::derive_consensus_key_id(1, &self.public_key)
+    }
+}
+
+fn stored_bytes(bytes: &[u8]) -> chain_block::Cell {
+    chain_block::pq_bytes::pack_pq_bytes(bytes, chain_block::pq_bytes::PQ_BYTES_HARD_MAX)
+        .expect("bytes of admitted length")
+}
+
+/// The 114 bytes a stake request signs, built here independently of the contract.
+fn pq_stake_preimage(
+    global_id: i32,
+    stake_at: u32,
+    max_factor: u32,
+    validator_id: &chain_block::UInt256,
+    key_id: &chain_block::UInt256,
+    adnl: &[u8; 32],
+) -> Vec<u8> {
+    chain_block::pq_elector::stake_preimage(
+        global_id,
+        stake_at,
+        max_factor,
+        validator_id,
+        1,
+        key_id,
+        &chain_block::UInt256::from(*adnl),
+    )
+}
+
+fn pq_stake_body(
+    query_id: u64,
+    validator: &PqValidator,
+    stake_at: u32,
+    max_factor: u32,
+    signature: &[u8],
+) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(PQ_STAKE_OP).expect("operation");
+    body.append_u64(query_id).expect("query id");
+    body.append_u16(1).expect("algorithm");
+    body.checked_append_reference(stored_bytes(&validator.public_key)).expect("public key");
+    body.append_u32(stake_at).expect("election");
+    body.append_u32(max_factor).expect("max factor");
+    body.append_raw(&validator.adnl, 256).expect("adnl address");
+    body.checked_append_reference(stored_bytes(signature)).expect("signature");
+    body.into_cell().expect("stake body")
+}
+
+/// The post-quantum instruction is gated on global version 16, and the zerostate declares
+/// 14. Raising it here is what N3 assumes and the activation gate will make true; the
+/// classical tests above stay on the zerostate's version, which is what keeps them
+/// evidence about the chain as it is.
+fn raise_to_post_quantum_version(chain: &mut Chain) {
+    let mut config = chain.blockchain.config_params().clone();
+    let version = match config.config(8).expect("parameter 8") {
+        Some(chain_block::ConfigParamEnum::ConfigParam8(v)) => v.global_version,
+        _ => panic!("the chain states no global version"),
+    };
+    assert!(version.version < 16, "the fixture is raising a version that is already there");
+    config
+        .set_config(chain_block::ConfigParamEnum::ConfigParam8(chain_block::ConfigParam8 {
+            global_version: chain_block::GlobalVersion { version: 16, ..version },
+        }))
+        .expect("set the global version");
+    chain.blockchain.set_config(config).expect("the chain adopts the version");
+}
+
+/// Send a post-quantum stake, signing for whichever sender is named.
+fn pq_stake_from(
+    chain: &mut Chain,
+    from: &tos_sandbox::Treasury,
+    signed_for: &tos_sandbox::Treasury,
+    validator: &PqValidator,
+    election: u32,
+    query_id: u64,
+    value: u64,
+) -> tos_sandbox::SendResult {
+    let global_id = match chain.blockchain.config_params().config(19).expect("parameter 19") {
+        Some(chain_block::ConfigParamEnum::ConfigParam19(id)) => id as i32,
+        _ => panic!("the chain states no network id, so nothing can sign for it"),
+    };
+    let max_factor = 0x10000;
+    let validator_id =
+        chain_block::UInt256::from_slice(&signed_for.address().address().get_bytestring(0));
+    let preimage = pq_stake_preimage(
+        global_id,
+        election,
+        max_factor,
+        &validator_id,
+        &validator.key_id(),
+        &validator.adnl,
+    );
+    let signature = validator.sign(&preimage);
+    chain
+        .blockchain
+        .send_message(from.build_message(
+            &chain.elector,
+            value,
+            true,
+            Some(pq_stake_body(query_id, validator, election, max_factor, &signature)),
+        ))
+        .expect("the stake is delivered")
+}
+
+fn pq_stake(
+    chain: &mut Chain,
+    from: &tos_sandbox::Treasury,
+    validator: &PqValidator,
+    election: u32,
+    query_id: u64,
+    value: u64,
+) -> tos_sandbox::SendResult {
+    let sender = from.clone();
+    pq_stake_from(chain, from, &sender, validator, election, query_id, value)
+}
+
+/// The election's post-quantum book: members by controller, and the reverse index.
+fn pq_book(chain: &Chain) -> (chain_block::HashmapE, chain_block::HashmapE) {
+    let account = chain.blockchain.get_account(&chain.elector).expect("the elector is deployed");
+    let data = account.get_data().expect("the elector has storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    let elect = next_dictionary(&mut slice, 32);
+    let root = chain_block::HashmapType::data(&elect).expect("an active election").clone();
+    let mut es = chain_block::SliceData::load_cell(root).expect("the election");
+    es.get_next_u32().expect("elect_at");
+    es.get_next_u32().expect("elect_close");
+    for _ in 0..2 {
+        let bytes = es.get_next_int(4).expect("an amount length") as usize;
+        if bytes > 0 {
+            es.get_next_bits(bytes * 8).expect("an amount");
+        }
+    }
+    next_dictionary(&mut es, 256); // classical members
+    es.get_next_bit().expect("failed");
+    es.get_next_bit().expect("finished");
+    let members = next_dictionary(&mut es, 256);
+    let key_owner = next_dictionary(&mut es, 256);
+    (members, key_owner)
+}
+
+fn pq_member_key_id(
+    chain: &Chain,
+    controller: &tos_sandbox::Treasury,
+) -> Option<chain_block::UInt256> {
+    let (members, _) = pq_book(chain);
+    let record = members.get(controller.address().address().clone()).expect("lookup")?;
+    let mut record = record;
+    let bytes = record.get_next_int(4).expect("stake length") as usize;
+    if bytes > 0 {
+        record.get_next_bits(bytes * 8).expect("stake");
+    }
+    record.get_next_u32().expect("registered at");
+    record.get_next_u32().expect("max factor");
+    record.get_next_u16().expect("algorithm");
+    Some(chain_block::UInt256::from_slice(&record.get_next_bits(256).expect("key id")))
+}
+
+fn pq_key_holder(chain: &Chain, key_id: &chain_block::UInt256) -> Option<chain_block::UInt256> {
+    let (_, key_owner) = pq_book(chain);
+    let owner = key_owner
+        .get(
+            chain_block::SliceData::load_builder(
+                chain_block::BuilderData::with_raw(key_id.as_slice().to_vec(), 256).expect("key"),
+            )
+            .expect("key slice"),
+        )
+        .expect("lookup")?;
+    let mut owner = owner;
+    Some(chain_block::UInt256::from_slice(&owner.get_next_bits(256).expect("an owner")))
+}
+
+#[test]
+fn a_signed_post_quantum_stake_registers_the_sender_as_the_validator() {
+    let (mut chain, treasury, election) = open_election("pq-validator-a", 40_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(0);
+
+    let result = pq_stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
+    result.expect_exit_code(0);
+    assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "a correctly signed stake was refused");
+
+    let controller =
+        chain_block::UInt256::from_slice(&treasury.address().address().get_bytestring(0));
+    assert_eq!(
+        pq_member_key_id(&chain, &treasury),
+        Some(validator.key_id()),
+        "the member record does not hold the key that was registered"
+    );
+    assert_eq!(
+        pq_key_holder(&chain, &validator.key_id()),
+        Some(controller),
+        "the key was not claimed by the account that sent the stake"
+    );
+}
+
+/// What the compute phase of the first transaction spent.
+fn compute_gas(result: &tos_sandbox::SendResult) -> u64 {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    match transaction.read_description().expect("description") {
+        chain_block::TransactionDescr::Ordinary(descr) => match descr.compute_ph {
+            chain_block::TrComputePhase::Vm(vm) => vm.gas_used.as_u64(),
+            other => panic!("the compute phase did not run: {other:?}"),
+        },
+        other => panic!("not an ordinary transaction: {other:?}"),
+    }
+}
+
+#[test]
+fn a_post_quantum_stake_signed_by_another_key_is_returned() {
+    let (mut chain, treasury, election) = open_election("pq-validator-b", 40_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(1);
+    let impostor = PqValidator::new(2);
+
+    // The request carries the validator's key, and a signature by a key that is not it.
+    let global_id = match chain.blockchain.config_params().config(19).expect("parameter 19") {
+        Some(chain_block::ConfigParamEnum::ConfigParam19(id)) => id as i32,
+        _ => panic!("no network id"),
+    };
+    let validator_id =
+        chain_block::UInt256::from_slice(&treasury.address().address().get_bytestring(0));
+    let preimage = pq_stake_preimage(
+        global_id,
+        election,
+        0x10000,
+        &validator_id,
+        &validator.key_id(),
+        &validator.adnl,
+    );
+    let signature = impostor.sign(&preimage);
+    let result = chain
+        .blockchain
+        .send_message(treasury.build_message(
+            &chain.elector,
+            11_000 * TOS,
+            true,
+            Some(pq_stake_body(1, &validator, election, 0x10000, &signature)),
+        ))
+        .expect("the stake is delivered");
+
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_BAD_SIGNATURE),
+        "a stake signed by another key was accepted, or refused for another reason"
+    );
+    assert_eq!(pq_member_key_id(&chain, &treasury), None, "a refused stake was registered anyway");
+}
+
+#[test]
+fn a_post_quantum_stake_signed_for_another_sender_is_returned() {
+    let (mut chain, treasury, election) = open_election("pq-validator-c", 40_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let elsewhere = chain.blockchain.treasury("pq-validator-c-elsewhere", TOS).expect("an account");
+    let validator = PqValidator::new(3);
+
+    // Signed correctly, by the right key, for a different sender. The validator identity
+    // is the account the elector sees, so this signature authorises nothing here.
+    let result =
+        pq_stake_from(&mut chain, &treasury, &elsewhere, &validator, election, 1, 11_000 * TOS);
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_BAD_SIGNATURE),
+        "a stake signed for another sender was accepted"
+    );
+    assert_eq!(pq_member_key_id(&chain, &treasury), None);
+}
+
+#[test]
+fn a_key_already_registered_by_another_controller_is_returned() {
+    let (mut chain, first, election) = open_election("pq-validator-d", 40_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let second =
+        chain.blockchain.treasury("pq-validator-d-second", 40_000 * TOS).expect("an account");
+    let validator = PqValidator::new(4);
+
+    assert_eq!(
+        reply(&pq_stake(&mut chain, &first, &validator, election, 1, 11_000 * TOS)),
+        (STAKE_ACCEPTED, 0)
+    );
+    // The second controller signs correctly for itself, with the same consensus key. Only
+    // the rule that a key belongs to one controller can refuse this.
+    let result = pq_stake(&mut chain, &second, &validator, election, 2, 11_000 * TOS);
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_ANOTHER_ADDRESS),
+        "two controllers registered the same consensus key"
+    );
+    assert_eq!(
+        pq_key_holder(&chain, &validator.key_id()),
+        Some(chain_block::UInt256::from_slice(&first.address().address().get_bytestring(0))),
+        "the refused registration moved the key"
+    );
+}
+
+#[test]
+fn a_controller_rotates_its_key_and_releases_the_one_it_held() {
+    let (mut chain, treasury, election) = open_election("pq-validator-e", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let held = PqValidator::new(5);
+    let rotated = PqValidator::new(6);
+
+    let first = pq_stake(&mut chain, &treasury, &held, election, 1, 11_000 * TOS);
+    assert_eq!(reply(&first), (STAKE_ACCEPTED, 0));
+    let registration_gas = compute_gas(&first);
+
+    let second = pq_stake(&mut chain, &treasury, &rotated, election, 2, 11_000 * TOS);
+    assert_eq!(
+        reply(&second),
+        (STAKE_ACCEPTED, 0),
+        "a rotation by the registered controller was refused"
+    );
+    let rotation_gas = compute_gas(&second);
+
+    assert_eq!(
+        pq_member_key_id(&chain, &treasury),
+        Some(rotated.key_id()),
+        "the member record still holds the key it rotated away from"
+    );
+    assert_eq!(
+        pq_key_holder(&chain, &held.key_id()),
+        None,
+        "the released key is still claimed, so nobody can ever register it"
+    );
+    assert_eq!(
+        pq_key_holder(&chain, &rotated.key_id()),
+        Some(chain_block::UInt256::from_slice(&treasury.address().address().get_bytestring(0)))
+    );
+
+    // The deferred measurements: a whole stake transaction, and a rotation, which does
+    // the same work plus the removal from the reverse index.
+    eprintln!("post-quantum stake: {registration_gas} gas; rotation: {rotation_gas} gas");
+    // The elector is a special account, allowed seventy million gas by the zerostate's
+    // masterchain prices. The point of the figure is how far under that it is.
+    assert!(
+        rotation_gas < 1_000_000,
+        "a rotation costs {rotation_gas} gas, over what an ordinary transaction may spend"
+    );
+    assert!(
+        rotation_gas >= registration_gas,
+        "a rotation does strictly more work than a registration but cost less"
+    );
+}
+
+#[test]
+fn a_post_quantum_stake_without_a_transport_address_is_returned() {
+    let (mut chain, treasury, election) = open_election("pq-validator-f", 40_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let mut validator = PqValidator::new(7);
+    validator.adnl = [0u8; 32];
+
+    let result = pq_stake(&mut chain, &treasury, &validator, election, 1, 11_000 * TOS);
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_NO_ADNL),
+        "a validator registered without a transport address, so nothing could reach it"
+    );
+}

@@ -79,6 +79,22 @@ int pq::chain_bytes(cell chain) {
   return (declared, chain);
 }
 
+const int pq::mldsa44_signature_bytes = 2420;
+
+;; A signature travels in the same shape a key is stored in: a length and a chain. The
+;; length is checked here, before the verification that costs fifty thousand gas, so a
+;; malformed signature is refused cheaply rather than paid for.
+cell pq::stored_signature(int algorithm_id, cell stored) {
+  throw_unless(pq::error::algorithm, pq::admitted_algorithm?(algorithm_id));
+  slice cs = stored.begin_parse();
+  int declared = cs~load_uint(32);
+  cell chain = cs~load_ref();
+  cs.end_parse();
+  throw_unless(pq::error::key_length, declared == pq::mldsa44_signature_bytes);
+  throw_unless(pq::error::malformed_key, pq::chain_bytes(chain) == declared);
+  return chain;
+}
+
 ;; SHA-256("TOS-PQ-CONSENSUS-KEY-v1" || u16_le(algorithm_id) || key bytes).
 ;;
 ;; The algorithm number contributes two LITTLE-endian bytes -- suite 1 is `01 00` -- while
@@ -150,6 +166,46 @@ cell pq::config_vote_context() inline {
 ;; same consensus key, because the set that would produce is one the node refuses for
 ;; duplicate key identity.
 ;; ---------------------------------------------------------------------------
+
+
+;; ---------------------------------------------------------------------------
+;; Authorisation: the frozen tags, and the exact bytes a stake request signs
+;;
+;; The layout is frozen in test/pq-native/n3-preimage-vectors.tsv, which the node's and
+;; the tooling's builders are also held to. A contract that built a different preimage
+;; would reject every correctly signed request, and the failure would look like a bad key.
+;; ---------------------------------------------------------------------------
+
+const int pq::tag::stake_op = 0x50517374;         ;; "PQst"
+const int pq::tag::stake_sign = 0x50515354;       ;; "PQST"
+const int pq::tag::config_vote_op = 0x5051766f;   ;; "PQvo"
+const int pq::tag::config_vote_sign = 0x5051564f; ;; "PQVO"
+const int pq::tag::complaint_op = 0x5051636f;     ;; "PQco"
+const int pq::tag::complaint_sign = 0x5051434f;   ;; "PQCO"
+
+;; The network this chain is, so a request signed for one network cannot be replayed on
+;; another that shares a validator's key.
+int pq::global_id() asm "GLOBALID";
+
+;; TAG u32 | global_id i32 | stake_at u32 | max_factor u32 | validator_id u256 |
+;; algorithm_id u16 | key_id u256 | adnl_addr u256   -- 114 bytes, one cell.
+;;
+;; The validator identity is the account the elector saw, and the key identity is derived
+;; from the key presented. Neither is taken from the request, which is what stops a
+;; request naming one validator while carrying another's key.
+cell pq::stake_preimage(int stake_at, int max_factor, int validator_id, int algorithm_id,
+                        int key_id, int adnl_addr) inline {
+  return begin_cell()
+    .store_uint(pq::tag::stake_sign, 32)
+    .store_int(pq::global_id(), 32)
+    .store_uint(stake_at, 32)
+    .store_uint(max_factor, 32)
+    .store_uint(validator_id, 256)
+    .store_uint(algorithm_id, 16)
+    .store_uint(key_id, 256)
+    .store_uint(adnl_addr, 256)
+  .end_cell();
+}
 
 const int pq::error::key_owned = 68;
 
