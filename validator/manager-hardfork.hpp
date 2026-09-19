@@ -104,7 +104,11 @@ class ValidatorManagerImpl : public ValidatorManager {
   void add_pq_consensus_key(tos::ValidatorId validator_id,
                             std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store,
                             td::Promise<td::Unit> promise) override {
-    pq_custody_.install(validator_id, std::move(store));
+    auto status = pq_custody_.install(validator_id, std::move(store));
+    if (status.is_error()) {
+      promise.set_error(std::move(status));
+      return;
+    }
     promise.set_value(td::Unit());
   }
   void del_pq_consensus_key(tos::ValidatorId validator_id, td::Promise<td::Unit> promise) override {

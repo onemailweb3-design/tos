@@ -26,6 +26,7 @@
 #include <utility>
 
 #include "block/validator-set.h"
+#include "td/utils/Status.h"
 #include "crypto/pq/consensus-pq-signer.h"
 #include "keys/keys.hpp"
 
@@ -50,10 +51,17 @@ namespace tos::validator {
 // sign for a validator must not conclude that it is that validator.
 class PqConsensusCustody {
  public:
-  void install(const tos::ValidatorId& validator_id, std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store) {
-    if (store) {
-      stores_[validator_id] = std::move(store);
+  // Refuses rather than accepting an absent key. Dropping it silently would leave a caller
+  // that failed to load a key believing this node custodies one, which is the same mistake
+  // as claiming an identity without holding its key. [[nodiscard]] so that ignoring the
+  // answer is not something a caller can do by habit.
+  [[nodiscard]] td::Status install(const tos::ValidatorId& validator_id,
+                                   std::shared_ptr<const tos::pq::ValidatorPQKeyStore> store) {
+    if (!store) {
+      return td::Status::Error("no post-quantum consensus key store to custody for this validator");
     }
+    stores_[validator_id] = std::move(store);
+    return td::Status::OK();
   }
   void remove(const tos::ValidatorId& validator_id) {
     stores_.erase(validator_id);

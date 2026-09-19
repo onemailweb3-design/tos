@@ -66,6 +66,13 @@ int main() {
   int failures = 0;
   // Real checks, not assert(): assert() is stripped under NDEBUG, which would make this
   // test pass without evaluating anything.
+  // The call itself has to run, which is exactly what assert() cannot promise here.
+  auto check = [&](const char *name, bool ok) {
+    if (!ok) {
+      std::printf("FAIL %s\n", name);
+      failures++;
+    }
+  };
   auto expect = [&](const char *name, std::pair<bool, bool> got, bool want_has, bool want_in) {
     if (got.first != want_has || got.second != want_in) {
       std::printf("FAIL %s: got {has_keys=%d,in_set=%d} want {%d,%d}\n", name, got.first, got.second, want_has,
@@ -116,14 +123,14 @@ int main() {
     block::ValidatorSet pq_set(/*cc_seqno=*/0, ShardIdFull{masterchainId}, std::move(pq_nodes));
 
     validator::PqConsensusCustody holding;
-    holding.install(pq_id, held_store);
+    check("custody_install_accepts_a_key", holding.install(pq_id, held_store).is_ok());
     expect("pq_custodied_key_is_member", validator::node_validator_membership(pq_set, {}, {}, holding), true, true);
 
     // Holding a different key for that validator does not: a validator that has rotated
     // away from this key is not us any more, and the key identity is read from the key
     // rather than taken on our word.
     validator::PqConsensusCustody stale;
-    stale.install(pq_id, other_store);
+    check("custody_install_accepts_a_rotated_key", stale.install(pq_id, other_store).is_ok());
     expect("pq_stale_key_is_not_member", validator::node_validator_membership(pq_set, {}, {}, stale), true, false);
 
     // The back door this phase exists to close: every Ed25519 key in the world, and no
@@ -135,15 +142,24 @@ int main() {
     expect("ed25519_keys_alone_are_not_pq_membership",
            validator::node_validator_membership(pq_set, every_ed25519, every_ed25519, {}), true, false);
 
+    // A store that failed to load is refused. Accepting it silently would leave the caller
+    // believing this node custodies a key it cannot sign with.
+    validator::PqConsensusCustody absent;
+    check("absent_key_store_is_refused", absent.install(pq_id, nullptr).is_error());
+    check("refused_store_is_not_custodied", absent.empty());
+    expect("absent_key_store_is_not_membership", validator::node_validator_membership(pq_set, {}, {}, absent), false,
+           false);
+
     // And holding the right key for some other validator is not holding it for this one.
     validator::PqConsensusCustody elsewhere;
-    elsewhere.install(tos::ValidatorId{bits_with_first_byte(0xa9)}, held_store);
+    check("custody_install_accepts_another_validators_key",
+          elsewhere.install(tos::ValidatorId{bits_with_first_byte(0xa9)}, held_store).is_ok());
     expect("custody_of_another_validator_is_not_membership",
            validator::node_validator_membership(pq_set, {}, {}, elsewhere), true, false);
   }
 
   if (failures == 0) {
-    std::printf("test-node-consensus-membership: 9/9 scenarios OK\n");
+    std::printf("test-node-consensus-membership: 10/10 scenarios OK\n");
     return 0;
   }
   std::printf("test-node-consensus-membership: %d scenario(s) FAILED\n", failures);
