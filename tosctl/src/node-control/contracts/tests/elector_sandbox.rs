@@ -2791,6 +2791,263 @@ fn the_effective_total_is_measured_over_one_profile_and_over_eight() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Votes the node itself produced
+//
+// Everything above builds a vote in the test and checks the contract accepts it, which
+// proves the contract and proves nothing about the node. These run the node's own
+// producer -- its custodied seed file, its preimage, its signer, its wire -- and require
+// the real contract to count what comes out.
+//
+// The producer is reached through `tos-pq-vote`, which is the same four calls the node
+// makes, exposed to a command line. It holds no controller root and will not sign
+// anything but a vote.
+// ---------------------------------------------------------------------------
+
+/// The node-side vote producer, built from the repository.
+fn vote_tool() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("PQ_VOTE_TOOL") {
+        return std::path::PathBuf::from(path);
+    }
+    let root = repo_root();
+    for candidate in ["build/crypto/tos-pq-vote", "build/tos-pq-vote"] {
+        let path = root.join(candidate);
+        if path.exists() {
+            return path;
+        }
+    }
+    panic!(
+        "the node's vote producer is needed: build it with `ninja -C build tos-pq-vote`, or \
+         point PQ_VOTE_TOOL at it"
+    );
+}
+
+fn repo_root() -> std::path::PathBuf {
+    std::env::var("TOS_ROOT").map(std::path::PathBuf::from).unwrap_or_else(|_| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(4)
+            .expect("repository root above the contracts crate")
+            .to_path_buf()
+    })
+}
+
+/// Provision a validator's consensus seed the way an operator does: into a directory
+/// only this process can write.
+///
+/// The keys these tests sign with live in the shared temporary directory, which anyone
+/// can write to, and the node refuses to load a key from such a place -- a directory
+/// anyone can write is a directory anyone can put a key in. Copying it here is the same
+/// step an operator takes when moving a seed onto a validator host, and it is what makes
+/// the node's own loader the thing under test rather than something to be worked around.
+fn seed_file_for(validator: &PqValidator) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let home = std::env::temp_dir().join(format!("tos-node-custody-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("a private directory for the seed");
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700))
+        .expect("only this process may write it");
+    let seed = home.join(validator.key_file.file_name().expect("the seed has a name"));
+    std::fs::copy(&validator.key_file, &seed).expect("the seed is provisioned");
+    std::fs::set_permissions(&seed, std::fs::Permissions::from_mode(0o600))
+        .expect("owner-only, as the node insists");
+    seed
+}
+
+fn run_vote_tool(arguments: &[String]) -> chain_block::Cell {
+    let out = std::process::Command::new(vote_tool())
+        .args(arguments)
+        .output()
+        .expect("the vote producer runs");
+    assert!(
+        out.status.success(),
+        "the node could not produce a vote: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let encoded = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let bytes = base64_decode(&encoded);
+    chain_block::read_single_root_boc(bytes).expect("the vote is a single cell")
+}
+
+fn base64_decode(text: &str) -> Vec<u8> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for byte in text.bytes() {
+        if byte == b'=' {
+            break;
+        }
+        let value = TABLE.iter().position(|c| *c == byte).expect("base64") as u32;
+        buffer = (buffer << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// A configuration vote the node produced, counted by the contract.
+#[test]
+fn a_vote_the_node_produced_is_counted() {
+    let (mut chain, validators, _election) = elect_install_and_rotate();
+    let proposal = propose(&mut chain, 42, 0x0de0);
+    let voter = &validators[0];
+    let idx = index_of(&chain, voter);
+
+    let body = run_vote_tool(&[
+        "config".to_string(),
+        seed_file_for(voter).to_string_lossy().into_owned(),
+        global_id(&chain).to_string(),
+        hex::encode(current_set_id(&chain)),
+        hex::encode(validator_id_at(&chain, idx)),
+        idx.to_string(),
+        hex::encode(proposal),
+    ]);
+
+    let relay = chain.blockchain.treasury("node-vote-relay", 1_000 * TOS).expect("an account");
+    let result = chain
+        .blockchain
+        .send_message(relay.build_message(&chain.config_contract, VOTE_VALUE, true, Some(body)))
+        .expect("the vote is delivered");
+    assert_eq!(exit_code_of(&result), 0, "the contract refused a vote the node produced");
+    assert_eq!(
+        proposal_voters(&chain, &proposal),
+        vec![idx],
+        "a vote the node produced was not counted"
+    );
+}
+
+/// A complaint vote the node produced, counted by the elector.
+#[test]
+fn a_complaint_vote_the_node_produced_is_counted() {
+    let (mut chain, validators, election) = elect_install_and_rotate();
+    let accused = validator_id_at(&chain, index_of(&chain, &validators[3]));
+    let complainant =
+        chain.blockchain.treasury("node-complainant", 10_000 * TOS).expect("an account");
+    let filed = chain
+        .blockchain
+        .send_message(complainant.build_message(
+            &chain.elector,
+            300 * TOS,
+            true,
+            Some(complaint_body(1, election, &accused)),
+        ))
+        .expect("the complaint is delivered");
+    assert!(replies(&filed).contains(&COMPLAINT_ACCEPTED), "the elector refused the complaint");
+    let complaint = complaint_hashes(&chain, election)[0];
+
+    let voter = &validators[0];
+    let idx = index_of(&chain, voter);
+    let body = run_vote_tool(&[
+        "complaint".to_string(),
+        seed_file_for(voter).to_string_lossy().into_owned(),
+        global_id(&chain).to_string(),
+        hex::encode(current_set_id(&chain)),
+        hex::encode(validator_id_at(&chain, idx)),
+        idx.to_string(),
+        election.to_string(),
+        hex::encode(complaint),
+    ]);
+
+    let relay = chain.blockchain.treasury("node-complaint-relay", 1_000 * TOS).expect("an account");
+    let result = chain
+        .blockchain
+        .send_message(relay.build_message(&chain.elector, VOTE_VALUE, true, Some(body)))
+        .expect("the vote is delivered");
+    assert_eq!(exit_code_of(&result), 0, "the elector refused a vote the node produced");
+    assert_eq!(
+        complaint_voters(&chain, election, &complaint),
+        vec![idx],
+        "a complaint vote the node produced was not counted"
+    );
+}
+
+/// A node holding the wrong key produces no authority.
+///
+/// The producer will sign whatever fields it is given -- it is a signer, not a judge --
+/// so what refuses this is the contract, which reads the key from the descriptor at the
+/// index the vote names. A node that had been given somebody else's seed, or whose own
+/// key had been rotated out of the set, gets no vote counted and nothing else happens.
+#[test]
+fn a_vote_the_node_produced_with_another_validators_key_is_refused() {
+    let (mut chain, validators, _election) = elect_install_and_rotate();
+    let proposal = propose(&mut chain, 42, 0x0de1);
+    let idx = index_of(&chain, &validators[0]);
+
+    // Everything names the validator at that index; only the seed is somebody else's.
+    let body = run_vote_tool(&[
+        "config".to_string(),
+        seed_file_for(&validators[1]).to_string_lossy().into_owned(),
+        global_id(&chain).to_string(),
+        hex::encode(current_set_id(&chain)),
+        hex::encode(validator_id_at(&chain, idx)),
+        idx.to_string(),
+        hex::encode(proposal),
+    ]);
+
+    let relay = chain.blockchain.treasury("wrong-key-relay", 1_000 * TOS).expect("an account");
+    chain
+        .blockchain
+        .send_message(relay.build_message(&chain.config_contract, VOTE_VALUE, true, Some(body)))
+        .expect("the vote is delivered")
+        .expect_aborted()
+        .expect_exit_code(ERROR_BAD_VOTE_SIGNATURE);
+    assert!(
+        proposal_voters(&chain, &proposal).is_empty(),
+        "a vote signed with another validator's key was counted"
+    );
+}
+
+/// A node that is not in the current set has nothing to sign for.
+///
+/// The set the election installed names four controllers. A key that belongs to none of
+/// them cannot be at any index, so there is no vote it could produce that the contract
+/// would take.
+#[test]
+fn a_key_that_is_not_in_the_set_can_produce_no_vote() {
+    let (mut chain, validators, _election) = elect_install_and_rotate();
+    let outsider = PqValidator::new(0x5f);
+    assert!(
+        !validators.iter().any(|v| v.key_id() == outsider.key_id()),
+        "the fixture needs a key the set does not hold"
+    );
+    let set = chain.blockchain.config_params().validator_set().expect("a current set");
+    for descriptor in set.list() {
+        assert_ne!(
+            descriptor.consensus_key_id().expect("a key identity"),
+            outsider.key_id(),
+            "the outsider is in the set, so this test measures nothing"
+        );
+    }
+
+    let proposal = propose(&mut chain, 42, 0x0de2);
+    let relay = chain.blockchain.treasury("outsider-relay", 1_000 * TOS).expect("an account");
+    // Every index the set has, tried with the outsider's key.
+    for idx in 0..set.list().len() as u16 {
+        let body = run_vote_tool(&[
+            "config".to_string(),
+            seed_file_for(&outsider).to_string_lossy().into_owned(),
+            global_id(&chain).to_string(),
+            hex::encode(current_set_id(&chain)),
+            hex::encode(validator_id_at(&chain, idx)),
+            idx.to_string(),
+            hex::encode(proposal),
+        ]);
+        chain
+            .blockchain
+            .send_message(relay.build_message(&chain.config_contract, VOTE_VALUE, true, Some(body)))
+            .expect("the vote is delivered")
+            .expect_aborted()
+            .expect_exit_code(ERROR_BAD_VOTE_SIGNATURE);
+    }
+    assert!(
+        proposal_voters(&chain, &proposal).is_empty(),
+        "a key the set does not hold got a vote counted at some index"
+    );
+}
+
 /// A controller policy holding `count` distinct code hashes.
 fn controller_policy(count: usize) -> chain_block::Cell {
     use chain_block::IBitstring;

@@ -194,6 +194,7 @@ set(TLB_BLOCK_AUTO
 
 set(BLOCK_SOURCE
   block/validator-session-members.cpp
+  block/pq-vote.cpp
   pq/pq-bytes.cpp
   block/Binlog.h
   block/Binlog.cpp
@@ -648,6 +649,14 @@ endif()
 if (WINGETOPT_FOUND)
   target_link_libraries_system(create-state wingetopt)
 endif()
+
+# The node's own vote producer, reachable from a command line so the bytes it makes can
+# be handed to the real contract and required to be counted. It signs a vote and nothing
+# else, and it holds no controller root.
+add_executable(tos-pq-vote pq/vote-tool.cpp)
+target_include_directories(tos-pq-vote PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>)
+target_link_libraries(tos-pq-vote PUBLIC tos_crypto tos_pq_consensus_signer)
 
 add_executable(dump-block block/dump-block.cpp)
 target_include_directories(dump-block PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
