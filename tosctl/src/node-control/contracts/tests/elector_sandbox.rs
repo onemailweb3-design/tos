@@ -310,12 +310,7 @@ fn declared_total_stake(chain: &Chain) -> u128 {
         .expect("the elector answers");
     assert_eq!(result.exit_code, 0, "participant_list_extended failed");
     assert_eq!(result.stack.len(), 7, "the election summary changed shape");
-    result.stack[3]
-        .as_integer()
-        .expect("an integer")
-        .to_string()
-        .parse()
-        .expect("a running total")
+    result.stack[3].as_integer().expect("an integer").to_string().parse().expect("a running total")
 }
 
 #[test]
@@ -2057,7 +2052,11 @@ fn a_stake_refused_without_its_key_does_not_pay_for_a_verification() {
     let refusal = compute_gas(&refused);
 
     let accepted = pq_stake(&mut chain, &treasury, &validator, election, 2, 11_000 * TOS);
-    assert_eq!(reply(&accepted), (STAKE_ACCEPTED, 0), "the fixture needs a registration to compare");
+    assert_eq!(
+        reply(&accepted),
+        (STAKE_ACCEPTED, 0),
+        "the fixture needs a registration to compare"
+    );
     let registration = compute_gas(&accepted);
 
     let classical = Validator::new(0xf7);
@@ -2341,27 +2340,47 @@ fn every_signed_field_of_a_stake_is_covered_by_its_signature() {
     };
 
     // The fixture has to be able to succeed, or every case below would pass for nothing.
-    let accepted =
-        pq_stake_signed_over(&mut chain, &treasury, &validator, election, &honest, ELECTION_CONTEXT);
+    let accepted = pq_stake_signed_over(
+        &mut chain,
+        &treasury,
+        &validator,
+        election,
+        &honest,
+        ELECTION_CONTEXT,
+    );
     assert_eq!(reply(&accepted), (STAKE_ACCEPTED, 0), "the honest fixture was refused");
 
     let cases: Vec<(&str, SignedFields, &[u8])> = vec![
-        ("another network", SignedFields { global_id: global_id ^ 1, ..honest.clone() },
-            ELECTION_CONTEXT),
-        ("another election", SignedFields { stake_at: election - 1, ..honest.clone() },
-            ELECTION_CONTEXT),
-        ("another weight factor", SignedFields { max_factor: 0x20000, ..honest.clone() },
-            ELECTION_CONTEXT),
-        ("another transport address", SignedFields { adnl: [0x5e; 32], ..honest.clone() },
-            ELECTION_CONTEXT),
-        ("another key", SignedFields { key_id: other.key_id(), ..honest.clone() },
-            ELECTION_CONTEXT),
+        (
+            "another network",
+            SignedFields { global_id: global_id ^ 1, ..honest.clone() },
+            ELECTION_CONTEXT,
+        ),
+        (
+            "another election",
+            SignedFields { stake_at: election - 1, ..honest.clone() },
+            ELECTION_CONTEXT,
+        ),
+        (
+            "another weight factor",
+            SignedFields { max_factor: 0x20000, ..honest.clone() },
+            ELECTION_CONTEXT,
+        ),
+        (
+            "another transport address",
+            SignedFields { adnl: [0x5e; 32], ..honest.clone() },
+            ELECTION_CONTEXT,
+        ),
+        (
+            "another key",
+            SignedFields { key_id: other.key_id(), ..honest.clone() },
+            ELECTION_CONTEXT,
+        ),
         // While one suite is admitted this case cannot tell a preimage that commits the
         // request's suite from one that commits the constant 1, because they are the same
         // value. What distinguishes them is a request carrying a second admitted suite,
         // which is the positive case to add on the day there is one.
-        ("another suite", SignedFields { algorithm_id: 7, ..honest.clone() },
-            ELECTION_CONTEXT),
+        ("another suite", SignedFields { algorithm_id: 7, ..honest.clone() }, ELECTION_CONTEXT),
         ("another purpose", honest.clone(), CONFIG_VOTE_CONTEXT),
     ];
 

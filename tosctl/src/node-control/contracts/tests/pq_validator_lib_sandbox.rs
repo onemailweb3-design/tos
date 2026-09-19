@@ -223,10 +223,7 @@ fn refusing_an_overlong_key_costs_what_the_declared_length_costs() {
                 "probe_key_id",
                 vec![
                     StackItem::int(1),
-                    StackItem::Cell(overlong_stored_key(
-                        MLDSA44_PUBLIC_KEY_BYTES as u32,
-                        carried,
-                    )),
+                    StackItem::Cell(overlong_stored_key(MLDSA44_PUBLIC_KEY_BYTES as u32, carried)),
                 ],
                 1_000_000_000,
             )

@@ -283,8 +283,7 @@ fn a_rotation_will_not_release_a_key_the_index_gives_to_someone_else() {
 
     // One controller's records, another's index: the record claims a key the index gives
     // to someone else.
-    let disagreeing =
-        Book { members: mine.members.clone(), key_owner: theirs.key_owner.clone() };
+    let disagreeing = Book { members: mine.members.clone(), key_owner: theirs.key_owner.clone() };
     assert_eq!(
         register(&chain, &probe, &disagreeing, 0xa1, 0x22, 0xc1).err(),
         Some(ERROR_INDEX_DISAGREES),
