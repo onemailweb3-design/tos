@@ -151,6 +151,27 @@ impl Blockchain {
         })
     }
 
+    /// Adopt a new configuration, as a block does when the configuration contract's
+    /// state changes.
+    ///
+    /// The configuration a contract reads comes from the chain, not from the
+    /// configuration contract's storage directly. Without this, a test could watch that
+    /// contract install a parameter and then watch every other contract keep reading the
+    /// old one, which is a property of the sandbox rather than of the chain.
+    pub fn set_config(&mut self, config: ConfigParams) -> SandboxResult<()> {
+        let bc_config = BlockchainConfig::with_config(config).map_err(|e| {
+            SandboxError::ConfigError(format!("failed to create BlockchainConfig: {e}"))
+        })?;
+        self.mc_state_cell = Self::build_mc_state_cell(bc_config.raw_config())?;
+        self.config = bc_config;
+        Ok(())
+    }
+
+    /// The configuration this chain is currently running under.
+    pub fn config_params(&self) -> &ConfigParams {
+        self.config.raw_config()
+    }
+
     // ------------------------------------------------------------------
     // Account management
     // ------------------------------------------------------------------

@@ -64,6 +64,7 @@ struct Chain {
     config_contract: MsgAddressInt,
     validators_until: u32,
     elect_begin_before: u32,
+    elect_end_before: u32,
 }
 
 /// The two system contracts, loaded from the zerostate into a chain that carries the same
@@ -90,6 +91,7 @@ fn launch() -> Chain {
         config_contract,
         validators_until: current.utime_until(),
         elect_begin_before: params.elections_start_before,
+        elect_end_before: params.elections_end_before,
     }
 }
 
@@ -448,5 +450,154 @@ fn the_same_key_cannot_be_staked_from_a_second_address() {
         stake_of(&chain, &validator.public_key),
         registered,
         "a refused stake changed the registration it was refused for"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Closing an election
+//
+// The elector computes a validator set, sends it to the configuration contract, and
+// forgets the election only once it sees that set installed. Three separate things, and
+// the third is the one that makes the elector's state depend on authoritative state
+// rather than on its own success at sending a message.
+// ---------------------------------------------------------------------------
+
+/// The configuration contract's answers to a proposed validator set.
+const VALIDATOR_SET_INSTALLED: u32 = 0xee764f4b;
+const VALIDATOR_SET_REFUSED: u32 = 0xee764f6f;
+
+/// The configuration a block would be built with, taken from the configuration contract's
+/// own storage. Its data is `cfg_dict:^Cell seqno:uint32 public_key:uint256 votes:^Cell`,
+/// and the chain's parameters are that first reference.
+fn configuration_from_contract(chain: &Chain) -> ConfigParams {
+    use chain_block::HashmapE;
+    let account = chain
+        .blockchain
+        .get_account(&chain.config_contract)
+        .expect("the configuration contract is deployed");
+    let data = account.get_data().expect("the configuration contract has storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    let parameters = slice.checked_drain_reference().expect("the parameter dictionary");
+    ConfigParams {
+        config_addr: chain.config_contract.address().clone(),
+        config_params: HashmapE::with_hashmap(32, Some(parameters)),
+    }
+}
+
+fn parameter_present(config: &ConfigParams, index: u32) -> bool {
+    config.config_present(index).expect("parameter lookup")
+}
+
+/// Everything a reply from either contract carries, by the address that sent it, so a
+/// cascade can be read rather than guessed at.
+fn replies(result: &tos_sandbox::SendResult) -> Vec<u32> {
+    let mut tags = Vec::new();
+    for (_, transaction) in &result.transactions {
+        transaction
+            .iterate_out_msgs(|message| {
+                if let Some(body) = message.body() {
+                    if let Ok(tag) = body.clone().get_next_u32() {
+                        tags.push(tag);
+                    }
+                }
+                Ok(true)
+            })
+            .expect("out messages");
+    }
+    tags
+}
+
+/// An election with enough validators and enough total stake to succeed: the
+/// configuration requires four participants and forty thousand TOS between them.
+fn elect_four() -> (Chain, u32, Vec<Validator>) {
+    let (mut chain, treasury, election) = open_election("validator-set-a", 200_000 * TOS);
+    let mut validators = Vec::new();
+    for index in 0..4u8 {
+        let validator = Validator::new(0x40 + index);
+        let account = chain
+            .blockchain
+            .treasury(&format!("validator-set-{index}"), 40_000 * TOS)
+            .expect("a funded account");
+        let result =
+            stake(&mut chain, &account, &validator, election, 10 + index as u64, 11_000 * TOS);
+        assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "validator {index} could not stake");
+        validators.push(validator);
+    }
+    let _ = treasury;
+    (chain, election, validators)
+}
+
+#[test]
+fn a_closed_election_sends_its_set_to_the_configuration_contract() {
+    let (mut chain, election, validators) = elect_four();
+    assert!(!parameter_present(chain.blockchain.config_params(), 36), "nothing is elected yet");
+
+    // The election closes before the set it elects takes over, by the margin the
+    // configuration states.
+    let closes = election - chain.elect_end_before;
+    chain.blockchain.set_now(closes);
+    let result =
+        chain.blockchain.tick_tock(&chain.elector, TransactionTickTock::Tick).expect("tick runs");
+    result.expect_success();
+
+    let tags = replies(&result);
+    assert!(
+        tags.contains(&VALIDATOR_SET_INSTALLED),
+        "the configuration contract did not accept the elected set: {tags:02x?}"
+    );
+    assert!(!tags.contains(&VALIDATOR_SET_REFUSED), "the configuration contract refused the set");
+
+    let installed = configuration_from_contract(&chain);
+    assert!(
+        parameter_present(&installed, 36),
+        "the configuration contract answered yes without storing the next validator set"
+    );
+    let next = installed.next_validator_set().expect("the stored set parses");
+    assert_eq!(next.list().len(), validators.len(), "every staking validator should be elected");
+}
+
+#[test]
+fn the_election_is_forgotten_only_once_the_set_is_installed() {
+    let (mut chain, election, _validators) = elect_four();
+    let closes = election - chain.elect_end_before;
+    chain.blockchain.set_now(closes);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+
+    // The set is in the configuration contract's storage, but the chain has not adopted
+    // it yet, and the elector reads the chain.
+    //
+    // The tick above conducted the election and stopped there, so it never reached the
+    // question this test is about. A second tick does, and it must find the elected set
+    // absent from the chain and keep the election. Without this tick the test would pass
+    // whatever the elector decides when it does look.
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    assert_ne!(
+        active_election_id(&chain),
+        0,
+        "the elector forgot an election whose set the chain had not adopted"
+    );
+
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts what the configuration contract installed");
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+
+    assert_eq!(
+        active_election_id(&chain),
+        0,
+        "the elector kept an election whose set is installed"
     );
 }
