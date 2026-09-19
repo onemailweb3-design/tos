@@ -8,6 +8,7 @@ on:
       - 'common/global-version.h'
       - 'CMakeLists.txt'
       - 'test/pq-mldsa44/**'
+      - 'test/pq-native/**'
       - 'tosctl/src/block/**'
       - 'doc/tvm-mldsa44*'
       - '.github/workflows/pq-mldsa44.yml'
@@ -45,7 +46,8 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake -LA -N build | grep -E '(CMAKE_.*COMPILER|CMAKE_BUILD_TYPE|TOS_ARCH)'
           cmake --build build --target test-pq-mldsa44 test-pq-mldsa44-wrapper \
-            test-pq-consensus test-pq-signer test-pq-bytes func fift tol -j2
+            test-pq-consensus test-pq-signer test-pq-bytes test-validator-descr-tags \
+            func fift tol -j2
       - name: Verify PQ consensus identity, signer and PQBytes codec
         id: n1
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -53,6 +55,9 @@ jobs:
           build/crypto/pq/test-pq-consensus
           build/crypto/pq/test-pq-signer
           build/crypto/pq/test-pq-bytes
+      - name: Verify the accepted validator-descriptor tag set
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: build/crypto/pq/test-validator-descr-tags
       - name: Prepare pinned public vectors
         id: vectors
         run: python3 test/pq-mldsa44/prepare_vectors.py --out pq-results
@@ -161,8 +166,10 @@ jobs:
           persist-credentials: false
       - name: Install the pinned Rust toolchain
         run: scripts/install-rust-toolchain.sh
-      - name: Verify the Rust PQBytes codec against the shared C++ vectors
-        run: cargo test --manifest-path tosctl/src/block/Cargo.toml --lib pq_bytes -- --nocapture
+      - name: Verify the Rust codecs against the shared C++ vectors and tag set
+        run: |
+          cargo test --manifest-path tosctl/src/block/Cargo.toml --lib pq_bytes -- --nocapture
+          cargo test --manifest-path tosctl/src/block/Cargo.toml --lib validators -- --nocapture
   determinism:
     needs: [native, sanitizers, vm-sanitizers, rust-pqbytes]
     if: always()

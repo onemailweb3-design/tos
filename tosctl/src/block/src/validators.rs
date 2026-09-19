@@ -117,17 +117,16 @@ validator#53
     public_key:SigPubKey
     weight:uint64
 = ValidatorDescr;
-validator#73
+validator_addr#73
     public_key:SigPubKey
     weight:uint64
     adnl_addr:bits256
 = ValidatorDescr;
-validator#93
-    public_key:SigPubKey
-    weight:uint64
-    adnl_addr:bits256
-    mc_seq_no_since:u32
-= ValidatorDescr;
+
+Tag 0xb3 is reserved for the post-quantum descriptor and is not accepted yet.
+Tag 0x93 was a Rust-only reader/writer path that never existed in block.tlb and
+that the C++ side rejects; it has been removed so both implementations accept
+exactly the same constructors.
 */
 
 ///
@@ -141,7 +140,6 @@ pub struct ValidatorDescr {
     pub public_key: SigPubKey,
     /// before first election this filed is None
     pub adnl_addr: Option<UInt256>,
-    pub mc_seq_no_since: u32,
 
     // Total weight of the previous validators in the list.
     // The field is not serialized.
@@ -168,7 +166,7 @@ impl ValidatorDescr {
         weight: u64,
         adnl_addr: Option<UInt256>,
     ) -> Self {
-        ValidatorDescr { public_key, weight, adnl_addr, prev_weight_sum: 0, mc_seq_no_since: 0 }
+        ValidatorDescr { public_key, weight, adnl_addr, prev_weight_sum: 0 }
     }
 
     pub fn compute_node_id_short(&self) -> UInt256 {
@@ -190,28 +188,19 @@ impl ValidatorDescr {
 
 const VALIDATOR_DESC_TAG: u8 = 0x53;
 const VALIDATOR_DESC_ADDR_TAG: u8 = 0x73;
-const VALIDATOR_DESC_ADDR_SEQNO_TAG: u8 = 0x93;
+/// Frozen for the post-quantum descriptor. Reserved here so nothing else can
+/// claim it; the constructor itself is not implemented yet, so it is rejected.
+pub const VALIDATOR_DESC_PQ_TAG: u8 = 0xb3;
 
 impl Serializable for ValidatorDescr {
     fn write_to(&self, cell: &mut BuilderData) -> Result<()> {
-        let tag = if self.mc_seq_no_since != 0 {
-            if self.adnl_addr.is_none() {
-                fail!("if mc_seq_no_since is not zero ADNL address must be specified too")
-            }
-            VALIDATOR_DESC_ADDR_SEQNO_TAG
-        } else if self.adnl_addr.is_some() {
-            VALIDATOR_DESC_ADDR_TAG
-        } else {
-            VALIDATOR_DESC_TAG
-        };
+        let tag =
+            if self.adnl_addr.is_some() { VALIDATOR_DESC_ADDR_TAG } else { VALIDATOR_DESC_TAG };
         cell.append_u8(tag)?;
         self.public_key.write_to(cell)?;
         self.weight.write_to(cell)?;
         if let Some(adnl_addr) = self.adnl_addr.as_ref() {
             adnl_addr.write_to(cell)?;
-        }
-        if self.mc_seq_no_since != 0 {
-            self.mc_seq_no_since.write_to(cell)?;
         }
         Ok(())
     }
@@ -220,29 +209,21 @@ impl Serializable for ValidatorDescr {
 impl Deserializable for ValidatorDescr {
     fn construct_from(slice: &mut SliceData) -> Result<Self> {
         let tag = slice.get_next_byte()?;
-        let (public_key, weight, adnl_addr, mc_seq_no_since);
+        let (public_key, weight, adnl_addr);
         match tag {
             VALIDATOR_DESC_TAG => {
                 public_key = Deserializable::construct_from(slice)?;
                 weight = Deserializable::construct_from(slice)?;
                 adnl_addr = None;
-                mc_seq_no_since = 0;
             }
             VALIDATOR_DESC_ADDR_TAG => {
                 public_key = Deserializable::construct_from(slice)?;
                 weight = Deserializable::construct_from(slice)?;
                 adnl_addr = Some(Deserializable::construct_from(slice)?);
-                mc_seq_no_since = 0;
-            }
-            VALIDATOR_DESC_ADDR_SEQNO_TAG => {
-                public_key = Deserializable::construct_from(slice)?;
-                weight = Deserializable::construct_from(slice)?;
-                adnl_addr = Some(Deserializable::construct_from(slice)?);
-                mc_seq_no_since = Deserializable::construct_from(slice)?;
             }
             tag => fail!(Self::invalid_tag(tag as u32)),
         }
-        Ok(Self { public_key, weight, adnl_addr, mc_seq_no_since, prev_weight_sum: 0 })
+        Ok(Self { public_key, weight, adnl_addr, prev_weight_sum: 0 })
     }
 }
 

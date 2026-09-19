@@ -163,7 +163,6 @@ impl VotingProvider for VotingProviderImpl {
                     .map_err(|_| anyhow::anyhow!("public key is invalid"))?,
                 weight,
                 adnl_addr,
-                mc_seq_no_since: 0,
                 prev_weight_sum: 0,
             };
             list.push(descr);

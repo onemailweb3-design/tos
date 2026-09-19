@@ -213,3 +213,57 @@ fn test_isolate_mc_validators() {
         }
     }
 }
+
+// The accepted ValidatorDescr constructor set is shared with the C++ side through
+// test/pq-native/validator-descr-tags.tsv. One implementation accepting a tag the
+// other rejects is a consensus split, so both read the same file.
+//
+// Each rejected tag is given a body that is well formed for the 0x73 shape, so the
+// tag is the only possible reason for refusal; otherwise the test would pass for
+// the wrong reason.
+#[test]
+fn accepted_descriptor_tags_match_the_shared_set() {
+    fn descriptor_bytes(tag: u8, with_adnl: bool) -> SliceData {
+        let mut b = BuilderData::new();
+        b.append_u8(tag).unwrap();
+        SigPubKey::from_bytes(&[7u8; 32]).unwrap().write_to(&mut b).unwrap();
+        1234u64.write_to(&mut b).unwrap();
+        if with_adnl {
+            UInt256::from([9u8; 32]).write_to(&mut b).unwrap();
+        }
+        SliceData::load_builder(b).unwrap()
+    }
+
+    let path =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../../test/pq-native/validator-descr-tags.tsv");
+    let text = std::fs::read_to_string(path).expect("shared descriptor tag set");
+    let mut checked = 0;
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let mut f = line.split('\t');
+        let tag = u8::from_str_radix(f.next().expect("tag"), 16).expect("hex tag");
+        let verdict = f.next().expect("verdict");
+
+        // 0x53 carries no adnl_addr; every other shape here is given the 0x73 body.
+        let mut cs = descriptor_bytes(tag, tag != 0x53);
+        let parsed = ValidatorDescr::construct_from(&mut cs);
+        match verdict {
+            "accept" => assert!(parsed.is_ok(), "tag 0x{:02x} must be accepted", tag),
+            "reject" => assert!(parsed.is_err(), "tag 0x{:02x} must be rejected", tag),
+            other => panic!("unknown verdict {other}"),
+        }
+        checked += 1;
+    }
+    assert!(checked >= 6, "expected the full shared tag set, saw {checked}");
+
+    // The writer must never produce a tag outside the accepted set.
+    for adnl in [None, Some(UInt256::from([9u8; 32]))] {
+        let d = ValidatorDescr::with_params(SigPubKey::from_bytes(&[7u8; 32]).unwrap(), 1, adnl);
+        let mut b = BuilderData::new();
+        d.write_to(&mut b).unwrap();
+        let emitted = SliceData::load_builder(b).unwrap().get_next_byte().unwrap();
+        assert!(emitted == 0x53 || emitted == 0x73, "writer emitted 0x{emitted:02x}");
+    }
+}
