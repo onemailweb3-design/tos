@@ -52,6 +52,12 @@ target_include_directories(tos_pq_consensus_signer PUBLIC "${CMAKE_CURRENT_SOURC
 target_compile_definitions(tos_pq_consensus_signer PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
 target_link_libraries(tos_pq_consensus_signer PUBLIC tos_pq_consensus PRIVATE tos_pq_consensus_signer_backend OpenSSL::Crypto)
 
+# Provisioning for the node's consensus key. It links the same library the node loads
+# the key with, so the two cannot disagree about what a valid key file is.
+add_executable(tos-pq-consensus-key "${CMAKE_CURRENT_SOURCE_DIR}/consensus-key-tool.cpp")
+set_target_properties(tos-pq-consensus-key PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(tos-pq-consensus-key PRIVATE tos_pq_consensus_signer tos_pq_consensus)
+
 set(PQ_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-mldsa44")
 add_executable(test-pq-mldsa44-wrapper "${PQ_TEST_DIR}/test.cpp")
 target_link_libraries(test-pq-mldsa44-wrapper PRIVATE tos_mldsa44)

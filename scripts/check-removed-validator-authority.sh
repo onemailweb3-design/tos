@@ -44,6 +44,9 @@ crypto/fift/lib/Validator.fif	566f7445	a script builds the classical internal co
 crypto/fift/lib/Validator.fif	56744350	a script builds the classical complaint-vote request again
 crypto/fift/lib/Validator.fif	56744370	a script builds the classical complaint-vote body again
 crypto/fift/lib/Validator.fif	4e436f64	a script builds the administrator's code replacement again
+tosctl/src/node-control/contracts/src/elector/messages.rs	0x56744350	the tooling builds the classical complaint-vote request again
+tosctl/src/node-control/contracts/src/elector/messages.rs	0x56744370	the tooling builds the classical complaint-vote body again
+tosctl/src/node-control/contracts/src/config_contract/messages.rs	0x566f7465	the tooling builds the classical configuration vote again
 SITES
 
 # The scripts that produced those messages. A validator's vote is signed with a
@@ -82,6 +85,19 @@ for builder in 'block::pq::config_vote_body' 'block::pq::complaint_vote_body'; d
     failed=1
   fi
 done
+
+# The operator tooling builds the same two votes. An Ed25519 signature is 64 bytes, so a
+# builder that takes one is a builder for the authority that was removed.
+while IFS=$'\t' read -r file expected meaning; do
+  case "$file" in ''|'#'*) continue ;; esac
+  if ! grep -q -- "$expected" "$root/$file"; then
+    echo "authority check failed: $file no longer builds $expected -- $meaning" >&2
+    failed=1
+  fi
+done <<'BUILDERS'
+tosctl/src/node-control/contracts/src/elector/messages.rs	0x5051636f	the post-quantum complaint vote
+tosctl/src/node-control/contracts/src/config_contract/messages.rs	0x5051766f	the post-quantum configuration vote
+BUILDERS
 
 # The external entry point exists only to refuse. A body that does anything else is an
 # external authority path, whatever it is called.

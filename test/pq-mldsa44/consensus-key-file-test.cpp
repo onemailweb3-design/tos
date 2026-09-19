@@ -123,6 +123,52 @@ int main() {
   assert(std::holds_alternative<ConsensusKeyFileError>(in_open));
   assert(std::get<ConsensusKeyFileError>(in_open) == ConsensusKeyFileError::directory_writable);
 
+  // A key an operator saved and is putting back. It has to arrive at exactly the
+  // identity it left with, or a restored validator is a different validator.
+  const std::string restored = dir + "/restored.key";
+  const std::string seed(consensus_seed_bytes, '\x2a');
+  auto imported = import_consensus_key(restored, seed);
+  assert(std::holds_alternative<ConsensusPQKey>(imported));
+  const auto& put_back = std::get<ConsensusPQKey>(imported);
+  {
+    auto derived = ValidatorPQKeyStore::from_seed(seed);
+    assert(derived.has_value());
+    assert(derived->consensus_key().public_key == put_back.public_key);
+    assert(derived->consensus_key().key_id == put_back.key_id);
+  }
+  // And the node reads back the same key from the file it wrote, under the same rules.
+  {
+    auto reread = load_consensus_key(restored);
+    assert(std::holds_alternative<ValidatorPQKeyStore>(reread));
+    assert(std::get<ValidatorPQKeyStore>(reread).consensus_key().public_key == put_back.public_key);
+    struct stat st{};
+    assert(::stat(restored.c_str(), &st) == 0);
+    assert((st.st_mode & 077) == 0);
+    assert(st.st_size == 32);
+  }
+
+  // A seed that is not a seed. Neither length is written, so a refused import leaves no
+  // file for a later load to find and accept.
+  for (std::size_t length : {std::size_t{0}, consensus_seed_bytes - 1, consensus_seed_bytes + 1}) {
+    const std::string wrong = dir + "/wrong-" + std::to_string(length) + ".key";
+    auto refused = import_consensus_key(wrong, std::string(length, '\x2a'));
+    assert(std::holds_alternative<ConsensusKeyFileError>(refused));
+    assert(std::get<ConsensusKeyFileError>(refused) == ConsensusKeyFileError::wrong_size);
+    struct stat st{};
+    assert(::stat(wrong.c_str(), &st) != 0);
+  }
+
+  // Putting a key back does not replace one that is there, and cannot be done into a
+  // directory anyone can write: the same two rules a created key is held to.
+  {
+    auto over = import_consensus_key(restored, seed);
+    assert(std::holds_alternative<ConsensusKeyFileError>(over));
+    assert(std::get<ConsensusKeyFileError>(over) == ConsensusKeyFileError::already_exists);
+    auto into_open = import_consensus_key(open_dir + "/restored.key", seed);
+    assert(std::holds_alternative<ConsensusKeyFileError>(into_open));
+    assert(std::get<ConsensusKeyFileError>(into_open) == ConsensusKeyFileError::directory_writable);
+  }
+
   // Two rules have no input this test can build, and saying so is better than a case
   // that appears to cover them and does not:
   //
@@ -133,7 +179,9 @@ int main() {
   // that decides whether a key reported as created survives a crash, so it is worth
   // knowing that it is the weaker of the checks here.
 
-  std::printf("CONSENSUS_KEY_FILE_OK create/load round-trips; symlink, directory, group-readable, "
-              "short, long, and world-writable-directory each refused on their own\n");
+  std::printf(
+      "CONSENSUS_KEY_FILE_OK create/load/import round-trips; symlink, directory, "
+      "group-readable, short, long, and world-writable-directory each refused on their "
+      "own; an import of the wrong length writes nothing\n");
   return 0;
 }

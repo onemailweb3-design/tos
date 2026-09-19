@@ -1,22 +1,21 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
-#include "consensus-key-file.h"
-
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
-#include <openssl/crypto.h>
-#include <openssl/rand.h>
-
 #include <array>
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
+#include <fcntl.h>
+#include <openssl/crypto.h>
+#include <openssl/rand.h>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "consensus-key-file.h"
 
 namespace tos::pq {
 namespace {
 
-constexpr std::size_t seed_bytes = 32;
+constexpr std::size_t seed_bytes = consensus_seed_bytes;
 
 // Closes on every path out, including the ones that throw nothing and return early.
 class Descriptor {
@@ -149,21 +148,13 @@ std::variant<ValidatorPQKeyStore, ConsensusKeyFileError> load_consensus_key(
   return std::move(*store);
 }
 
-std::variant<ConsensusPQKey, ConsensusKeyFileError> create_consensus_key(
-    std::string_view path) noexcept {
-  const std::string name(path);
-  struct stat existing {};
-  if (::lstat(name.c_str(), &existing) == 0) {
-    return ConsensusKeyFileError::already_exists;
-  }
-  if (!directory_is_private(path)) {
-    return ConsensusKeyFileError::directory_writable;
-  }
+namespace {
 
-  SeedBuffer seed;
-  if (RAND_priv_bytes(seed.bytes.data(), static_cast<int>(seed.bytes.size())) != 1) {
-    return ConsensusKeyFileError::write_failed;
-  }
+// One way to put a seed on disk, whether it was generated here or handed to us. A second
+// copy of this would be a second set of durability rules, and the one that got them
+// wrong would be the one nobody ran.
+std::variant<ConsensusPQKey, ConsensusKeyFileError> place_seed(std::string_view path, SeedBuffer& seed) noexcept {
+  const std::string name(path);
   auto store = ValidatorPQKeyStore::from_seed(
       std::string_view(reinterpret_cast<const char*>(seed.bytes.data()), seed.bytes.size()));
   if (!store.has_value()) {
@@ -212,6 +203,49 @@ std::variant<ConsensusPQKey, ConsensusKeyFileError> create_consensus_key(
     }
   }
   return store->consensus_key();
+}
+
+// A key is created, never replaced: rotating one is removing the old file deliberately.
+ConsensusKeyFileError* nothing_is_there(std::string_view path, ConsensusKeyFileError& slot) noexcept {
+  const std::string name(path);
+  struct stat existing{};
+  if (::lstat(name.c_str(), &existing) == 0) {
+    slot = ConsensusKeyFileError::already_exists;
+    return &slot;
+  }
+  if (!directory_is_private(path)) {
+    slot = ConsensusKeyFileError::directory_writable;
+    return &slot;
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+std::variant<ConsensusPQKey, ConsensusKeyFileError> create_consensus_key(std::string_view path) noexcept {
+  ConsensusKeyFileError slot{};
+  if (auto* refusal = nothing_is_there(path, slot)) {
+    return *refusal;
+  }
+  SeedBuffer seed;
+  if (RAND_priv_bytes(seed.bytes.data(), static_cast<int>(seed.bytes.size())) != 1) {
+    return ConsensusKeyFileError::write_failed;
+  }
+  return place_seed(path, seed);
+}
+
+std::variant<ConsensusPQKey, ConsensusKeyFileError> import_consensus_key(std::string_view path,
+                                                                         std::string_view provided) noexcept {
+  if (provided.size() != consensus_seed_bytes) {
+    return ConsensusKeyFileError::wrong_size;
+  }
+  ConsensusKeyFileError slot{};
+  if (auto* refusal = nothing_is_there(path, slot)) {
+    return *refusal;
+  }
+  SeedBuffer seed;
+  std::memcpy(seed.bytes.data(), provided.data(), seed.bytes.size());
+  return place_seed(path, seed);
 }
 
 }  // namespace tos::pq

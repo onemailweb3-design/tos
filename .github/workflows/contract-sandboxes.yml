@@ -83,6 +83,14 @@ jobs:
           cmake --build build --target test-pq-vote-body -j2
           ./build/crypto/pq/test-pq-vote-body
 
+      # The node's own key file, and the tool that provisions one. Both are held to the
+      # same rules, because the tool linking a different copy of them is how a key that
+      # a provisioning run reported as written becomes one the node refuses at startup.
+      - name: Consensus key file
+        run: |
+          cmake --build build --target test-consensus-key-file tos-pq-consensus-key -j2
+          ./build/crypto/pq/test-consensus-key-file
+
       - name: Build the post-quantum key tool
         run: |
           cmake -S crypto/pq/tools -B build-pq-key -G Ninja -DCMAKE_BUILD_TYPE=Release

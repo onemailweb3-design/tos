@@ -27,6 +27,10 @@
 
 namespace tos::pq {
 
+// The file's whole content. A key is a seed, not a container: there is no header to get
+// wrong and no version to disagree about.
+inline constexpr std::size_t consensus_seed_bytes = 32;
+
 enum class ConsensusKeyFileError {
   cannot_open,           // absent, unreadable, or a symlink
   not_a_regular_file,    // a directory, a device, a socket
@@ -60,5 +64,15 @@ std::variant<ValidatorPQKeyStore, ConsensusKeyFileError> load_consensus_key(
 // deliberately, not overwriting it by accident.
 std::variant<ConsensusPQKey, ConsensusKeyFileError> create_consensus_key(
     std::string_view path) noexcept;
+
+// Write a seed an operator already holds -- from a backup taken before the host was
+// rebuilt -- to `path`, under exactly the rules a created one is written by, and return
+// the public key it derives. Refuses anything that is not 32 bytes, and refuses to
+// replace a key that is already there.
+//
+// There is no operation the other way. The seed can be put in; it cannot be read back
+// out, by this or by any other path in the node.
+std::variant<ConsensusPQKey, ConsensusKeyFileError> import_consensus_key(std::string_view path,
+                                                                         std::string_view seed) noexcept;
 
 }  // namespace tos::pq
