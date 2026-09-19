@@ -66,6 +66,14 @@ jobs:
       # The post-quantum elector suite signs real ML-DSA-44 requests. Signing is
       # deliberately absent from the node's libraries, so it shells out to the operator
       # key tool, which is its own project.
+      # The contracts depend on rules the executor enforces, not only on their own code.
+      # `test-fift` holds those, and no workflow ran it, so a change to the executor that
+      # invalidated one would have reached a green pull request.
+      - name: Executor rules the contracts depend on
+        run: |
+          cmake --build build --target test-fift -j2
+          ./build/test-fift
+
       - name: Build the post-quantum key tool
         run: |
           cmake -S crypto/pq/tools -B build-pq-key -G Ninja -DCMAKE_BUILD_TYPE=Release
