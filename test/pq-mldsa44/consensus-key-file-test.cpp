@@ -1,0 +1,117 @@
+/* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
+// The validator node's consensus key, on disk.
+//
+// Every refusal here is about the local machine rather than the chain, so a node that
+// meets one has been misconfigured and must not start. Each has an input only it
+// refuses: a rule whose input is also refused by the rule before it is a rule nothing
+// holds, and removing it would change no verdict.
+#undef NDEBUG  // the build is Release, and an assert that is compiled out proves nothing
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <string>
+
+#include "consensus-key-file.h"
+
+using namespace tos::pq;
+
+namespace {
+
+std::string scratch_directory() {
+  std::string pattern = "/tmp/tos-consensus-key-XXXXXX";
+  char* made = mkdtemp(pattern.data());
+  assert(made != nullptr);
+  return std::string(made);
+}
+
+ConsensusKeyFileError refusal(const std::variant<ValidatorPQKeyStore, ConsensusKeyFileError>& result) {
+  assert(std::holds_alternative<ConsensusKeyFileError>(result));
+  return std::get<ConsensusKeyFileError>(result);
+}
+
+void write_file(const std::string& path, const std::string& contents, mode_t mode) {
+  std::ofstream out(path, std::ios::binary);
+  out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+  out.close();
+  assert(::chmod(path.c_str(), mode) == 0);
+}
+
+}  // namespace
+
+int main() {
+  const std::string dir = scratch_directory();
+  const std::string key = dir + "/consensus.key";
+
+  // Creating one: owner-only from the moment it exists, and a real key comes back.
+  auto created = create_consensus_key(key);
+  assert(std::holds_alternative<ConsensusPQKey>(created));
+  const auto& made = std::get<ConsensusPQKey>(created);
+  assert(made.algorithm_id == PQAlgorithmId::mldsa44);
+  assert(made.public_key.size() == mldsa44_public_key_bytes);
+  {
+    struct stat st {};
+    assert(::stat(key.c_str(), &st) == 0);
+    assert((st.st_mode & 077) == 0);
+    assert(st.st_size == 32);
+  }
+
+  // The same file gives the same key every time, which is what lets a node restart
+  // without its identity moving.
+  auto loaded = load_consensus_key(key);
+  assert(std::holds_alternative<ValidatorPQKeyStore>(loaded));
+  assert(std::get<ValidatorPQKeyStore>(loaded).consensus_key().public_key == made.public_key);
+  auto again = load_consensus_key(key);
+  assert(std::holds_alternative<ValidatorPQKeyStore>(again));
+  assert(std::get<ValidatorPQKeyStore>(again).consensus_key().public_key == made.public_key);
+
+  // And it will not quietly replace a key that is there. Rotating one is a deliberate
+  // removal, not an accident of running the command twice.
+  auto twice = create_consensus_key(key);
+  assert(std::holds_alternative<ConsensusKeyFileError>(twice));
+  assert(std::get<ConsensusKeyFileError>(twice) == ConsensusKeyFileError::already_exists);
+
+  // Absent.
+  assert(refusal(load_consensus_key(dir + "/nothing-here")) == ConsensusKeyFileError::cannot_open);
+
+  // A symlink to a perfectly good key: refused rather than followed, so the path an
+  // operator configured is the file that is read.
+  const std::string link = dir + "/link.key";
+  assert(::symlink(key.c_str(), link.c_str()) == 0);
+  assert(refusal(load_consensus_key(link)) == ConsensusKeyFileError::cannot_open);
+
+  // A directory.
+  assert(refusal(load_consensus_key(dir)) == ConsensusKeyFileError::not_a_regular_file);
+
+  // Readable by the group: the right size, the right owner, one bit too many.
+  const std::string shared = dir + "/shared.key";
+  write_file(shared, std::string(32, 'k'), 0640);
+  assert(refusal(load_consensus_key(shared)) == ConsensusKeyFileError::readable_by_others);
+
+  // The right permissions and the wrong length, either way.
+  const std::string short_key = dir + "/short.key";
+  write_file(short_key, std::string(31, 'k'), 0600);
+  assert(refusal(load_consensus_key(short_key)) == ConsensusKeyFileError::wrong_size);
+  const std::string long_key = dir + "/long.key";
+  write_file(long_key, std::string(33, 'k'), 0600);
+  assert(refusal(load_consensus_key(long_key)) == ConsensusKeyFileError::wrong_size);
+
+  // A directory anyone can write is a directory anyone can put a key in, so the key it
+  // holds is refused however well protected the file itself is.
+  const std::string open_dir = dir + "/open";
+  assert(::mkdir(open_dir.c_str(), 0777) == 0);
+  const std::string exposed = open_dir + "/consensus.key";
+  write_file(exposed, std::string(32, 'k'), 0600);
+  assert(refusal(load_consensus_key(exposed)) == ConsensusKeyFileError::directory_writable);
+  // And one cannot be created there either.
+  auto in_open = create_consensus_key(open_dir + "/new.key");
+  assert(std::holds_alternative<ConsensusKeyFileError>(in_open));
+  assert(std::get<ConsensusKeyFileError>(in_open) == ConsensusKeyFileError::directory_writable);
+
+  std::printf("CONSENSUS_KEY_FILE_OK create/load round-trips; symlink, directory, group-readable, "
+              "short, long, and world-writable-directory each refused on their own\n");
+  return 0;
+}

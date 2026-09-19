@@ -45,7 +45,7 @@ set_target_properties(tos_pq_consensus_signer_backend PROPERTIES C_STANDARD 90 C
 target_include_directories(tos_pq_consensus_signer_backend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${TOS_MLDSA_SOURCE_DIR}/mldsa")
 target_compile_definitions(tos_pq_consensus_signer_backend PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
 
-add_library(tos_pq_consensus_signer STATIC consensus-pq-signer.cpp)
+add_library(tos_pq_consensus_signer STATIC consensus-pq-signer.cpp consensus-key-file.cpp)
 set_target_properties(tos_pq_consensus_signer PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(tos_pq_consensus_signer PUBLIC cxx_std_20)
 target_include_directories(tos_pq_consensus_signer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
@@ -60,6 +60,11 @@ add_executable(test-pq-consensus "${PQ_TEST_DIR}/pq-consensus-test.cpp")
 set_target_properties(test-pq-consensus PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 target_link_libraries(test-pq-consensus PRIVATE tos_pq_consensus)
 add_test(NAME pq-consensus COMMAND test-pq-consensus)
+
+add_executable(test-consensus-key-file "${PQ_TEST_DIR}/consensus-key-file-test.cpp")
+set_target_properties(test-consensus-key-file PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(test-consensus-key-file PRIVATE tos_pq_consensus_signer tos_pq_consensus)
+add_test(NAME consensus-key-file COMMAND test-consensus-key-file)
 
 add_executable(test-pq-signer "${PQ_TEST_DIR}/pq-signer-test.cpp")
 set_target_properties(test-pq-signer PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
