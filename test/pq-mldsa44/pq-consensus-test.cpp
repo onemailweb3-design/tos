@@ -1,4 +1,7 @@
 #include "pq-consensus.h"
+#ifdef NDEBUG
+#undef NDEBUG  // test assertions must stay live even in Release (-DNDEBUG)
+#endif
 #include <cassert>
 #include <cstdio>
 using namespace tos::pq;

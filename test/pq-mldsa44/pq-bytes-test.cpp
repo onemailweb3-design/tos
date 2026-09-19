@@ -1,10 +1,16 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
+#ifdef NDEBUG
+#undef NDEBUG  // test assertions must stay live even in Release (-DNDEBUG)
+#endif
 #include <cassert>
 #include <cstdio>
 #include <string>
 
 #include "crypto/pq/pq-bytes.h"
 #include "vm/cells/CellBuilder.h"
+#include "vm/boc.h"
+#include "td/utils/misc.h"
+#include <fstream>
 
 using namespace tos::pq;
 
@@ -45,6 +51,28 @@ int main() {
     vm::CellBuilder root; root.store_long(200, 32); root.store_ref(data);
     assert(unpack_pq_bytes(root.finalize(), 2420).is_error());
   }
-  printf("PQ_BYTES_N1_OK roundtrips+oversize+canonical-negatives\n");
+#ifdef PQ_BYTES_VECTORS
+  {  // shared cross-language fixture: pack matches the recorded cell hash + BOC; BOC unpacks back
+    std::ifstream f(PQ_BYTES_VECTORS);
+    assert(f);
+    std::string line; int seen = 0;
+    while (std::getline(f, line)) {
+      if (line.empty()) continue;
+      auto sp1 = line.find(' '), sp2 = line.find(' ', sp1 + 1);
+      assert(sp1 != std::string::npos && sp2 != std::string::npos);
+      auto input = td::hex_decode(line.substr(0, sp1)).move_as_ok();
+      auto root_hex = line.substr(sp1 + 1, sp2 - sp1 - 1);
+      auto boc = td::hex_decode(line.substr(sp2 + 1)).move_as_ok();
+      auto cell = pack_pq_bytes(td::Slice(input), 2420).move_as_ok();
+      assert(td::hex_encode(cell->get_hash().as_slice()) == root_hex);
+      assert(td::hex_encode(vm::std_boc_serialize(cell, 31).move_as_ok().as_slice()) == td::hex_encode(td::Slice(boc)));
+      auto decoded = vm::std_boc_deserialize(boc).move_as_ok();
+      assert(unpack_pq_bytes(decoded, 2420).move_as_ok().as_slice().str() == input);
+      seen++;
+    }
+    assert(seen >= 8);
+  }
+#endif
+  printf("PQ_BYTES_N1_OK roundtrips+oversize+canonical-negatives+shared-vectors\n");
   return 0;
 }
