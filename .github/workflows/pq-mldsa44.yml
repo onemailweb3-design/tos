@@ -9,6 +9,7 @@ on:
       - 'CMakeLists.txt'
       - 'test/pq-mldsa44/**'
       - 'test/pq-native/**'
+      - 'crypto/smartcont/pq-validator.fc'
       - 'validator/node-consensus-status.h'
       - 'test/test-node-consensus-membership.cpp'
       - 'tosctl/src/block/**'

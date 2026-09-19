@@ -89,6 +89,10 @@ if(TARGET tos_crypto)
   target_compile_definitions(test-config43 PRIVATE
     CONFIG43_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors.tsv")
   add_test(NAME config43-vectors COMMAND test-config43)
+  # Descriptors and the verdicts the node reaches about them.
+  add_executable(n3-descriptor-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-descriptor-vectors-gen.cpp")
+  set_target_properties(n3-descriptor-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(n3-descriptor-vectors-gen PRIVATE tos_block tos_crypto keys)
   # The bytes each post-quantum authorisation signs.
   add_executable(n3-preimage-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-preimage-vectors-gen.cpp")
   set_target_properties(n3-preimage-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
