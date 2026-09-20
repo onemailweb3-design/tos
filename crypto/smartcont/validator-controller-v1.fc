@@ -39,6 +39,9 @@ const int ctl::relay_op = 0x5051726c;
 const int ctl::error::no_consensus_key = 100;
 const int ctl::error::wrong_consensus_key = 101;
 const int ctl::error::relay_underfunded = 102;
+;; A stake owner is a masterchain account: the wire carries its 256 bits and nothing
+;; else, and the elector answers `-1:owner`.
+const int ctl::error::owner_not_masterchain = 103;
 
 ;; What it costs the elector to look at a stake, plus what it costs to send it there. A
 ;; relay that arrives with less would have its stake refused for being underfunded, after
@@ -182,7 +185,15 @@ slice ctl::elector_address() inline {
   ;; Whose money this is: the account that sent it here, read rather than stated. The
   ;; elector believes it because this code is what ConfigParam 47 admitted, and this is
   ;; the line that makes that belief true.
-  (_, int owner) = parse_std_addr(sender);
+  ;;
+  ;; And a masterchain account, or nothing. The stake wire carries the owner's 256 bits
+  ;; alone, and the elector answers -- and at unfreeze pays -- `-1:owner`. Money from an
+  ;; account `0:X` would be owed to `-1:X`, an account that may not exist and is not the
+  ;; sender's either way. Every pool that stakes is a masterchain contract, so nothing
+  ;; legitimate is turned away here; what is turned away is money that could not have
+  ;; come back.
+  (int owner_wc, int owner) = parse_std_addr(sender);
+  throw_unless(ctl::error::owner_not_masterchain, owner_wc == -1);
 
   builder body = begin_cell()
     .store_uint(pq::tag::stake_op, 32)

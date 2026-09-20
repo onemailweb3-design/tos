@@ -40,6 +40,7 @@ const ERROR_NOT_INTERNAL: i32 = 99;
 const ERROR_NO_CONSENSUS_KEY: i32 = 100;
 const ERROR_WRONG_CONSENSUS_KEY: i32 = 101;
 const ERROR_RELAY_UNDERFUNDED: i32 = 102;
+const ERROR_OWNER_NOT_MASTERCHAIN: i32 = 103;
 
 fn repo_root() -> std::path::PathBuf {
     std::env::var("TOS_ROOT").map(std::path::PathBuf::from).unwrap_or_else(|_| {
@@ -933,6 +934,56 @@ fn a_relay_is_refused_unless_the_key_is_the_bound_one_and_the_money_is_enough() 
         "a relay that cannot pay for its own stake was carried out"
     );
     assert!(relayed(&poor).is_none(), "a refused relay sent something anyway");
+}
+
+/// Money from outside the masterchain is refused before anything is relayed.
+///
+/// The stake wire carries the owner's 256 bits alone, and the elector answers -- and at
+/// unfreeze pays -- `-1:owner`. Money from `0:X` would be owed to `-1:X`, an account that
+/// may not exist and is not the sender's either way. Every pool that stakes is a
+/// masterchain contract, so this turns away only money that could not have come back.
+#[test]
+fn a_stake_owner_outside_the_masterchain_is_refused_before_anything_is_relayed() {
+    let root = RootKey::new(0xbb);
+    let consensus = RootKey::new(0xbc);
+    let mut controller = deploy(&root);
+    name_an_elector(&mut controller.chain);
+    let account = controller
+        .chain
+        .get_account(&controller.address)
+        .expect("the controller is deployed")
+        .clone();
+    let mut with_key = account;
+    with_key.set_data(controller_data_bound(
+        &root,
+        0,
+        0,
+        1,
+        chain_block::derive_consensus_key_id(1, &consensus.public_key).as_slice(),
+    ));
+    let address = controller.address.clone();
+    controller.chain.set_account(address, with_key);
+
+    // A sender in the base workchain. The sandbox runs the controller's transaction and
+    // nothing of the sender's, so an address is all that is needed to be one.
+    let basechain =
+        MsgAddressInt::with_standart(None, 0, chain_block::AccountId::from([0x44u8; 32]))
+            .expect("a basechain address");
+    let result = controller
+        .chain
+        .send_message(
+            MessageBuilder::internal(&basechain, &controller.address, 5_000 * TOS)
+                .bounce(true)
+                .body(relay_body(1, &consensus.public_key, &vec![0x5a; 2420]))
+                .build(),
+        )
+        .expect("the relay request is delivered");
+    assert_eq!(
+        exit_code(&result),
+        ERROR_OWNER_NOT_MASTERCHAIN,
+        "money from outside the masterchain was relayed, or refused for another reason"
+    );
+    assert!(relayed(&result).is_none(), "a refused relay sent something anyway");
 }
 
 /// A stake the elector would abort on must not get past this account.
