@@ -241,10 +241,9 @@ pub fn pairing_equation_report(
 /// The canonical proof bytes of section 10.1: `A || C` in the root cell and
 /// `B` in the referenced cell, 192 bytes in total.
 ///
-/// The compressed point encoding is the one the proving library emits. Section
-/// 10.1 fixes the length at 48 and 96 bytes but does not name a byte order, so
-/// the manifest records the order alongside the bytes rather than assuming the
-/// contract and the prover agree.
+/// The compressed point encoding is the blst/IETF one ruled in A1: 48 bytes for
+/// G1 and 96 for G2, big-endian x with the flags in the first byte, produced
+/// and checked by blst rather than by the proving library's serializer.
 pub struct CanonicalProof {
     pub a: [u8; 48],
     pub b: [u8; 96],
