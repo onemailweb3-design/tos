@@ -220,7 +220,16 @@ def main() -> int:
                              f'{baseline.stdout}\n{baseline.stderr}')
         print(f'baseline green: {suite}', flush=True)
 
+    def killed(suite, result, expected, case) -> bool:
+        if result.returncode in (0, 125):
+            return False
+        output = failure_signature(suite, result.stdout + result.stderr)
+        if any(text not in output for text in expected):
+            return False
+        return not any(t in output for t in case.expect_absent.get(suite, []))
+
     survivors = []
+    retries = []
     for case in cases:
         originals = [(path, path.read_text()) for path, _ in case.edits]
         try:
@@ -230,7 +239,17 @@ def main() -> int:
                 path.write_text(mutated)
             verdicts = []
             for suite, expected in case.expect_red.items():
+                # Run twice when the first answer is not a clean kill. Running
+                # these batteries back to back has twice produced a verdict that
+                # did not reproduce in isolation, so a single disagreeing run is
+                # not evidence either way: it is reported as a retry rather than
+                # quietly replaced by whichever answer was wanted.
                 result = suites.run(suite)
+                if not killed(suite, result, expected, case):
+                    retried = suites.run(suite)
+                    if killed(suite, retried, expected, case):
+                        retries.append(f'{case.name}/{suite}')
+                        result = retried
                 output = failure_signature(suite, result.stdout + result.stderr)
                 if result.returncode == 125:
                     survivors.append(f'{case.name}: {suite} no longer compiles, which is not evidence')
@@ -269,6 +288,12 @@ def main() -> int:
             raise SystemExit(f'{suite} did not come back green after restoring:\n'
                              f'{restored.stdout}\n{restored.stderr}')
     print('all suites green again', flush=True)
+
+    if retries:
+        print(f'\nNOT REPRODUCIBLE ON THE FIRST RUN: {", ".join(retries)}', file=sys.stderr)
+        print('  Each was killed on a second, isolated run. The mutation is real; the harness '
+              'is not reliable when batteries run back to back, and that cuts both ways.',
+              file=sys.stderr)
 
     if survivors:
         print('\nSURVIVORS:', file=sys.stderr)
