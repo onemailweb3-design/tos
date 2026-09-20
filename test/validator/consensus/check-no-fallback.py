@@ -18,6 +18,7 @@ it -- a post-quantum key may be touched only where the consensus key is filled.
 N5 replaces the refusal with a post-quantum carrier and will need the first rule below to
 name that one instead.
 """
+
 import re
 import sys
 from pathlib import Path
