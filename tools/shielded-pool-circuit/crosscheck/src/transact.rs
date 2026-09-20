@@ -57,6 +57,28 @@ impl AuthKey {
 #[derive(Clone, Copy)]
 pub struct Recipient(pub [u8; 32]);
 
+/// Section 6's three anchor kinds: which root the proof is against.
+///
+/// The current root needs no id and reads nothing; the other two name a slot
+/// in one of the rings, and the contract accepts them only on an exact match
+/// of the pair stored there.
+#[derive(Clone, Copy, Debug)]
+pub enum Anchor {
+    Current,
+    Recent(u32),
+    Epoch(u32),
+}
+
+impl Anchor {
+    fn kind_and_id(self) -> (u8, u32) {
+        match self {
+            Anchor::Current => (0, 0),
+            Anchor::Recent(id) => (1, id),
+            Anchor::Epoch(id) => (2, id),
+        }
+    }
+}
+
 /// Everything section 12.2 puts on the wire that the proof does not carry.
 ///
 /// `keys` is public bytes rather than keypairs on purpose: the signatures are
@@ -66,6 +88,8 @@ pub struct Transact<'a> {
     pub public: &'a PublicInputs,
     pub proof: &'a groth16::CanonicalProof,
     pub anchor_root: Fr,
+    /// Which of section 6's roots `anchor_root` is, and its id.
+    pub anchor: Anchor,
     pub valid_until: u32,
     pub output_payloads: &'a [Vec<u8>; 3],
     pub keys: [&'a [u8; 1312]; 2],
@@ -142,12 +166,13 @@ impl Transact<'_> {
                 .map_err(|_| CrossCheckError::Fixture("a digest that is not 32 bytes".into()))?,
         );
 
+        let (kind, id) = self.anchor.kind_and_id();
         let mut builder = BuilderData::new();
         builder
             .append_u32(OP_TRANSACT)
             .and_then(|b| b.append_u64(query_id))
-            .and_then(|b| b.append_u8(0)) // anchor kind: the current root
-            .and_then(|b| b.append_u32(0)) // anchor id
+            .and_then(|b| b.append_u8(kind))
+            .and_then(|b| b.append_u32(id))
             .and_then(|b| b.append_u32(self.valid_until))
             .map_err(sandbox)?;
         store_coins(&mut builder, u128::from(self.public_amount_out))?;

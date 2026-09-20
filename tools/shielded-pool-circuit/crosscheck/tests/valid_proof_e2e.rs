@@ -27,7 +27,7 @@ use shielded_pool_circuit::field::Fr;
 use shielded_pool_circuit::tree::Frontier;
 use shielded_pool_circuit::{groth16, imt, notes, wire};
 use shielded_pool_circuit_crosscheck::pool::{be, dec, development_vk_bytes, Pool, DENOMINATION};
-use shielded_pool_circuit_crosscheck::transact::{AuthKey, Transact};
+use shielded_pool_circuit_crosscheck::transact::{Anchor, AuthKey, Transact};
 use shielded_pool_circuit_crosscheck::wire::byte_chain;
 
 const TOS: u64 = 1_000_000_000;
@@ -261,6 +261,7 @@ fn a_private_transfer_with_a_proof_that_verifies() {
             public: &sent,
             proof: if tamper.other_proof { &elsewhere } else { &canonical },
             anchor_root: root,
+            anchor: Anchor::Current,
             valid_until,
             output_payloads: &payloads,
             keys: [&input_key.public, &phantom_key.public],

@@ -29,7 +29,7 @@ use shielded_pool_circuit::domains::dummy_owner_nf_hash;
 use shielded_pool_circuit::field::Fr;
 use shielded_pool_circuit::{groth16, imt, notes, wire};
 use shielded_pool_circuit_crosscheck::pool::{dec, development_vk_bytes, Pool, DENOMINATION};
-use shielded_pool_circuit_crosscheck::transact::{AuthKey, Transact};
+use shielded_pool_circuit_crosscheck::transact::{Anchor, AuthKey, Transact};
 use shielded_pool_circuit_crosscheck::wire::byte_chain;
 use shielded_pool_wallet::delivery::{self, Kind, Plaintext};
 use shielded_pool_wallet::import::ChainSlot;
@@ -219,6 +219,7 @@ fn a_wallet_builds_a_transfers_outputs_and_recovers_them() {
         public: &public,
         proof: &canonical,
         anchor_root: root,
+        anchor: Anchor::Current,
         valid_until,
         output_payloads: &payload_array,
         keys: [&input_public_key, &phantom_key.public],

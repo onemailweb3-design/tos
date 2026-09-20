@@ -319,6 +319,16 @@ impl BlockchainConfig {
     }
 
     /// Get `GasLimitsPrices` for account gas fee calculation
+    /// Lower what the base workchain grants one transaction.
+    ///
+    /// Only for tests that need a transaction to run out of gas part-way
+    /// through a path that would otherwise complete: raising the limit is not
+    /// what this is for, and the raw config is left alone so that anything
+    /// reading ConfigParam21 sees the value the chain was built with.
+    pub fn set_workchain_gas_limit_for_tests(&mut self, gas_limit: u64) {
+        self.gas_prices_wc.gas_limit = gas_limit;
+    }
+
     pub fn get_gas_config(&self, is_masterchain: bool) -> &GasLimitsPrices {
         if is_masterchain {
             &self.gas_prices_mc

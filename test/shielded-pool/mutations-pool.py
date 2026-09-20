@@ -23,6 +23,11 @@ import sys
 # toolchain, which may live somewhere else entirely.
 ROOT = Path(__file__).resolve().parents[2]
 POOL = ROOT / 'crypto/smartcont/tos-shielded-pool-v1.fc'
+ANCHORS = ROOT / 'crypto/smartcont/shielded/anchors.fc'
+# Not a contract. The recovery path's authentication rests on the executor
+# refusing to let a contract set the bounced flag, and gate 16 is about that.
+EXECUTOR = ROOT / 'tosctl/src/executor/src/transaction_executor.rs'
+RECOVERY = ROOT / 'crypto/smartcont/shielded/recovery.fc'
 CONTRACTS = ROOT / 'tosctl/src/node-control/contracts'
 # The ceilings have to hold for a pool that has been running, and only the
 # crosscheck crate can age one: it owns the probes that build a worn frontier
@@ -46,6 +51,20 @@ COST_TEST = 'a_transact_fits_its_ceiling_and_the_gas_this_chain_grants'
 WITHDRAWAL_TEST = 'a_well_formed_withdrawal_reaches_the_proof_like_a_transfer_does'
 PROOF_TEST = 'a_proof_that_does_not_verify_stops_the_transaction'
 MATURE_DEPOSIT_TEST = 'a_deposit_fits_its_ceiling_at_every_age'
+TRAFFIC_SUITE = 'anchor_traffic'
+DEPOSIT_TRAFFIC_TEST = 'pure_deposit_traffic_writes_every_consecutive_slot'
+MIXED_TRAFFIC_TEST = 'mixed_traffic_leaves_the_skipped_slots_alone'
+RING_SIZE_TEST = 'a_version_half_a_ring_away_lands_on_its_own_slot'
+RECENT_LIVE_TEST = 'a_recent_root_is_accepted_until_its_slot_is_overwritten'
+RECENT_DEAD_TEST = 'a_recent_root_is_refused_once_its_slot_is_overwritten'
+FORGED_SUITE = 'forged_bounce'
+FORGED_TEST = 'a_contract_cannot_send_the_pool_a_message_that_arrives_bounced'
+RECORD_BINDING_TEST = 'a_record_naming_another_address_is_refused_from_any_sender'
+ATOMICITY_SUITE = 'atomicity_beyond_a_throw'
+OOG_DEPOSIT_TEST = 'a_deposit_that_runs_out_of_gas_changes_nothing'
+OOG_TRANSACT_TEST = 'a_transact_that_runs_out_of_gas_changes_nothing'
+ACTION_FAILURE_TEST = 'a_withdrawal_whose_payout_cannot_be_sent_changes_nothing'
+STATE_LIMIT_TEST = 'a_deposit_refused_by_the_state_limit_changes_nothing'
 MATURE_TRANSACT_TEST = 'a_withdrawal_and_its_bounce_in_a_pool_with_history'
 
 
@@ -95,6 +114,55 @@ CASES = [
          'int bounce_gas_ceiling() asm "210000 PUSHINT";',
          MATURE_TRANSACT_TEST, MATURE_TRANSACT_SUITE, CROSSCHECK),
 
+    # Section 19 gate 17, over runs rather than single messages. These four
+    # are aimed at the traffic tests in the crosscheck crate, which are the
+    # only place a mutation that is correct for one message and wrong for a
+    # sequence can show itself.
+    Case('anchor-version', 'a root is preserved under the wrong version', ANCHORS,
+         '  int root_version = commitment_next_index;',
+         '  int root_version = commitment_next_index + 1;',
+         DEPOSIT_TRAFFIC_TEST, TRAFFIC_SUITE, CROSSCHECK),
+    Case('anchor-after-append', 'the root preserved is the one after the append', POOL,
+         "  ;; 8. the pre-mutation root is preserved once, before the append.\n  (anchors, last_anchor_epoch) =\n    anchors_preserve(anchors, commitment_next_index, commitment_root, now(),\n                     last_anchor_epoch);\n\n  ;; 9. the leaf index is the contract's, not the sender's.\n  int leaf_index = commitment_next_index;\n  int leaf = note_commitment(note_body, leaf_index);\n  (frontier, commitment_root) = frontier_append(frontier, leaf_index, leaf);",
+         "  ;; 9. the leaf index is the contract's, not the sender's.\n  int leaf_index = commitment_next_index;\n  int leaf = note_commitment(note_body, leaf_index);\n  (frontier, commitment_root) = frontier_append(frontier, leaf_index, leaf);\n\n  ;; 8. the pre-mutation root is preserved once, before the append.\n  (anchors, last_anchor_epoch) =\n    anchors_preserve(anchors, commitment_next_index, commitment_root, now(),\n                     last_anchor_epoch);",
+         RECENT_LIVE_TEST, TRAFFIC_SUITE, CROSSCHECK),
+    Case('anchor-slot-modulus', 'the ring is addressed by a modulus that is not its size',
+         ANCHORS,
+         '                                    root_version % recent_root_slots(),',
+         '                                    root_version % 2048,',
+         RING_SIZE_TEST, TRAFFIC_SUITE, CROSSCHECK),
+    Case('anchor-occupancy', 'a slot that is occupied is treated as a match', ANCHORS,
+         '    throw_unless(153, (stored_id == id) & (stored_root == root));',
+         '    throw_unless(153, found);',
+         RECENT_DEAD_TEST, TRAFFIC_SUITE, CROSSCHECK),
+    # Section 19 gate 16. The first of these is not a contract mutation: it
+    # removes the executor's guarantee that a contract cannot send a message
+    # that arrives bounced, which is the only thing standing between the
+    # address a payout was sent to and a free mint.
+    Case('bounced-flag-kept', 'a contract may send a message that arrives bounced', EXECUTOR,
+         '        int_header.bounced = false;\n    }',
+         '    }',
+         FORGED_TEST, FORGED_SUITE, CROSSCHECK),
+    Case('recovery-address-binding', 'a record is recovered by whoever presents it', RECOVERY,
+         '  throw_unless(267, recipient_hash == public_recipient_hash(sender));',
+         '  throw_unless(267, recipient_hash == recipient_hash);',
+         RECORD_BINDING_TEST, FORGED_SUITE, CROSSCHECK),
+    # Section 19 gate 11, for the failures a throw does not reach. One is a
+    # contract mutation and one is not: whether a state the chain refuses to
+    # store is rolled back is the executor's answer, and the pool's atomicity
+    # rests on it either way. The out-of-gas half has no mutation at all --
+    # a compute phase that throws hands back no data, so nothing in this
+    # repository can make a half-finished deposit persist. The tests carry
+    # controls instead.
+    Case('payout-reserve-omits-liability', 'the payout may be paid out of what the pool owes',
+         POOL,
+         '    raw_reserve(native_liability + reserve_floor, 0);',
+         '    raw_reserve(reserve_floor, 0);',
+         ACTION_FAILURE_TEST, ATOMICITY_SUITE, CROSSCHECK),
+    Case('state-limit-unchecked', 'a state above the chain\'s limit is stored anyway', EXECUTOR,
+         '        if !is_special && !check_account_size_limits(limits, &mut acc_copy)? {',
+         '        if false {',
+         STATE_LIMIT_TEST, ATOMICITY_SUITE, CROSSCHECK),
     # Section 12.1: the body, and what may be deposited.
     Case('body-refs', 'a deposit body with no payload is not refused here', POOL,
          '  throw_unless(200, body.slice_refs() == 1);',

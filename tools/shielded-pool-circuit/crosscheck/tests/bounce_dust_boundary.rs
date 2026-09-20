@@ -41,6 +41,7 @@ fn refused_withdrawal(amount: u64) -> support::Outcome {
         destination_name: "dust_refuser",
         destination_source: REFUSER,
         age: None,
+        before_transact: Default::default(),
     })
 }
 

@@ -22,7 +22,7 @@ use tos_sandbox::{compile_func, Blockchain, MessageBuilder};
 use shielded_pool_circuit_crosscheck::pool::{
     dec, development_vk_bytes, Pool, DENOMINATION, WITHDRAWAL_FEE,
 };
-use shielded_pool_circuit_crosscheck::transact::{AuthKey, Recipient, Transact};
+use shielded_pool_circuit_crosscheck::transact::{Anchor, AuthKey, Recipient, Transact};
 use shielded_pool_circuit_crosscheck::wire::byte_chain;
 
 const TOS: u64 = 1_000_000_000;
@@ -108,6 +108,15 @@ pub struct Outcome {
     /// What the transact itself cost, payout included.
     /// The transact's own exit code.
     pub exit: i32,
+    /// Every persistent field, immediately before and after the transact.
+    pub state_before: shielded_pool_circuit_crosscheck::pool::PoolState,
+    pub state_after: shielded_pool_circuit_crosscheck::pool::PoolState,
+    /// The transact's action-phase result code, if the phase ran, and
+    /// whether the transaction was rolled back.
+    pub action: Option<i32>,
+    /// Which action in the list failed, counting from zero.
+    pub failed_action: Option<i32>,
+    pub aborted: bool,
     pub gas: i64,
     /// What the recovery cost, which is a transaction of its own. Zero when
     /// nothing bounced.
@@ -136,6 +145,28 @@ pub struct Withdrawal<'a> {
     /// assigns -- so moving the index does not invalidate the proof, and the
     /// anchor is the current root, which is left alone.
     pub age: Option<Age>,
+    /// What to change about the world just before the transact is sent.
+    ///
+    /// Gate 11's remaining failures are not reachable by sending a different
+    /// message: they are the chain granting less gas than the path needs, the
+    /// pool holding less than the action phase will spend, and a state limit
+    /// below what the compute phase produced. All three are outside the
+    /// contract, which is the point -- a test that reached them by editing
+    /// the contract would be testing the edit.
+    pub before_transact: Perturbation,
+}
+
+/// Changes to the world around the pool, applied after its deposits and
+/// before the transact.
+#[derive(Default, Clone, Copy)]
+pub struct Perturbation {
+    /// Lower the gas this workchain grants one transaction.
+    pub gas_limit: Option<u64>,
+    /// Set the pool's balance, so that the transact's own value brings it to
+    /// where the test wants it when the compute phase reads it.
+    pub balance: Option<u64>,
+    /// Send this much with the transact rather than the usual four fees.
+    pub value: Option<u64>,
 }
 
 /// Where a pool is in its life: how many leaves it has taken, and how full
@@ -290,6 +321,7 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         public: &public,
         proof: &canonical,
         anchor_root: root,
+        anchor: Anchor::Current,
         valid_until,
         output_payloads: &output_payloads,
         keys: [&held[0].key.public, &held[1].key.public],
@@ -313,6 +345,7 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         "two deposits did not leave the pool owing two denominations"
     );
 
+    let perturb = withdrawal.before_transact;
     if let Some(age) = withdrawal.age {
         let frontier_store = shielded_pool_circuit_crosscheck::frontier_probe::FrontierProbe::deploy()
             .expect("frontier probe")
@@ -325,25 +358,38 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         pool.age_to(age.index, frontier_store, anchors).expect("age the pool");
     }
 
-    let result = pool.send(COMPUTE_FEE * 4, body).expect("the withdrawal");
+    if let Some(limit) = perturb.gas_limit {
+        pool.bc.set_workchain_gas_limit(limit);
+    }
+    if let Some(balance) = perturb.balance {
+        pool.set_balance(balance).expect("set the pool's balance");
+    }
+    let state_before = pool.state_snapshot().expect("the state before");
+    let result =
+        pool.send(perturb.value.unwrap_or(COMPUTE_FEE * 4), body).expect("the withdrawal");
 
     // The transact itself succeeded.
     let description = result.read_primary_description();
+    let action = description.action.as_ref().map(|phase| phase.result_code);
+    let failed_action = description.action.as_ref().and_then(|phase| phase.result_arg);
+    let aborted = description.aborted;
     let (exit, gas) = match description.compute_ph {
         chain_block::TrComputePhase::Vm(vm) => {
             (vm.exit_code, vm.gas_used.to_string().parse::<i64>().expect("gas used"))
         }
         chain_block::TrComputePhase::Skipped(s) => panic!("compute skipped: {:?}", s.reason),
     };
+    let perturbed =
+        perturb.gas_limit.is_some() || perturb.balance.is_some() || perturb.value.is_some();
     assert!(
-        exit == 0 || withdrawal.age.is_some(),
+        exit == 0 || withdrawal.age.is_some() || perturbed,
         "the withdrawal was refused with exit {exit}"
     );
 
     // At least the relay's message into the pool and the pool's payout out of
     // it. Whether a third follows is what the two tests below differ on.
     assert!(
-        result.transaction_count() >= 2 || withdrawal.age.is_some(),
+        result.transaction_count() >= 2 || withdrawal.age.is_some() || perturbed,
         "the pool sent no payout at all: {} transactions",
         result.transaction_count()
     );
@@ -391,6 +437,11 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         destination: destination.to_string(),
         transactions,
         exit,
+        action,
+        failed_action,
+        aborted,
+        state_before,
+        state_after: pool.state_snapshot().expect("the state after"),
         gas,
         recovery_gas,
         recovery_exit,

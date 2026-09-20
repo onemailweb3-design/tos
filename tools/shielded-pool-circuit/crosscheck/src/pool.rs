@@ -257,6 +257,79 @@ impl Pool {
         }
     }
 
+    /// The two anchor rings as the pool actually holds them, each entry the
+    /// slot it sits in, the version recorded there and the root.
+    ///
+    /// Section 6's acceptance rule is an exact match on the pair, so what a
+    /// slot holds is the whole of a recent root's validity. Reading the rings
+    /// is how traffic-level tests say which roots are still acceptable
+    /// without submitting a proof for each one.
+    pub fn anchor_rings(&self) -> Result<(Vec<AnchorEntry>, Vec<AnchorEntry>)> {
+        let data = self
+            .bc
+            .get_account(&self.addr)
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no account".to_string()))?
+            .get_data()
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no data".to_string()))?;
+        let anchors = data
+            .reference(1)
+            .map_err(|error| CrossCheckError::Sandbox(format!("anchors ref: {error}")))?;
+        let mut slice = chain_block::SliceData::load_cell(anchors)
+            .map_err(|error| CrossCheckError::Sandbox(format!("anchor root: {error}")))?;
+        if slice.remaining_bits() != 0 || slice.remaining_references() != 2 {
+            return Err(CrossCheckError::Sandbox(
+                "the anchor root is not section 13.1's two references".to_string(),
+            ));
+        }
+        let mut rings = Vec::new();
+        for _ in 0..2 {
+            let holder = slice
+                .checked_drain_reference()
+                .map_err(|error| CrossCheckError::Sandbox(format!("a ring: {error}")))?;
+            let mut holder = chain_block::SliceData::load_cell(holder)
+                .map_err(|error| CrossCheckError::Sandbox(format!("a ring holder: {error}")))?;
+            // A HashmapE is one maybe bit and, when it holds anything, the root.
+            let present = holder
+                .get_next_bit()
+                .map_err(|error| CrossCheckError::Sandbox(format!("the maybe bit: {error}")))?;
+            let dict = if present {
+                Some(holder.checked_drain_reference().map_err(|error| {
+                    CrossCheckError::Sandbox(format!("the hashmap root: {error}"))
+                })?)
+            } else {
+                None
+            };
+            let mut entries = Vec::new();
+            let mut failure = None;
+            chain_block::HashmapType::iterate_slices(
+                &chain_block::HashmapE::with_hashmap(12, dict),
+                |key, mut value| {
+                    let slot = key.clone().get_next_int(12)?;
+                    if value.remaining_bits() != 288 || value.remaining_references() != 0 {
+                        failure = Some("an entry is not exactly 32 + 256 bits".to_string());
+                        return Ok(false);
+                    }
+                    let version = value.get_next_int(32)?;
+                    let mut root = [0u8; 32];
+                    for byte in root.iter_mut() {
+                        *byte = value.get_next_byte()?;
+                    }
+                    entries.push(AnchorEntry { slot, version, root });
+                    Ok(true)
+                },
+            )
+            .map_err(|error| CrossCheckError::Sandbox(format!("iterate a ring: {error}")))?;
+            if let Some(why) = failure {
+                return Err(CrossCheckError::Sandbox(why));
+            }
+            entries.sort_by_key(|entry| entry.slot);
+            rings.push(entries);
+        }
+        let epoch = rings.pop().unwrap_or_default();
+        let recent = rings.pop().unwrap_or_default();
+        Ok((recent, epoch))
+    }
+
     /// Move the pool to the state a mature one would hold: `index` leaves
     /// appended, and both anchor rings at the given occupancy.
     ///
@@ -337,6 +410,163 @@ impl Pool {
         Ok(())
     }
 
+    /// Move only the leaf counter, keeping the frontier and both anchor
+    /// rings exactly as the pool built them.
+    ///
+    /// This is how a test reaches a ring's overwrite boundary without sending
+    /// four thousand messages: the versions in between were never externally
+    /// visible roots, so skipping them changes nothing a later transaction
+    /// can observe.
+    pub fn age_index_to(&mut self, index: u64) -> Result<()> {
+        let data = self
+            .bc
+            .get_account(&self.addr)
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no account".to_string()))?
+            .get_data()
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no data".to_string()))?;
+        let frontier_holder = data
+            .reference(0)
+            .map_err(|error| CrossCheckError::Sandbox(format!("frontier ref: {error}")))?;
+        let mut holder = chain_block::SliceData::load_cell(frontier_holder)
+            .map_err(|error| CrossCheckError::Sandbox(format!("frontier holder: {error}")))?;
+        let present = holder
+            .get_next_bit()
+            .map_err(|error| CrossCheckError::Sandbox(format!("the maybe bit: {error}")))?;
+        let frontier = if present {
+            holder
+                .checked_drain_reference()
+                .map_err(|error| CrossCheckError::Sandbox(format!("frontier: {error}")))?
+        } else {
+            Cell::default()
+        };
+        let anchors = data
+            .reference(1)
+            .map_err(|error| CrossCheckError::Sandbox(format!("anchors ref: {error}")))?;
+        if !present {
+            return Err(CrossCheckError::Fixture(
+                "the pool's frontier is still empty, so there is no age to keep".to_string(),
+            ));
+        }
+        self.age_to(index, frontier, anchors)
+    }
+
+    /// Deliver a message to the pool with the bounced bit set, without it
+    /// having been a bounce.
+    ///
+    /// Section 19 gate 16 says in as many words that this is not end-to-end
+    /// evidence, and it is not used as any. It is here so that a test can
+    /// show what an attacker *would* get if the bit were theirs to set, which
+    /// is the only way to show that the platform clearing it is what stops
+    /// them.
+    pub fn deliver_synthetic_bounce(
+        &mut self,
+        src: &MsgAddressInt,
+        body: Cell,
+        value: u64,
+    ) -> Result<(i32, i64)> {
+        let mut header = chain_block::InternalMessageHeader::with_addresses(
+            src.clone(),
+            self.addr.clone(),
+            chain_block::CurrencyCollection::with_coins(value),
+        );
+        header.bounce = false;
+        header.bounced = true;
+        header.ihr_disabled = true;
+        let mut message = chain_block::Message::with_int_header(header);
+        message.set_body(
+            chain_block::SliceData::load_cell(body)
+                .map_err(|error| CrossCheckError::Sandbox(format!("bounce body: {error}")))?,
+        );
+        let result = self.bc.send_message(message)?;
+        match result.read_primary_description().compute_ph {
+            chain_block::TrComputePhase::Vm(vm) => Ok((
+                vm.exit_code,
+                vm.gas_used
+                    .to_string()
+                    .parse()
+                    .map_err(|error| CrossCheckError::Vm(format!("gas used: {error}")))?,
+            )),
+            chain_block::TrComputePhase::Skipped(s) => {
+                Err(CrossCheckError::Vm(format!("compute skipped: {:?}", s.reason)))
+            }
+        }
+    }
+
+    /// Everything the contract keeps between messages.
+    ///
+    /// Gate 11 is about what a failure leaves behind, and "nothing" has to
+    /// mean every field, not the two a test happened to look at. The anchor
+    /// rings are included because a mutation preserves a root before it does
+    /// anything else, so they are the first thing a half-finished
+    /// transaction would show.
+    pub fn state_snapshot(&self) -> Result<PoolState> {
+        let mut fields = Vec::new();
+        for method in [
+            "commitment_root",
+            "commitment_next_index",
+            "nullifier_root",
+            "nullifier_next_index",
+            "native_liability",
+        ] {
+            fields.push(self.get(method)?);
+        }
+        let (recent, epoch) = self.anchor_rings()?;
+        Ok(PoolState { fields, recent, epoch })
+    }
+
+    /// Set the pool's balance, breaking the backing invariant on purpose.
+    ///
+    /// The compute phase checks the balance against the liability it is about
+    /// to leave behind; the action phase then has to reserve that and send
+    /// the payout on top. A pool drained to between the two passes compute
+    /// and fails in the action phase, which is the only way to reach that
+    /// failure without changing the contract.
+    pub fn set_balance(&mut self, balance: u64) -> Result<()> {
+        let mut account = self
+            .bc
+            .get_account(&self.addr)
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no account".to_string()))?
+            .clone();
+        account.set_balance(chain_block::CurrencyCollection::with_coins(balance));
+        self.bc.set_account(self.addr.clone(), account);
+        Ok(())
+    }
+
+    /// What the pool holds right now.
+    pub fn balance(&self) -> Result<u64> {
+        let account = self
+            .bc
+            .get_account(&self.addr)
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no account".to_string()))?;
+        u64::try_from(account.balance().map(|value| value.coins.as_u128()).unwrap_or_default())
+            .map_err(|_| CrossCheckError::Sandbox("a balance above u64".to_string()))
+    }
+
+    /// The compute exit, the action-phase result code, and whether the
+    /// transaction was aborted.
+    ///
+    /// A compute exit of zero is not success: the action phase can still
+    /// refuse to send the messages the compute phase asked for, or refuse the
+    /// account state it produced, and either aborts the transaction. A test
+    /// about what a failure leaves behind has to be able to say which failure
+    /// it got.
+    pub fn run_phases(&mut self, value: u64, body: Cell) -> Result<Phases> {
+        let result = self.send(value, body)?;
+        let description = result.read_primary_description();
+        let compute = match description.compute_ph {
+            chain_block::TrComputePhase::Vm(vm) => vm.exit_code,
+            chain_block::TrComputePhase::Skipped(s) => {
+                return Err(CrossCheckError::Vm(format!("compute skipped: {:?}", s.reason)))
+            }
+        };
+        Ok(Phases {
+            compute,
+            action: description.action.as_ref().map(|phase| phase.result_code),
+            failed_action: description.action.as_ref().and_then(|phase| phase.result_arg),
+            aborted: description.aborted,
+        })
+    }
+
     /// Section 12.1's deposit body.
     pub fn deposit_body(amount: u64, owner_commitment: Fr, payload: Cell) -> Result<Cell> {
         let mut builder = BuilderData::new();
@@ -351,6 +581,35 @@ impl Pool {
             .map_err(|error| CrossCheckError::Sandbox(format!("deposit body: {error}")))?;
         cell_of(builder)
     }
+}
+
+/// How far a transaction got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Phases {
+    /// The compute phase's exit code.
+    pub compute: i32,
+    /// The action phase's result code, if it ran at all.
+    pub action: Option<i32>,
+    /// Which action in the list failed, counting from zero.
+    pub failed_action: Option<i32>,
+    /// Whether the transaction was rolled back.
+    pub aborted: bool,
+}
+
+/// Every persistent field of the pool, for comparing before with after.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolState {
+    fields: Vec<String>,
+    recent: Vec<AnchorEntry>,
+    epoch: Vec<AnchorEntry>,
+}
+
+/// One slot of an anchor ring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnchorEntry {
+    pub slot: u64,
+    pub version: u64,
+    pub root: [u8; 32],
 }
 
 /// `addr_none$00`, the only recipient a transfer may name.
