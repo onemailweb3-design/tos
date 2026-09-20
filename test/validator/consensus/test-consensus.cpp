@@ -526,6 +526,9 @@ class TestDbImpl : public consensus::Db {
     std::mutex mutex;
     size_t latest_get_count = 0;
     size_t latest_found_count = 0;
+    // TL constructor id -> how many further writes of that record to reject.
+    std::map<td::uint32, size_t> fail_writes_of;
+    size_t failed_write_count = 0;
   };
 
   explicit TestDbImpl(std::shared_ptr<DbInner> db) : db_(std::move(db)) {
@@ -566,6 +569,19 @@ class TestDbImpl : public consensus::Db {
   td::actor::Task<> set(td::BufferSlice key, td::BufferSlice value) override {
     co_await td::actor::coro_sleep(td::Timestamp::in(td::Random::fast(DB_DELAY.first, DB_DELAY.second)));
     std::scoped_lock lock(db_->mutex);
+    // A full disk, a closing database: the write returns an error and nothing is stored.
+    // The two vote-journal writes are the only ones whose failure is consensus-significant,
+    // so failure injection is addressed at a TL constructor rather than at a key.
+    td::uint32 tag = 0;
+    if (value.size() >= sizeof(tag)) {
+      std::memcpy(&tag, value.data(), sizeof(tag));
+    }
+    auto it = db_->fail_writes_of.find(tag);
+    if (it != db_->fail_writes_of.end() && it->second > 0) {
+      --it->second;
+      ++db_->failed_write_count;
+      co_return td::Status::Error("injected database write failure");
+    }
     db_->map[std::move(key)] = std::move(value);
     co_return td::Unit{};
   }
@@ -1193,6 +1209,32 @@ class TestConsensus : public td::actor::Actor {
     return result;
   }
 
+  // Certificates this node stored. With a single validator its own vote reaches the quorum
+  // immediately, so a certificate record appearing is proof that a vote was applied to the
+  // pool -- which is what must not happen before the signed record is committed.
+  size_t stored_certificate_count(const Instance& instance) const {
+    auto journal = own_vote_journal(instance);
+    std::scoped_lock lock(instance.db_inner->mutex);
+    const td::uint32 prefix = tos_api::consensus_simplex_db_key_vote::ID;
+    size_t total = 0;
+    for (const auto& [key, _] : instance.db_inner->map) {
+      if (key.size() >= sizeof(prefix) && std::memcmp(key.data(), &prefix, sizeof(prefix)) == 0) {
+        ++total;
+      }
+    }
+    return total - journal.size();
+  }
+
+  void arm_write_failures(const Instance& instance, td::uint32 tl_constructor_id, size_t count) const {
+    std::scoped_lock lock(instance.db_inner->mutex);
+    instance.db_inner->fail_writes_of[tl_constructor_id] = count;
+  }
+
+  size_t failed_write_count(const Instance& instance) const {
+    std::scoped_lock lock(instance.db_inner->mutex);
+    return instance.db_inner->failed_write_count;
+  }
+
   void overwrite_journal_record(const Instance& instance, td::Slice key, td::BufferSlice value) const {
     std::scoped_lock lock(instance.db_inner->mutex);
     auto it = instance.db_inner->map.find(td::BufferSlice{key});
@@ -1273,14 +1315,30 @@ class TestConsensus : public td::actor::Actor {
         co_return td::Unit{};
       }
     }
-    // Replaying an already-signed vote must not reach the signer at all. The restart may
-    // sign only the votes it newly journalled, plus the intents left behind by the stop.
-    auto new_votes = after.size() - before.size();
+    // Replaying an already-signed vote must not reach the signer at all. Every signature
+    // this run produced must therefore account for a record that is signed now and was not
+    // signed before -- a vote newly cast, or an intent the previous stop left behind. A
+    // record already signed before the restart accounts for nothing, so re-signing one
+    // pushes the count past the bound. Counting merely "new records" would not: a vote left
+    // as an intent by this stop would pay for the stray signature.
+    std::map<td::Slice, bool> signed_before;
+    for (const auto& entry : before) {
+      signed_before.emplace(entry.key.as_slice(), entry.is_signed);
+    }
+    size_t newly_signed = 0;
+    for (const auto& entry : after) {
+      if (!entry.is_signed) {
+        continue;
+      }
+      auto it = signed_before.find(entry.key.as_slice());
+      if (it == signed_before.end() || !it->second) {
+        ++newly_signed;
+      }
+    }
     auto signatures_made = store.consensus_signatures_produced() - signatures_before;
-    if (signatures_made > new_votes + before_intents) {
-      fail(PSTRING() << "the restart produced " << signatures_made << " signatures for " << new_votes
-                     << " new votes and " << before_intents
-                     << " recovered intents; replay re-signed votes it already held");
+    if (signatures_made > newly_signed) {
+      fail(PSTRING() << "the restart produced " << signatures_made << " signatures but only " << newly_signed
+                     << " records became signed; replay re-signed votes it already held");
       co_return td::Unit{};
     }
 
@@ -1354,11 +1412,123 @@ class TestConsensus : public td::actor::Actor {
       co_return td::Unit{};
     }
 
-    // --- Phase 4: a signature this node cannot verify as its own stops the group ---
+    // --- Phase 4: an intent that will not commit means nothing is signed ---
+    // The decision must be durable before the key is used at all. With every intent write
+    // rejected, a node that respected only the second write would still sign and still
+    // commit a signed record; a node that respects the first writes nothing and signs
+    // nothing.
+    arm_write_failures(instance, tos_api::consensus_simplex_db_ourVoteIntent::ID, 1000);
+    signatures_before = store.consensus_signatures_produced();
+    journalled_before = own_vote_journal(instance).size();
+    auto failures_before = failed_write_count(instance);
+    start_instance(0, 0);
+    co_await td::actor::coro_sleep(td::Timestamp::in(std::min(DURATION * 0.15, 1.0)));
+    co_await stop_instance(0, 0);
+
+    if (failed_write_count(instance) <= failures_before) {
+      fail("no intent write was rejected; the injected failure never reached the journal");
+      co_return td::Unit{};
+    }
+    auto after_intent_failures = own_vote_journal(instance);
+    if (after_intent_failures.size() != journalled_before) {
+      fail(PSTRING() << "a vote was journalled although its intent write failed: " << journalled_before << " -> "
+                     << after_intent_failures.size() << " records");
+      co_return td::Unit{};
+    }
+    if (store.consensus_signatures_produced() != signatures_before) {
+      fail("a vote was signed although its intent write failed");
+      co_return td::Unit{};
+    }
+    arm_write_failures(instance, tos_api::consensus_simplex_db_ourVoteIntent::ID, 0);
+
+    // --- Phase 5: a signed record that will not commit is never applied ---
+    // Signing is allowed here; using the signature is not. With one validator, a vote that
+    // reaches the pool meets the quorum at once and a certificate is stored, so a stored
+    // certificate is the observable proof that a signature was used. The signer count
+    // rising is the positive control that this phase exercised the path at all.
+    arm_write_failures(instance, tos_api::consensus_simplex_db_ourSignedVote::ID, 1000);
+    signatures_before = store.consensus_signatures_produced();
+    auto certificates_before = stored_certificate_count(instance);
+    failures_before = failed_write_count(instance);
+    start_instance(0, 0);
+    co_await td::actor::coro_sleep(td::Timestamp::in(std::min(DURATION * 0.15, 1.0)));
+    co_await stop_instance(0, 0);
+
+    if (failed_write_count(instance) <= failures_before) {
+      fail("no signed-vote write was rejected; the injected failure never reached the journal");
+      co_return td::Unit{};
+    }
+    if (store.consensus_signatures_produced() == signatures_before) {
+      fail("no vote was signed while signed-vote writes were failing; the phase proved nothing");
+      co_return td::Unit{};
+    }
+    auto certificates_after = stored_certificate_count(instance);
+    if (certificates_after != certificates_before) {
+      fail(PSTRING() << "a vote was applied although its signed record was not committed; stored certificates "
+                     << certificates_before << " -> " << certificates_after);
+      co_return td::Unit{};
+    }
+    arm_write_failures(instance, tos_api::consensus_simplex_db_ourSignedVote::ID, 0);
+
+    // --- Phase 6: a record of our own that its key does not bind also stops the group ---
+    // The signature inside is genuine, so verifying it proves nothing; what is broken is
+    // the key/value binding. Skipping such a record would drop the vote out of the dedup
+    // set and let the node decide and sign it again, which is the same failure as accepting
+    // a signature it cannot verify. Two shapes are checked: a valid record filed under
+    // another vote's key, and a record whose body cannot be read at all.
+    auto journal_before_binding = own_vote_journal(instance);
+    std::vector<const JournalledVote*> binding_signed;
+    for (const auto& entry : journal_before_binding) {
+      if (entry.is_signed) {
+        binding_signed.push_back(&entry);
+      }
+    }
+    if (binding_signed.size() < 2) {
+      fail("not enough signed records to build a key/value binding mismatch");
+      co_return td::Unit{};
+    }
+    auto misfiled_key = binding_signed[0]->key.clone();
+    auto misfiled_original = binding_signed[0]->value.clone();
+    auto other_record = binding_signed[1]->value.clone();
+
+    for (int shape = 0; shape < 2; ++shape) {
+      if (shape == 0) {
+        // A valid signed record, filed under a different vote's key.
+        overwrite_journal_record(instance, misfiled_key.as_slice(), other_record.clone());
+      } else {
+        // The constructor tag says this is one of ours; the body is unreadable.
+        td::BufferSlice unreadable(8);
+        const td::uint32 tag = tos_api::consensus_simplex_db_ourSignedVote::ID;
+        std::memcpy(unreadable.as_slice().data(), &tag, sizeof(tag));
+        std::memset(unreadable.as_slice().data() + sizeof(tag), 0xff, unreadable.size() - sizeof(tag));
+        overwrite_journal_record(instance, misfiled_key.as_slice(), std::move(unreadable));
+      }
+
+      signatures_before = store.consensus_signatures_produced();
+      journalled_before = own_vote_journal(instance).size();
+      start_instance(0, 0);
+      co_await td::actor::coro_sleep(td::Timestamp::in(std::min(DURATION * 0.15, 1.0)));
+      co_await stop_instance(0, 0);
+
+      if (own_vote_journal(instance).size() != journalled_before) {
+        fail(PSTRING() << "the group kept voting with a journal record its key does not bind (shape " << shape
+                       << "): " << journalled_before << " -> " << own_vote_journal(instance).size() << " records");
+        co_return td::Unit{};
+      }
+      if (store.consensus_signatures_produced() != signatures_before) {
+        fail(PSTRING() << "the group signed a vote with a journal record its key does not bind (shape " << shape
+                       << ")");
+        co_return td::Unit{};
+      }
+    }
+    overwrite_journal_record(instance, misfiled_key.as_slice(), std::move(misfiled_original));
+
+    // --- Phase 7: a signature this node cannot verify as its own stops the group ---
     // The node must not paper over it by signing again: it cannot know what it already
     // told the network, and a fresh signature would be a second object for that vote.
+    auto journal_for_corruption = own_vote_journal(instance);
     const JournalledVote* to_corrupt = nullptr;
-    for (const auto& entry : resigned) {
+    for (const auto& entry : journal_for_corruption) {
       if (entry.is_signed) {
         to_corrupt = &entry;
       }
@@ -1392,8 +1562,10 @@ class TestConsensus : public td::actor::Actor {
       co_return td::Unit{};
     }
 
-    LOG(WARNING) << "Vote journal: " << before.size() << " signed records replayed byte-for-byte, one intent-only "
-                 << "vote re-signed once, and an unverifiable record stopped the group";
+    LOG(WARNING) << "Vote journal: " << before_signed.size() << " signed records replayed byte-for-byte, "
+                 << before_intents << " intents left by the stop, a failed intent write stopped signing, a failed "
+                 << "signed write stopped application, one intent-only vote re-signed once, and an unverifiable "
+                 << "record stopped the group";
     vote_journal_completed_ = true;
     co_return td::Unit{};
   }

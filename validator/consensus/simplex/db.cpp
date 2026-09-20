@@ -204,6 +204,20 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
 
       auto value_r = fetch_tl_object<tl::db_Vote>(value_str, true);
       if (value_r.is_error()) {
+        // The leading constructor tag survives a body this node cannot parse, and it is
+        // what says whether the record claims to be one of ours. A damaged record of our
+        // own vote is a reason to stop rather than to decide that vote again; a damaged
+        // certificate is peers' data and can be obtained again.
+        td::uint32 claimed_tag = 0;
+        if (value_str.size() >= sizeof(claimed_tag)) {
+          std::memcpy(&claimed_tag, value_str.data(), sizeof(claimed_tag));
+        }
+        if (claimed_tag == tl::db_ourVoteIntent::ID || claimed_tag == tl::db_ourSignedVote::ID) {
+          bus.vote_journal_failure = PSTRING() << "a journalled vote under key 0x" << key->vote_hash_.to_hex()
+                                               << " cannot be read: " << value_r.error().message();
+          LOG(ERROR) << "Simplex db init_votes: " << bus.vote_journal_failure;
+          continue;
+        }
         LOG(WARNING) << "Simplex db init_votes: malformed vote value "
                         "for key vote_hash 0x"
                      << key->vote_hash_.to_hex() << ": " << value_r.error().message();
@@ -231,8 +245,29 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
           hash_ok = (actual_hash == key->vote_hash_);
         }
       };
+      bool is_own_vote = false;
+      auto own_vote_fn = [&](auto& record) {
+        using Record = std::decay_t<decltype(record)>;
+        is_own_vote = std::same_as<Record, tl::db_ourVoteIntent> || std::same_as<Record, tl::db_ourSignedVote>;
+      };
       tos_api::downcast_call(*value, td::overloaded(intent_fn, signed_fn, cert_fn));
+      tos_api::downcast_call(*value, own_vote_fn);
       if (!hash_ok) {
+        if (is_own_vote) {
+          // A record of this node's own vote whose key does not bind its contents cannot be
+          // skipped. The skipped vote is then absent from the dedup set, so the node would
+          // decide it afresh and sign it again -- and the record may hold the signature it
+          // already emitted. Verifying the signature would not catch this: the signature
+          // inside can be perfectly valid for the vote inside. Storage corruption here is a
+          // reason to stop, not to re-sign.
+          bus.vote_journal_failure = PSTRING() << "a journalled vote is stored under key 0x" << key->vote_hash_.to_hex()
+                                               << " but its contents hash to 0x" << actual_hash.to_hex();
+          LOG(ERROR) << "Simplex db init_votes: " << bus.vote_journal_failure;
+          continue;
+        }
+        // A certificate is peers' signatures, which this node can be handed again. Skipping
+        // one costs availability of cached evidence, never the integrity of what this node
+        // has itself attested, so it stays a warning.
         LOG(WARNING) << "Simplex db init_votes: hash binding error for "
                         "key vote_hash 0x"
                      << key->vote_hash_.to_hex() << " (value parses but inner hash is 0x" << actual_hash.to_hex()

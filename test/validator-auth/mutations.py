@@ -8,9 +8,14 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPERIMENTAL = 'test-validator-auth-experimental'
+# Only the isolated candidate-authentication experiment is mutated here.
+#
 # The live Simplex guards -- peer verification, duplicate signer, quorum boundary and the
-# producer identity -- are mutation-killed by test-n4-certificate-conformance, which runs
-# them under real post-quantum keys. What is left here is the isolated experiment.
+# producer identity -- moved to test/validator/consensus/test-n4-certificate-conformance.cpp
+# when the Ed25519 conformance test was retired. That test is not built by this directory's
+# workflow, which configures a deliberately minimal tree; it is built and run by the
+# repository-wide ctest job. Its mutations were killed by hand, not by this script, so
+# changing one of those guards will be caught by the test but not by a mutation run.
 MUTANTS = [
     ('candidate-required-crypto', 'validator/auth/experimental.h',
      'if (outcome != CryptoResult::valid)', 'if (false)', EXPERIMENTAL),

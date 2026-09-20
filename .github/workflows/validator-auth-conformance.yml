@@ -1,3 +1,8 @@
+# Scope: the isolated candidate-authentication experiment, the separate policy model and
+# the quorum arithmetic. The live Simplex entrypoints are no longer covered here -- their
+# conformance test (test/validator/consensus/test-n4-certificate-conformance.cpp) needs the
+# validator library, which this deliberately minimal configure does not build, and it runs
+# in the repository-wide build-and-ctest job instead.
 name: Validator signature conformance
 
 on:
