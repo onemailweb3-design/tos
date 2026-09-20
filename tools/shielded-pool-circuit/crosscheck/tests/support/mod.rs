@@ -276,7 +276,7 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         anchor_root: root,
         valid_until,
         output_payloads: &output_payloads,
-        keys: [&held[0].key, &held[1].key],
+        keys: [&held[0].key.public, &held[1].key.public],
         signatures: &signatures,
         witnesses: &[witness_0, witness_1],
         public_amount_out: withdrawal.amount,

@@ -58,13 +58,17 @@ impl AuthKey {
 pub struct Recipient(pub [u8; 32]);
 
 /// Everything section 12.2 puts on the wire that the proof does not carry.
+///
+/// `keys` is public bytes rather than keypairs on purpose: the signatures are
+/// made by whoever holds the secrets -- a wallet derives its own from the
+/// mnemonic and never hands them over -- and this only has to write them down.
 pub struct Transact<'a> {
     pub public: &'a PublicInputs,
     pub proof: &'a groth16::CanonicalProof,
     pub anchor_root: Fr,
     pub valid_until: u32,
     pub output_payloads: &'a [Vec<u8>; 3],
-    pub keys: [&'a AuthKey; 2],
+    pub keys: [&'a [u8; 1312]; 2],
     pub signatures: &'a [[u8; 2420]; 2],
     pub witnesses: &'a [imt::Witness; 2],
     /// A withdrawal's terms. A transfer leaves all three at their zero form.
@@ -123,9 +127,9 @@ impl Transact<'_> {
         output.checked_append_reference(recovery).map_err(sandbox)?;
 
         let auth = refs_only(&[
-            byte_chain(&self.keys[0].public)?,
+            byte_chain(self.keys[0])?,
             byte_chain(&self.signatures[0])?,
-            byte_chain(&self.keys[1].public)?,
+            byte_chain(self.keys[1])?,
             byte_chain(&self.signatures[1])?,
         ])?;
         let witnesses =

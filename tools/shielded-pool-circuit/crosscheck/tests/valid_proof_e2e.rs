@@ -263,7 +263,7 @@ fn a_private_transfer_with_a_proof_that_verifies() {
             anchor_root: root,
             valid_until,
             output_payloads: &payloads,
-            keys: [&input_key, &phantom_key],
+            keys: [&input_key.public, &phantom_key.public],
             signatures: &signatures,
             witnesses: &[witness_0.clone(), witness_1.clone()],
             public_amount_out: 0,
