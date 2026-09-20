@@ -17,6 +17,7 @@
 #include "td/utils/Random.h"
 #include "td/utils/Status.h"
 #include "td/utils/logging.h"
+#include "validator/consensus/simplex/carrier-limits.h"
 #include "validator/consensus/simplex/misbehavior.h"
 
 #include "bus.h"
@@ -54,6 +55,13 @@ class PrivateOverlayImpl : public td::actor::SpawnsWith<Bus>, public td::actor::
         static_cast<td::uint64>(bus.config.max_block_size) + bus.config.max_collated_data_size + (1U << 20);
     LOG_CHECK(max_broadcast_size_wide <= std::numeric_limits<td::uint32>::max())
         << "Configured consensus broadcast limit overflows uint32";
+    // This authorized broadcast size also raises the per-peer transport MTU
+    // (OverlayImpl::update_peers_mtu sets it to max_broadcast_size + 1024), which is what a
+    // direct Simplex message -- a post-quantum vote or certificate -- travels under. It is
+    // sized for multi-megabyte candidate broadcasts, so it already covers the Simplex
+    // carrier hard maximum; this check keeps that true if the broadcast sizing ever shrinks.
+    LOG_CHECK(max_broadcast_size_wide >= simplex::simplex_carrier_peer_mtu_bytes)
+        << "the consensus overlay peer allowance no longer covers the Simplex carrier hard maximum";
     const td::uint32 max_broadcast_size = static_cast<td::uint32>(max_broadcast_size_wide);
     for (const auto& peer : bus.validator_set) {
       adnl_id_to_peer_[peer.adnl_id] = peer;
@@ -224,6 +232,14 @@ class PrivateOverlayImpl : public td::actor::SpawnsWith<Bus>, public td::actor::
   void on_overlay_message(adnl::AdnlNodeIdShort src_adnl_id, td::BufferSlice data) {
     if (!overlay_nodes_.contains(src_adnl_id)) {
       LOG(WARNING) << "private-overlay: dropping message from non-member adnl src " << src_adnl_id;
+      return;
+    }
+    // Reject an over-sized Simplex protocol message before it is parsed, independent of the
+    // transport stream cap: nothing the consensus layer accepts is larger than a certificate
+    // at the structural signer ceiling, so a bigger inner payload is hostile or malformed.
+    if (!simplex::simplex_carrier_accepts(data.size())) {
+      LOG(WARNING) << "private-overlay: dropping a " << data.size() << "-byte protocol message from " << src_adnl_id
+                   << ", above the " << simplex::simplex_protocol_hard_max_bytes << "-byte Simplex hard maximum";
       return;
     }
     auto it = adnl_id_to_peer_.find(src_adnl_id);
