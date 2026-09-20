@@ -45,7 +45,16 @@ fn builds_exactly_the_bytes_the_other_implementation_builds() {
 
     check(
         "stake",
-        stake_preimage(-239, 1_789_434_000, 0x10000, &fill(0xa1), 1, &fill(0xb2), &fill(0xc3)),
+        stake_preimage(
+            -239,
+            1_789_434_000,
+            0x10000,
+            &fill(0xa1),
+            &fill(0xd7),
+            1,
+            &fill(0xb2),
+            &fill(0xc3),
+        ),
     );
     check("config-vote", config_vote_preimage(-239, &fill(0xd4), &fill(0xa1), 7, &fill(0xe5)));
     check(
@@ -54,19 +63,68 @@ fn builds_exactly_the_bytes_the_other_implementation_builds() {
     );
     check(
         "stake-other-key",
-        stake_preimage(-239, 1_789_434_000, 0x10000, &fill(0xa1), 1, &fill(0xb3), &fill(0xc3)),
+        stake_preimage(
+            -239,
+            1_789_434_000,
+            0x10000,
+            &fill(0xa1),
+            &fill(0xd7),
+            1,
+            &fill(0xb3),
+            &fill(0xc3),
+        ),
     );
     check(
         "stake-other-validator",
-        stake_preimage(-239, 1_789_434_000, 0x10000, &fill(0xa2), 1, &fill(0xb2), &fill(0xc3)),
+        stake_preimage(
+            -239,
+            1_789_434_000,
+            0x10000,
+            &fill(0xa2),
+            &fill(0xd7),
+            1,
+            &fill(0xb2),
+            &fill(0xc3),
+        ),
     );
     check(
         "stake-other-algorithm",
-        stake_preimage(-239, 1_789_434_000, 0x10000, &fill(0xa1), 2, &fill(0xb2), &fill(0xc3)),
+        stake_preimage(
+            -239,
+            1_789_434_000,
+            0x10000,
+            &fill(0xa1),
+            &fill(0xd7),
+            2,
+            &fill(0xb2),
+            &fill(0xc3),
+        ),
+    );
+    check(
+        "stake-other-owner",
+        stake_preimage(
+            -239,
+            1_789_434_000,
+            0x10000,
+            &fill(0xa1),
+            &fill(0xd8),
+            1,
+            &fill(0xb2),
+            &fill(0xc3),
+        ),
     );
     check(
         "stake-other-network",
-        stake_preimage(-1, 1_789_434_000, 0x10000, &fill(0xa1), 1, &fill(0xb2), &fill(0xc3)),
+        stake_preimage(
+            -1,
+            1_789_434_000,
+            0x10000,
+            &fill(0xa1),
+            &fill(0xd7),
+            1,
+            &fill(0xb2),
+            &fill(0xc3),
+        ),
     );
     check(
         "config-vote-other-set",

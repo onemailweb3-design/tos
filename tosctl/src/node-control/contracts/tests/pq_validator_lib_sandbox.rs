@@ -71,9 +71,10 @@ cell probe_election_context() method_id {
 cell probe_config_vote_context() method_id {
   return pq::config_vote_context();
 }
-cell probe_stake_preimage(int stake_at, int max_factor, int validator_id, int algorithm_id,
-                          int key_id, int adnl_addr) method_id {
-  return pq::stake_preimage(stake_at, max_factor, validator_id, algorithm_id, key_id, adnl_addr);
+cell probe_stake_preimage(int stake_at, int max_factor, int validator_id, int stake_owner,
+                          int algorithm_id, int key_id, int adnl_addr) method_id {
+  return pq::stake_preimage(stake_at, max_factor, validator_id, stake_owner, algorithm_id, key_id,
+                            adnl_addr);
 }
 cell probe_config_vote_preimage(int validator_set_id, int validator_id, int idx,
                                 int proposal_hash) method_id {
@@ -458,6 +459,7 @@ fn the_contract_builds_the_bytes_the_vectors_freeze() {
                 StackItem::integer(IntegerData::from_u32(1_789_434_000)),
                 StackItem::integer(IntegerData::from_u32(0x10000)),
                 StackItem::integer(fill(0xa1)),
+                StackItem::integer(fill(0xd7)),
                 StackItem::integer(IntegerData::from_u32(1)),
                 StackItem::integer(fill(0xb2)),
                 StackItem::integer(fill(0xc3)),
@@ -490,16 +492,44 @@ fn the_contract_builds_the_bytes_the_vectors_freeze() {
         let result = chain.run_get_method(&probe, method, arguments).expect("the probe answers");
         assert_eq!(result.exit_code, 0, "{method} failed");
         let cell = result.stack.last().expect("a preimage").as_cell().expect("a cell").clone();
-        let mut slice = chain_block::SliceData::load_cell(cell).expect("the preimage");
-        assert_eq!(slice.remaining_references(), 0, "{name} is more than one cell");
-        let bits = slice.remaining_bits();
-        assert_eq!(bits % 8, 0, "{name} is not a whole number of bytes");
-        let bytes = slice.get_next_bits(bits).expect("the preimage bytes");
+        let bytes = canonical_chain(cell, name);
         assert_eq!(
             hex::encode(&bytes),
             expected(name),
             "the contract's {name} preimage is not the one the node and the tooling sign"
         );
+    }
+}
+
+/// The bytes of a message, read the way the verifying instruction reads one.
+///
+/// A message is a canonical byte chain: whole bytes, at most one reference, and every
+/// cell but the last holding exactly 127 of them. A preimage that outgrows a cell is
+/// therefore two cells, and reading only the first would compare a prefix against the
+/// whole and call them different for the wrong reason. The rules are re-stated here
+/// rather than assumed, so a contract that built a chain the instruction would refuse
+/// fails in this test instead of on chain.
+fn canonical_chain(root: chain_block::Cell, name: &str) -> Vec<u8> {
+    const CHUNK: usize = 127;
+    let mut bytes = Vec::new();
+    let mut cell = root;
+    loop {
+        let mut slice = chain_block::SliceData::load_cell(cell).expect("a chunk");
+        let bits = slice.remaining_bits();
+        assert_eq!(bits % 8, 0, "{name}: a chunk is not a whole number of bytes");
+        assert!(slice.remaining_references() <= 1, "{name}: a chunk has more than one reference");
+        let size = bits / 8;
+        assert!(size <= CHUNK, "{name}: a chunk exceeds a cell's capacity");
+        let more = slice.remaining_references() == 1;
+        assert!(
+            !more || size == CHUNK,
+            "{name}: a chunk that is continued holds {size} bytes rather than {CHUNK}"
+        );
+        bytes.extend_from_slice(&slice.get_next_bits(bits).expect("the chunk's bytes"));
+        if !more {
+            return bytes;
+        }
+        cell = slice.checked_drain_reference().expect("the next chunk");
     }
 }
 

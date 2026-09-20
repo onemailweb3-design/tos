@@ -44,16 +44,23 @@ inline void append_bits256(std::string& out, const td::Bits256& value) {
 // contract saw, and the key identity is derived by the contract from the key presented:
 // neither is taken from the request, and binding both is what stops a request naming one
 // validator while carrying another's key.
+//
+// The stake owner is the account the money came from, which need not be the validator: a
+// pool holds nominators' funds and has no authority, and a controller has authority and
+// need not hold the funds. It is bound here so an authorisation issued for one funding
+// account cannot be presented by another. The contract reads it from the sender rather
+// than from the request, so a signature and a sender that disagree do not verify.
 inline std::string stake_preimage(std::int32_t global_id, std::uint32_t stake_at, std::uint32_t max_factor,
-                                  const td::Bits256& validator_id, std::uint16_t algorithm_id,
-                                  const td::Bits256& key_id, const td::Bits256& adnl_addr) {
+                                  const td::Bits256& validator_id, const td::Bits256& stake_owner,
+                                  std::uint16_t algorithm_id, const td::Bits256& key_id, const td::Bits256& adnl_addr) {
   std::string out;
-  out.reserve(114);
+  out.reserve(146);
   detail::append_be(out, elector_pq_stake_sign_tag, 4);
   detail::append_be(out, static_cast<std::uint32_t>(global_id), 4);
   detail::append_be(out, stake_at, 4);
   detail::append_be(out, max_factor, 4);
   detail::append_bits256(out, validator_id);
+  detail::append_bits256(out, stake_owner);
   detail::append_be(out, algorithm_id, 2);
   detail::append_bits256(out, key_id);
   detail::append_bits256(out, adnl_addr);

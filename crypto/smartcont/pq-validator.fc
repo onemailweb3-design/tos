@@ -256,22 +256,42 @@ const int pq::tag::complaint_sign = 0x5051434f;   ;; "PQCO"
 
 
 ;; TAG u32 | global_id i32 | stake_at u32 | max_factor u32 | validator_id u256 |
-;; algorithm_id u16 | key_id u256 | adnl_addr u256   -- 114 bytes, one cell.
+;; stake_owner u256 | algorithm_id u16 | key_id u256 | adnl_addr u256  -- 146 bytes.
 ;;
 ;; The validator identity is the account the elector saw, and the key identity is derived
 ;; from the key presented. Neither is taken from the request, which is what stops a
 ;; request naming one validator while carrying another's key.
-cell pq::stake_preimage(int stake_at, int max_factor, int validator_id, int algorithm_id,
-                        int key_id, int adnl_addr) inline {
+;;
+;; The stake owner is the account the money came from, which need not be the validator: a
+;; pool holds nominators' funds and has no authority, and a controller has authority and
+;; need not hold the funds. The elector reads it from the sender, so an authorisation
+;; issued for one funding account does not verify when another presents it.
+;;
+;; Two cells, not one. A message is read as a canonical byte chain, and that shape
+;; requires every cell but the last to hold exactly 127 bytes; 146 bytes therefore splits
+;; 127 and 19, and the split lands inside the ADNL address because no field boundary is
+;; at 127. The other two sides build these bytes flat and never see a cell, so the shared
+;; vectors hold the bytes rather than the cells, and this split is the only place it
+;; matters.
+const int pq::chain_chunk_bytes = 127;
+const int pq::adnl_tail_bits = 152;      ;; 19 bytes, what the second cell carries
+const int pq::adnl_head_bits = 104;      ;; 13 bytes, what fits in the first
+
+cell pq::stake_preimage(int stake_at, int max_factor, int validator_id, int stake_owner,
+                        int algorithm_id, int key_id, int adnl_addr) inline {
+  int head = adnl_addr >> pq::adnl_tail_bits;
+  int tail = adnl_addr - (head << pq::adnl_tail_bits);
   return begin_cell()
     .store_uint(pq::tag::stake_sign, 32)
     .store_int(pq::global_id(), 32)
     .store_uint(stake_at, 32)
     .store_uint(max_factor, 32)
     .store_uint(validator_id, 256)
+    .store_uint(stake_owner, 256)
     .store_uint(algorithm_id, 16)
     .store_uint(key_id, 256)
-    .store_uint(adnl_addr, 256)
+    .store_uint(head, pq::adnl_head_bits)
+    .store_ref(begin_cell().store_uint(tail, pq::adnl_tail_bits).end_cell())
   .end_cell();
 }
 

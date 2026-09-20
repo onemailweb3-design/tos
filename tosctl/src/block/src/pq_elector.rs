@@ -31,21 +31,29 @@ pub const ELECTOR_PQ_COMPLAINT_SIGN_TAG: u32 = 0x5051_434f; // "PQCO"
 /// identity is derived by the contract from the key presented: neither is taken from the
 /// request, and binding both is what stops a request naming one validator while carrying
 /// another's key.
+///
+/// The stake owner is the account the money came from, which need not be the validator: a
+/// pool holds nominators' funds and has no authority, and a controller has authority and
+/// need not hold the funds. It is bound here so an authorisation issued for one funding
+/// account cannot be presented by another. The contract reads it from the sender rather
+/// than from the request, so a signature and a sender that disagree do not verify.
 pub fn stake_preimage(
     global_id: i32,
     stake_at: u32,
     max_factor: u32,
     validator_id: &UInt256,
+    stake_owner: &UInt256,
     algorithm_id: u16,
     key_id: &UInt256,
     adnl_addr: &UInt256,
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(114);
+    let mut out = Vec::with_capacity(146);
     out.extend_from_slice(&ELECTOR_PQ_STAKE_SIGN_TAG.to_be_bytes());
     out.extend_from_slice(&global_id.to_be_bytes());
     out.extend_from_slice(&stake_at.to_be_bytes());
     out.extend_from_slice(&max_factor.to_be_bytes());
     out.extend_from_slice(validator_id.as_slice());
+    out.extend_from_slice(stake_owner.as_slice());
     out.extend_from_slice(&algorithm_id.to_be_bytes());
     out.extend_from_slice(key_id.as_slice());
     out.extend_from_slice(adnl_addr.as_slice());

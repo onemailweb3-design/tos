@@ -121,6 +121,7 @@ fn the_controller_domain_is_its_own() {
         1_789_434_000,
         0x10000,
         &fill(0xa1),
+        &fill(0xd7),
         1,
         &fill(0xb2),
         &fill(0xc3),

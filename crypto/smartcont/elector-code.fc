@@ -353,7 +353,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   ;; only step whose cost an unauthorised sender could otherwise impose at will.
   cell signature_chain = pq::stored_signature(algorithm_id, signature);
   ifnot (pq_check_mldsa44(
-      pq::stake_preimage(stake_at, max_factor, validator_id, algorithm_id, key_id, adnl_addr),
+      pq::stake_preimage(stake_at, max_factor, validator_id, src_addr, algorithm_id, key_id, adnl_addr),
       pq::election_context(), signature_chain, key_chain)) {
     return return_stake(s_addr, query_id, 1);
   }

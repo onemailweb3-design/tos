@@ -3833,7 +3833,11 @@ fn stored_bytes(bytes: &[u8]) -> chain_block::Cell {
         .expect("bytes of admitted length")
 }
 
-/// The 114 bytes a stake request signs, built here independently of the contract.
+/// The 146 bytes a stake request signs, built here independently of the contract.
+///
+/// The owner defaults to the validator, which is what a controller staking its own funds
+/// looks like and what every test here does. A relayed stake is a different account, and
+/// the elector reads it from the sender rather than from the request.
 fn pq_stake_preimage(
     global_id: i32,
     stake_at: u32,
@@ -3842,17 +3846,28 @@ fn pq_stake_preimage(
     key_id: &chain_block::UInt256,
     adnl: &[u8; 32],
 ) -> Vec<u8> {
-    pq_stake_preimage_for(global_id, stake_at, max_factor, validator_id, 1, key_id, adnl)
+    pq_stake_preimage_for(
+        global_id,
+        stake_at,
+        max_factor,
+        validator_id,
+        validator_id,
+        1,
+        key_id,
+        adnl,
+    )
 }
 
-/// The same bytes with the suite stated explicitly, so a signature can be made over a
-/// suite other than the one the request carries.
+/// The same bytes with the owner and the suite stated explicitly, so a signature can be
+/// made for another funding account, or over a suite other than the one the request
+/// carries.
 #[allow(clippy::too_many_arguments)]
 fn pq_stake_preimage_for(
     global_id: i32,
     stake_at: u32,
     max_factor: u32,
     validator_id: &chain_block::UInt256,
+    stake_owner: &chain_block::UInt256,
     algorithm_id: u16,
     key_id: &chain_block::UInt256,
     adnl: &[u8; 32],
@@ -3862,6 +3877,7 @@ fn pq_stake_preimage_for(
         stake_at,
         max_factor,
         validator_id,
+        stake_owner,
         algorithm_id,
         key_id,
         &chain_block::UInt256::from(*adnl),
@@ -4755,6 +4771,9 @@ struct SignedFields {
     algorithm_id: u16,
     adnl: [u8; 32],
     key_id: chain_block::UInt256,
+    /// Whose money the authorisation was issued for. `None` means the sender, which is a
+    /// controller staking its own funds.
+    stake_owner: Option<chain_block::UInt256>,
 }
 
 /// Send a well-formed stake whose signature was made over `signed` and under `context`.
@@ -4776,6 +4795,7 @@ fn pq_stake_signed_over(
         signed.stake_at,
         signed.max_factor,
         &validator_id,
+        signed.stake_owner.as_ref().unwrap_or(&validator_id),
         signed.algorithm_id,
         &signed.key_id,
         &signed.adnl,
@@ -4823,6 +4843,7 @@ fn every_signed_field_of_a_stake_is_covered_by_its_signature() {
         algorithm_id: 1,
         adnl: validator.adnl,
         key_id: validator.key_id(),
+        stake_owner: None,
     };
 
     // The fixture has to be able to succeed, or every case below would pass for nothing.
@@ -4860,6 +4881,18 @@ fn every_signed_field_of_a_stake_is_covered_by_its_signature() {
         (
             "another key",
             SignedFields { key_id: other.key_id(), ..honest.clone() },
+            ELECTION_CONTEXT,
+        ),
+        // An authorisation issued for one funding account, presented by another. This is
+        // what stops a validator's permission to stand in an election being taken to a
+        // pool it was not issued for: the elector reads the owner from the sender, so the
+        // bytes it rebuilds are not the bytes that were signed.
+        (
+            "another funding account",
+            SignedFields {
+                stake_owner: Some(chain_block::UInt256::from_slice(&[0x9f; 32])),
+                ..honest.clone()
+            },
             ELECTION_CONTEXT,
         ),
         // While one suite is admitted this case cannot tell a preimage that commits the
