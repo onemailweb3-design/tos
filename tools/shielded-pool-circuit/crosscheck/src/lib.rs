@@ -27,8 +27,10 @@ use tos_sandbox::{compile_func, Blockchain, MessageBuilder, SandboxError};
 use tos_vm::stack::integer::IntegerData;
 use tos_vm::stack::StackItem;
 
-const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+pub(crate) const TOS: u64 = 1_000_000_000;
+pub(crate) const ACTIVE_VERSION: u32 = 17;
+
+pub mod wire;
 
 /// Anything that stops the cross-check from producing a comparison.
 #[derive(Debug)]
@@ -91,12 +93,12 @@ pub struct Probe {
 }
 
 /// The directory holding the shielded FunC library in *this* checkout.
-fn library_dir() -> PathBuf {
+pub(crate) fn library_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../crypto/smartcont/shielded")
 }
 
 /// `stdlib.fc` from this checkout, not from wherever `TOS_ROOT` points.
-fn stdlib_path() -> PathBuf {
+pub(crate) fn stdlib_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../crypto/smartcont/stdlib.fc")
 }
 

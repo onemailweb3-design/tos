@@ -24,3 +24,4 @@ pub mod poseidon2;
 pub mod public_inputs;
 pub mod scenario;
 pub mod tree;
+pub mod wire;

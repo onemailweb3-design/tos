@@ -1704,6 +1704,7 @@ dependencies = [
 name = "shielded-pool-circuit-crosscheck"
 version = "0.1.0"
 dependencies = [
+ "ark-ff",
  "chain_block",
  "serde_json",
  "shielded-pool-circuit",
