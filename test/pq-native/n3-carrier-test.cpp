@@ -123,6 +123,47 @@ int main() {
     assert(back.move_as_ok()->get_hash() == cell->get_hash());
   }
 
+  // The same carriers as the operator tooling serialises them. The two libraries frame a
+  // bag of cells differently, so these are not the bytes above; what matters is that the
+  // node can read what the tooling sends and reach the same message. Without this the
+  // direction that carries a real vote -- tooling writes, node reads -- is the one
+  // direction nothing tries.
+  {
+    std::map<std::string, std::string> from_tooling;
+    std::ifstream file(N3_CARRIER_TOOLING_FILE);
+    assert(file);
+    for (std::string line; std::getline(file, line);) {
+      if (line.empty() || line[0] == '#') {
+        continue;
+      }
+      auto fields = split(line, '\t');
+      assert(fields.size() == 2);
+      from_tooling[fields[0]] = fields[1];
+    }
+    if (from_tooling.size() != built.size()) {
+      std::printf("the tooling recorded %zu carriers and this side builds %zu\n", from_tooling.size(), built.size());
+      assert(false);
+    }
+    for (const auto& [name, cell] : built) {
+      auto found = from_tooling.find(name);
+      if (found == from_tooling.end()) {
+        std::printf("the tooling did not record %s\n", name.c_str());
+        assert(false);
+      }
+      auto bytes = td::hex_decode(found->second);
+      assert(bytes.is_ok());
+      auto read_back = vm::std_boc_deserialize(bytes.move_as_ok());
+      if (read_back.is_error()) {
+        std::printf("%s: this side cannot read what the tooling writes\n", name.c_str());
+        assert(false);
+      }
+      if (read_back.move_as_ok()->get_hash() != cell->get_hash()) {
+        std::printf("%s: what the tooling writes is a different message\n", name.c_str());
+        assert(false);
+      }
+    }
+  }
+
   // Each "other" row differs from its base in one field, so every one of them must be a
   // different message. A layout that dropped a field would make two of these equal.
   std::set<std::string> distinct;
@@ -158,6 +199,17 @@ int main() {
     assert(cs.size() == 0 && cs.size_refs() == 1);
   }
 
-  std::printf("N3_CARRIER_OK %zu vote carriers match the recorded bytes, and no two are the same\n", built.size());
+  // A count the file and the builders have to agree on, stated rather than inferred: two
+  // rows named the same would otherwise leave one of them unbuilt and unnoticed.
+  constexpr std::size_t expected = 8;
+  if (built.size() != expected || recorded.size() != expected) {
+    std::printf("expected %zu carriers, built %zu, recorded %zu\n", expected, built.size(), recorded.size());
+    assert(false);
+  }
+
+  std::printf(
+      "N3_CARRIER_OK %zu vote carriers match the recorded bytes, are readable as the tooling writes "
+      "them, and no two are the same\n",
+      built.size());
   return 0;
 }

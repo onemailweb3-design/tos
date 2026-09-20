@@ -63,18 +63,31 @@ fi
 # So the same tests are run once more against an empty record, which makes every call to
 # `REGRESSION_VERIFY` write its name instead of comparing. What that produces is the set
 # of tests that actually verify something, and it has to be the set the record holds.
-fresh="$scratch/fresh.ans"
-printf 'abce\n' >"$fresh"
-mkdir -p "$scratch/fresh.cache"
+# Each binary records into a record of its own, so two binaries claiming the same test
+# name are two lines here rather than one. A shared record would have let the second one
+# merely agree with the first, and a test produced by two programs is a test whose answer
+# depends on which program ran.
+: >"$scratch/verifying.all"
 for binary in $binaries; do
+  fresh="$scratch/fresh-$binary.ans"
+  printf 'abce\n' >"$fresh"
   if ! "$build/$binary" --regression "$fresh" >/dev/null 2>&1; then
     echo "regression check failed: $binary could not record into an empty record" >&2
     failed=1
+    continue
   fi
+  tail -n +2 "$fresh" | awk -v b="$binary" '{print $1"\t"b}' >>"$scratch/verifying.all"
 done
 
+sort "$scratch/verifying.all" -o "$scratch/verifying.all"
+while read -r duplicate; do
+  [ -n "$duplicate" ] || continue
+  echo "regression check failed: ${duplicate%_default} records an answer from more than one program" >&2
+  failed=1
+done < <(awk -F'\t' '{if ($1 == last) print $1; last = $1}' "$scratch/verifying.all" | sort -u)
+
 tail -n +2 "$answers" | awk '{print $1}' | sort -u >"$scratch/recorded"
-tail -n +2 "$fresh" | awk '{print $1}' | sort -u >"$scratch/verifying"
+awk -F'\t' '{print $1}' "$scratch/verifying.all" | sort -u >"$scratch/verifying"
 
 while read -r name; do
   [ -n "$name" ] || continue

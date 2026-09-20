@@ -165,10 +165,20 @@ std::variant<ConsensusPQKey, ConsensusKeyFileError> place_seed(std::string_view 
   // whole one: an interrupted write leaves the temporary behind rather than a half key
   // the node would refuse on every later start.
   //
-  // The name carries this process, so a temporary left behind by an interrupted run --
-  // or by another process provisioning at the same moment -- is never the name this one
-  // wants. A fixed name would turn one crash into a permanent refusal.
-  const std::string temporary = name + ".new." + std::to_string(::getpid());
+  // The name is unique to this attempt, so a temporary left behind by an interrupted
+  // run is never the name a later one wants. A fixed name would turn one crash into a
+  // permanent refusal, and a name built from the process id would do the same once that
+  // id came round again.
+  unsigned char suffix[8]{};
+  if (RAND_bytes(suffix, static_cast<int>(sizeof(suffix))) != 1) {
+    return ConsensusKeyFileError::write_failed;
+  }
+  std::string temporary = name + ".new.";
+  for (unsigned char byte : suffix) {
+    static const char digits[] = "0123456789abcdef";
+    temporary.push_back(digits[byte >> 4]);
+    temporary.push_back(digits[byte & 15]);
+  }
   {
     Descriptor fd(::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600));
     if (!fd.valid()) {
@@ -204,11 +214,23 @@ std::variant<ConsensusPQKey, ConsensusKeyFileError> place_seed(std::string_view 
   // path to the secret that nothing afterwards mentions, so a key is reported as created
   // only when exactly one path to it exists. If the temporary cannot be removed the new
   // name is removed instead, which puts the directory back where it started.
+  //
+  // The rollback removes the entry only while it is still the one this call linked. In a
+  // directory only the operator can write that is not much of a risk, but "delete
+  // whatever is at this path" is a different instruction from "undo what I just did",
+  // and the second is the one meant here. If it cannot be undone, both names may still
+  // be there and the refusal says the key was not created, which is the truth an
+  // operator can act on.
+  struct stat linked{};
+  const bool know_inode = ::lstat(name.c_str(), &linked) == 0;
   while (::unlink(temporary.c_str()) != 0) {
     if (errno == EINTR) {
       continue;
     }
-    ::unlink(name.c_str());
+    struct stat now{};
+    if (know_inode && ::lstat(name.c_str(), &now) == 0 && now.st_dev == linked.st_dev && now.st_ino == linked.st_ino) {
+      ::unlink(name.c_str());
+    }
     return ConsensusKeyFileError::write_failed;
   }
   // The new name has to reach the disk, or a crash leaves the directory pointing at a

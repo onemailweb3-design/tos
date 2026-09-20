@@ -116,9 +116,17 @@ fn built() -> Vec<(&'static str, Cell)> {
     ]
 }
 
+/// Where the bytes this side writes are kept, for the node's reader to be held to.
+/// Regenerated with `TOS_WRITE_CARRIER_TOOLING=1`, and otherwise compared.
+const TOOLING_FILE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/pq-native/n3-carrier-vectors-tooling.tsv"
+);
+
 #[test]
 fn builds_exactly_the_carriers_the_other_implementation_builds() {
     let mut cases = recorded();
+    let mut written_by_tooling: Vec<(String, String)> = Vec::new();
     for (name, cell) in built() {
         let (hash, boc) = cases.remove(name).unwrap_or_else(|| panic!("no recorded case {name}"));
         assert_eq!(
@@ -138,7 +146,10 @@ fn builds_exactly_the_carriers_the_other_implementation_builds() {
             cell.repr_hash(),
             "{name}: the recorded bytes are a different message"
         );
-        // And what this side writes is readable in turn, as the same tree.
+        // And what this side writes is recorded in turn, so the node's reader is held to
+        // it. Reading back only with this side's own reader would leave the direction
+        // that matters -- tooling writes, node reads -- untested, and two changes that
+        // suited each other would pass.
         let written = write_boc(&cell).expect("serialise the carrier");
         let round_tripped = read_single_root_boc(&written).expect("read back what we wrote");
         assert_eq!(
@@ -146,11 +157,43 @@ fn builds_exactly_the_carriers_the_other_implementation_builds() {
             cell.repr_hash(),
             "{name}: this side cannot read back its own carrier"
         );
+        written_by_tooling.push((name.to_string(), hex::encode(&written)));
     }
     assert!(
         cases.is_empty(),
         "the file records carriers this side does not build: {:?}",
         cases.keys().collect::<Vec<_>>()
+    );
+
+    let mut produced = String::from(
+        "# The same carriers, serialised by the operator tooling rather than by the node.\n\
+         #\n\
+         # The two libraries frame a bag of cells differently, so these bytes are not the\n\
+         # ones beside them in n3-carrier-vectors.tsv. They are here so the node's reader is\n\
+         # held to what the tooling actually sends: a test that only read back its own\n\
+         # output would pass two changes that suited each other and nothing else.\n\
+         #\n\
+         # Written by the Rust carrier test with TOS_WRITE_CARRIER_TOOLING=1.\n\
+         #\n\
+         # name\tboc_hex\n",
+    );
+    written_by_tooling.sort();
+    for (name, boc) in &written_by_tooling {
+        produced.push_str(name);
+        produced.push('\t');
+        produced.push_str(boc);
+        produced.push('\n');
+    }
+    if std::env::var("TOS_WRITE_CARRIER_TOOLING").is_ok() {
+        std::fs::write(TOOLING_FILE, &produced).expect("record what this side writes");
+        return;
+    }
+    let recorded_tooling =
+        std::fs::read_to_string(TOOLING_FILE).expect("the recorded tooling serialisations");
+    assert_eq!(
+        recorded_tooling, produced,
+        "what this side writes has changed; regenerate with TOS_WRITE_CARRIER_TOOLING=1 and \
+         say in the commit why the bytes the node must read are different"
     );
 }
 

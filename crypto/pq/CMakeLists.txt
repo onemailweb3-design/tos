@@ -129,7 +129,8 @@ if(TARGET tos_crypto)
   set_target_properties(test-n3-carrier PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(test-n3-carrier PRIVATE tos_block tos_crypto)
   target_compile_definitions(test-n3-carrier PRIVATE
-    N3_CARRIER_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-vectors.tsv")
+    N3_CARRIER_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-vectors.tsv"
+    N3_CARRIER_TOOLING_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-vectors-tooling.tsv")
   add_test(NAME n3-carrier-vectors COMMAND test-n3-carrier)
   # What a validator controller's post-quantum root signs.
   add_executable(n3-controller-auth-vectors-gen

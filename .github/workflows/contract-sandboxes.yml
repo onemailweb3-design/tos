@@ -107,7 +107,9 @@ jobs:
 
       # The shared vector files. Their readers compare against the file, so a generator
       # that drifts away from what it once produced is invisible until someone tries to
-      # regenerate and cannot explain the diff.
+      # regenerate and cannot explain the diff. One of them is produced by the operator
+      # tooling instead, and the Rust test that writes it also verifies it; this step only
+      # requires it to still be there.
       - name: Vector files match their generators
         run: |
           cmake --build build --target n3-preimage-vectors-gen n3-carrier-vectors-gen \
