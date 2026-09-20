@@ -244,12 +244,85 @@ int bounce_gas_ceiling() asm "500000 PUSHINT";
   ;; already in the balance; leaving liability alone is what makes it reserve.
 }
 
+
+;; Section 16.3. A payout that failed comes back with everything needed to put
+;; it right, so this handler keeps nothing between messages and has nothing to
+;; look up: it authenticates what arrived and mints from that.
+;;
+;; The order is the profile's, and the ACCEPT sits exactly where the profile
+;; puts it. Everything above it is parsing, comparing and four hashes, paid for
+;; by the message itself; only once the bounce is known to be this pool's own
+;; payout does the pool agree to pay for the rest. The recovery compute the
+;; ACCEPT buys was already paid for by the withdrawal fee, which the user
+;; converted to reserve before the money left.
+() handle_bounce(int msg_value, slice header, slice body) impure {
+  ;; A bounce of something that was not a payout -- a plain top-up returning,
+  ;; say -- carries no envelope. It is not an error and there is nothing to
+  ;; recover; the value stays as unencumbered reserve.
+  if (body.slice_bits() < 32) {
+    return ();
+  }
+  if (body.preload_uint(32) != recovery_envelope_tag()) {
+    return ();
+  }
+
+  ;; 1-3. The envelope, the frozen payout shape, and the record inside it.
+  cell original = recovery_original_body(body);
+  (int query_id, int intent_digest, int template_hash, int recipient_hash,
+   int owner_commitment, cell recovery_data) = recovery_parse_payout(original);
+
+  ;; The address the bounce came from, which the sender cannot choose.
+  slice sender = header~load_msg_addr();
+  recovery_require_authentic(sender, query_id, intent_digest, template_hash,
+                             recipient_hash, owner_commitment, recovery_data);
+
+  ;; 4, 5. Only now, and bounded immediately.
+  accept_message();
+  set_gas_limit(bounce_gas_ceiling());
+
+  ;; 6, 7. The note is for what came back. A bounce that returns nothing mints
+  ;; nothing rather than minting a note worth zero.
+  int recovered_amount = msg_value;
+  if (recovered_amount == 0) {
+    return ();
+  }
+
+  (int commitment_root, int commitment_next_index,
+   int nullifier_root, int nullifier_next_index,
+   int last_anchor_epoch, int native_liability, int reserve_floor,
+   cell frontier, cell anchors, cell config, cell vk) = state_parse(get_data());
+
+  ;; 9. the pre-mutation root is preserved before the append, as on every other
+  ;; path that moves the tree.
+  (anchors, last_anchor_epoch) =
+    anchors_preserve(anchors, commitment_next_index, commitment_root, now(),
+                     last_anchor_epoch);
+
+  ;; 8, 10. one note, at the index the contract assigns.
+  int leaf_index = commitment_next_index;
+  int note_body = recovery_note_body(owner_commitment, recovered_amount, recovery_data);
+  (frontier, commitment_root) =
+    frontier_append(frontier, leaf_index, note_commitment(note_body, leaf_index));
+
+  ;; 11, 12. The money is back inside the pool, so the pool owes it again.
+  native_liability = native_liability + recovered_amount;
+  [int balance, _] = get_balance();
+  throw_unless(204, balance >= native_liability + reserve_floor);
+
+  set_data(state_build(commitment_root, leaf_index + 1,
+                       nullifier_root, nullifier_next_index,
+                       last_anchor_epoch, native_liability, reserve_floor,
+                       frontier, anchors, config, vk));
+}
+
 () recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
-  ;; A bounce carries no operation of ours. So does a plain top-up of the
-  ;; balance, which is allowed and changes no shielded state.
   slice header = in_msg_full.begin_parse();
   int flags = header~load_uint(4);
   if (flags & 1) {
+    ;; A bounce. If it is one of this pool's payouts coming back it carries a
+    ;; record that says how to turn it into a note again; anything else is
+    ;; money arriving with no instructions, which is reserve.
+    handle_bounce(msg_value, header, in_msg_body);
     return ();
   }
   if (in_msg_body.slice_bits() < 32) {

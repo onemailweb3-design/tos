@@ -26,6 +26,7 @@ pub fn pool_sources() -> Vec<PathBuf> {
         "shielded/transact.fc",
         "shielded/groth16.fc",
         "shielded/payout.fc",
+        "shielded/recovery.fc",
         "tos-shielded-pool-v1.fc",
     ]
     .into_iter()
