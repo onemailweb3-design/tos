@@ -123,6 +123,14 @@ jobs:
           cmake -S crypto/pq/tools -B build-pq-key -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-pq-key -j2
 
+      # The two programs the suites run rather than imitate: the node's vote producer
+      # and the operator's root-authorisation tool. The tests that use them panic when
+      # they are absent, which is the right behaviour and also means this step is not
+      # optional -- without it those suites cannot run at all, and a job that never runs
+      # a test reports nothing about it.
+      - name: Build the post-quantum producers the suites drive
+        run: cmake --build build --target tos-pq-vote tos-pq-controller -j2
+
       # Runs every file under contracts/tests/, which is where the sandbox
       # suites live. Do not narrow this to a single --test target: the point
       # is that adding a suite should not require editing CI to have it run.
