@@ -935,6 +935,142 @@ fn a_relay_is_refused_unless_the_key_is_the_bound_one_and_the_money_is_enough() 
     assert!(relayed(&poor).is_none(), "a refused relay sent something anyway");
 }
 
+/// A stake the elector would abort on must not get past this account.
+///
+/// The elector answers a stake it dislikes by sending the money back; it aborts only on
+/// one that it cannot parse, and the signature is the one field whose shape nothing
+/// checked before it arrived there. An abort bounces to whoever sent the message, and
+/// since the relay put this account there, the bounce stops here: the pool never learns
+/// its stake died, stays waiting for an answer that cannot come, and its principal rests
+/// in this account's balance. So the shape is checked here, where a refusal still bounces
+/// back to the pool, which knows what to do with one.
+#[test]
+fn a_signature_the_elector_could_not_parse_never_leaves_this_account() {
+    let root = RootKey::new(0xb8);
+    let consensus = RootKey::new(0xb9);
+    let mut controller = deploy(&root);
+    name_an_elector(&mut controller.chain);
+    let account = controller
+        .chain
+        .get_account(&controller.address)
+        .expect("the controller is deployed")
+        .clone();
+    let mut with_key = account;
+    with_key.set_data(controller_data_bound(
+        &root,
+        0,
+        0,
+        1,
+        chain_block::derive_consensus_key_id(1, &consensus.public_key).as_slice(),
+    ));
+    let address = controller.address.clone();
+    controller.chain.set_account(address, with_key);
+    let pool = controller.chain.treasury("relay-pool-c", 100_000 * TOS).expect("a pool");
+
+    // Every length but the one ML-DSA-44 signs with, including the empty one.
+    for length in [0usize, 1, 2419, 2421, 8192] {
+        let result = controller
+            .chain
+            .send_message(pool.build_message(
+                &controller.address,
+                5_000 * TOS,
+                true,
+                Some(relay_body(1, &consensus.public_key, &vec![0x5a; length])),
+            ))
+            .expect("delivered");
+        assert_ne!(
+            exit_code(&result),
+            0,
+            "a {length}-byte signature was relayed to an elector that cannot parse it"
+        );
+        assert!(relayed(&result).is_none(), "a refused relay sent something anyway");
+    }
+
+    // The length is not the only thing that makes a chain unreadable: a declared length
+    // that the bytes behind it do not carry is refused too.
+    let mut lying = chain_block::BuilderData::new();
+    {
+        use chain_block::IBitstring;
+        lying.append_u32(2420).expect("a declared length");
+    }
+    lying
+        .checked_append_reference(
+            chain_block::BuilderData::new().into_cell().expect("an empty chain"),
+        )
+        .expect("the chain");
+    let mut body = chain_block::BuilderData::new();
+    {
+        use chain_block::IBitstring;
+        body.append_u32(RELAY_OP).expect("operation");
+        body.append_u64(7).expect("query id");
+        body.append_u32(1_789_434_000).expect("election");
+        body.append_u32(0x10000).expect("max factor");
+        body.append_raw(&[0xa5; 32], 256).expect("adnl address");
+        body.append_u16(1).expect("algorithm");
+    }
+    body.checked_append_reference(stored(&consensus.public_key)).expect("the key");
+    body.checked_append_reference(lying.into_cell().expect("a lying signature"))
+        .expect("the signature");
+    {
+        use chain_block::IBitstring;
+        body.append_bit_zero().expect("no birth witness");
+    }
+    let result = controller
+        .chain
+        .send_message(pool.build_message(
+            &controller.address,
+            5_000 * TOS,
+            true,
+            Some(body.into_cell().expect("a relay request")),
+        ))
+        .expect("delivered");
+    assert_ne!(exit_code(&result), 0, "a signature that lies about its length was relayed");
+    assert!(relayed(&result).is_none(), "a refused relay sent something anyway");
+}
+
+/// Something this account sent, coming back.
+///
+/// A relay is bounceable on purpose, so the one message this account sends is also the one
+/// that can return. Treating that return as a request would abort the transaction, which
+/// moves the money nowhere and burns what came back with it.
+#[test]
+fn a_relay_that_comes_back_is_held_rather_than_thrown_over() {
+    use chain_block::IBitstring;
+    let root = RootKey::new(0xba);
+    let mut controller = deploy(&root);
+    let elector = name_an_elector(&mut controller.chain);
+    let before = controller
+        .chain
+        .get_account(&controller.address)
+        .and_then(|account| account.balance().and_then(|balance| balance.coins.as_u64()))
+        .expect("a balance");
+
+    // What a bounced stake looks like: the bounce marker, then as much of the body the
+    // elector could not carry out as fits.
+    let mut bounced = chain_block::BuilderData::new();
+    bounced.append_u32(0xffff_ffff).expect("the bounce marker");
+    bounced.append_u32(STAKE_OP).expect("the operation that bounced");
+    bounced.append_u64(7).expect("query id");
+
+    let mut bounce = MessageBuilder::internal(&elector, &controller.address, 5_000 * TOS)
+        .bounce(false)
+        .body(bounced.into_cell().expect("a bounced body"))
+        .build();
+    // The bit that tells a return from a request. Without it this is an ordinary message
+    // carrying `0xffffffff`, which is a different thing entirely.
+    bounce.int_header_mut().expect("an internal message").bounced = true;
+
+    let result = controller.chain.send_message(bounce).expect("the bounce is delivered");
+    assert_eq!(exit_code(&result), 0, "a returning relay was thrown over");
+
+    let after = controller
+        .chain
+        .get_account(&controller.address)
+        .and_then(|account| account.balance().and_then(|balance| balance.coins.as_u64()))
+        .expect("a balance");
+    assert!(after > before, "the money that came back was not kept: {before} -> {after}");
+}
+
 #[test]
 fn there_is_no_external_way_in() {
     use chain_block::IBitstring;

@@ -162,6 +162,23 @@ slice ctl::elector_address() inline {
   throw_unless(ctl::error::wrong_consensus_key,
                pq::key_id(algorithm_id, public_key) == bound_key_id);
 
+  ;; The shape the elector will read, settled here rather than discovered there.
+  ;;
+  ;; The elector answers a stake it dislikes by sending the money back, but a signature it
+  ;; cannot parse it aborts on, and an abort bounces to the account that sent the message
+  ;; -- which the relay makes this one. The bounce would stop here: the account whose money
+  ;; it is never hears that its stake died, and goes on waiting for an answer that cannot
+  ;; come while its principal rests in this balance. Refusing the same shape here costs a
+  ;; walk of the chain and bounces back to that account, which knows what a refusal means.
+  ;;
+  ;; What goes out is then rebuilt from the walked chain, so the elector is handed the
+  ;; canonical wrapper rather than whatever the caller wrapped the same bytes in.
+  cell signature_chain = pq::stored_signature(algorithm_id, signature);
+  cell relayed_signature = begin_cell()
+    .store_uint(pq::mldsa44_signature_bytes, 32)
+    .store_ref(signature_chain)
+  .end_cell();
+
   ;; Whose money this is: the account that sent it here, read rather than stated. The
   ;; elector believes it because this code is what ConfigParam 47 admitted, and this is
   ;; the line that makes that belief true.
@@ -175,7 +192,7 @@ slice ctl::elector_address() inline {
     .store_uint(stake_at, 32)
     .store_uint(max_factor, 32)
     .store_uint(adnl_addr, 256)
-    .store_ref(signature);
+    .store_ref(relayed_signature);
   ifnot (cell_null?(witness)) {
     body = body.store_uint(1, 1).store_ref(witness);
   } else {
@@ -199,14 +216,27 @@ slice ctl::elector_address() inline {
 }
 
 () recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
+  slice header = in_msg_full.begin_parse();
+  int flags = header~load_uint(4);
+
+  ;; Something this account sent came back. A relay is the only message it sends that can:
+  ;; it goes to the elector bounceable, so that a stake which cannot be carried out returns
+  ;; the money rather than leaving it there.
+  ;;
+  ;; The money is already in this balance by the time this runs, and the bounce cannot say
+  ;; whose it was -- a bounce carries the first 256 bits of the body it bounced, and a
+  ;; stake's owner is written past them. So it is held, and the root moves it back. Throwing
+  ;; instead would change nothing about where the money is and only burn what came with it.
+  if (flags & 1) {
+    return ();
+  }
+
   if (in_msg_body.slice_empty?()) {
     return ();  ;; plain value transfer, used to fund the account
   }
   int op = in_msg_body~load_uint(32);
   if (op == ctl::relay_op) {
-    slice cs = in_msg_full.begin_parse();
-    cs~load_uint(4);
-    return ctl::relay_stake(cs~load_msg_addr(), msg_value, in_msg_body);
+    return ctl::relay_stake(header~load_msg_addr(), msg_value, in_msg_body);
   }
   throw_unless(ctl::error::bad_operation, op == ctl::op);
   in_msg_body~load_uint(64);  ;; query_id, echoed by nothing: this account answers no one
