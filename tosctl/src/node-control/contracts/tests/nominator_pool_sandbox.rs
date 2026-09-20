@@ -263,6 +263,38 @@ fn reply_tags(result: &tos_sandbox::SendResult) -> Vec<u32> {
     tags
 }
 
+/// What the elector itself did, separated from what came back.
+///
+/// A tag alone cannot tell a refusal from a bounce: a throw inside the elector returns a
+/// bounced message whose first word is also `0xffffffff`, so a test that only looked for
+/// that tag would report "the elector refused politely" when the elector had in fact
+/// aborted. Teaching the elector the classical opcode again survived exactly that.
+fn elector_verdict(result: &tos_sandbox::SendResult, elector: &MsgAddressInt) -> (bool, Vec<u32>) {
+    let mut aborted = false;
+    let mut tags = Vec::new();
+    let mut ran = false;
+    for (address, transaction) in &result.transactions {
+        if address != elector {
+            continue;
+        }
+        ran = true;
+        aborted |= transaction.read_description().expect("description").is_aborted();
+        transaction
+            .iterate_out_msgs(|message| {
+                if let Some(body) = message.body() {
+                    let mut body = body.clone();
+                    if let Ok(tag) = body.get_next_u32() {
+                        tags.push(tag);
+                    }
+                }
+                Ok(true)
+            })
+            .expect("out messages");
+    }
+    assert!(ran, "the elector was never reached");
+    (aborted, tags)
+}
+
 #[test]
 fn the_pool_deploys_idle_and_reports_what_it_was_configured_with() {
     let pooled = launch(1_000 * TOS, 20_000 * TOS);
@@ -312,14 +344,21 @@ fn a_pools_stake_is_refused_by_the_elector_and_the_pool_is_left_believing_it_was
     // The pool did send it, and the elector did answer.
     let tags = reply_tags(&result);
     assert!(tags.contains(&NEW_STAKE), "the pool did not forward a stake to the elector");
-    assert!(
-        tags.contains(&UNKNOWN_QUERY),
-        "the elector recognised the classical stake operation: {tags:02x?}"
+
+    // The elector answered, rather than throwing: the opcode is unknown to it, so it never
+    // reaches the code that would refuse or accept a stake.
+    let elector = pooled.elector.clone();
+    let (aborted, answered) = elector_verdict(&result, &elector);
+    assert!(!aborted, "the elector tried to process the classical stake and threw");
+    assert_eq!(
+        answered.first().copied(),
+        Some(UNKNOWN_QUERY),
+        "the elector recognised the classical stake operation: {answered:02x?}"
     );
-    assert!(!tags.contains(&NEW_STAKE_OK), "the elector accepted a classical stake: {tags:02x?}");
+    assert!(!answered.contains(&NEW_STAKE_OK), "the elector accepted a classical stake");
     assert!(
-        !tags.contains(&NEW_STAKE_ERROR),
-        "the elector refused in a way the pool understands, so this test is stale: {tags:02x?}"
+        !answered.contains(&NEW_STAKE_ERROR),
+        "the elector refused in a way the pool understands, so this test is stale"
     );
 
     // And the pool believes a stake is out.
