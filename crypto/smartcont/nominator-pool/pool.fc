@@ -346,13 +346,14 @@ cell distribute_share(int reward, cell nominators) inline_ref {
         if (in_msg_body.slice_bits() >= 64) {
             in_msg_body~skip_bits(32); ;; skip 0xFFFFFFFF bounced prefix
             int op = in_msg_body~load_uint(32);
-            if ((op == op::new_stake()) & (is_elector_address(sender_wc, sender_addr))) {
-                ;; `new_stake` from nominator-pool should always be handled without throws by elector
-                ;; because nominator-pool do `check_new_stake_msg` and `msg_value` checks before sending `new_stake`.
-                ;; If the stake is not accepted elector will send `new_stake_error` response message.
-                ;; Nevertheless we do process theoretically possible bounced `new_stake`.
-
-                (int state, int nominators_count, int stake_amount_sent, int validator_amount, (int validator_address, int controller_address, int validator_reward_share, int max_nominators_count, int min_validator_stake, int min_nominator_stake), cell nominators, cell withdraw_requests, int stake_at, int saved_validator_set_hash, int validator_set_changes_count, int validator_set_change_time, int stake_held_for, cell config_proposal_votings) = load_data();
+            (int state, int nominators_count, int stake_amount_sent, int validator_amount, (int validator_address, int controller_address, int validator_reward_share, int max_nominators_count, int min_validator_stake, int min_nominator_stake), cell nominators, cell withdraw_requests, int stake_at, int saved_validator_set_hash, int validator_set_changes_count, int validator_set_change_time, int stake_held_for, cell config_proposal_votings) = load_data();
+            ;; A stake this pool sent, come back. It goes to the controller now rather than
+            ;; to the elector, so this is the controller refusing to relay it -- for a key
+            ;; it is not bound to, or for too little to pay the elector with. The money is
+            ;; back; what matters is that the pool stops believing a stake is out, or it
+            ;; would refuse every later order until the validator set had changed three
+            ;; times.
+            if ((op == op::relay_stake()) & (sender_wc == -1) & (sender_addr == controller_address)) {
                 if (state == 1) {
                     state = 0;
                 }

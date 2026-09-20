@@ -370,6 +370,38 @@ fn a_stake_goes_to_the_validator_controller_and_the_contract_keeps_running() {
     assert!(!went_to_elector, "the classical stake operation is still being sent");
 }
 
+/// A stake the Validator Controller refuses comes back, and this contract goes to rest.
+///
+/// Without recognising the bounce it waits in `SENT_STAKE_REQUEST` for an answer that has
+/// already arrived, and the next round's order is refused for the state it is in.
+#[test]
+fn a_bounced_relay_returns_the_contract_to_rest() {
+    let mut staking = launch(100_000 * TOS);
+    let election = staking.election();
+    staking.order(1, 60_000 * TOS, election);
+    assert_eq!(staking.state().0, STATE_SENT_STAKE_REQUEST, "the stake was not sent");
+
+    let mut body = BuilderData::new();
+    body.append_u32(0xffff_ffff).expect("the bounced prefix");
+    body.append_u32(RELAY_STAKE).expect("the operation that bounced");
+    body.append_u64(1).expect("query id");
+    let from = staking.validator_controller.clone();
+    let target = staking.controller.clone();
+    // Marked bounced, which is the bit the contract reads to tell one from an ordinary
+    // message; the builder has no word for it.
+    let mut bounce = MessageBuilder::internal(&from, &target, TOS)
+        .body(body.into_cell().expect("a bounce"))
+        .build();
+    bounce.int_header_mut().expect("an internal message").bounced = true;
+    staking.chain.send_message(bounce).expect("the bounce is delivered").expect_success();
+
+    assert_eq!(
+        staking.state(),
+        (STATE_REST, false),
+        "the contract is still waiting for a stake that came back"
+    );
+}
+
 /// Terms that are not the shape of a stake are refused, and nothing is sent.
 #[test]
 fn terms_that_are_not_a_stake_are_refused_before_anything_is_sent() {

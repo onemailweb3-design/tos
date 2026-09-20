@@ -410,6 +410,43 @@ fn a_pools_stake_goes_to_its_controller_and_the_pool_records_it() {
         .expect_exit_code(ERROR_NOT_IDLE);
 }
 
+/// A stake the controller refuses comes back, and the pool stops waiting for it.
+///
+/// The controller bounces a relay it will not carry -- a key it is not bound to, or too
+/// little to pay the elector with. The pool has to recognise that bounce, or it sits in
+/// state 1 believing a stake is out and refuses every later order until the validator set
+/// has changed three times. That is the failure this whole change removed, and it came
+/// back through a different door when the stake stopped going to the elector: the handler
+/// still matched the old operation from the old sender.
+#[test]
+fn a_bounced_relay_lets_the_pool_try_again() {
+    let mut pooled = launch(1_000 * TOS, 20_000 * TOS);
+    let election = pooled.election();
+    pooled.order(1, 1_000 * TOS, election);
+    assert_eq!(pooled.state().0, 1, "the stake was not recorded as out");
+
+    // The relay, bounced by the controller.
+    let mut body = BuilderData::new();
+    body.append_u32(0xffff_ffff).expect("the bounced prefix");
+    body.append_u32(RELAY_STAKE).expect("the operation that bounced");
+    body.append_u64(1).expect("query id");
+    let controller = pooled.controller.clone();
+    let pool = pooled.pool.clone();
+    // Marked bounced, which is the bit the contract reads to tell one from an ordinary
+    // message; the builder has no word for it.
+    let mut bounce = MessageBuilder::internal(&controller, &pool, TOS)
+        .body(body.into_cell().expect("a bounce"))
+        .build();
+    bounce.int_header_mut().expect("an internal message").bounced = true;
+    pooled.chain.send_message(bounce).expect("the bounce is delivered").expect_success();
+
+    assert_eq!(pooled.state().0, 0, "the pool is still waiting for a stake that came back");
+
+    // And it will take another order.
+    let again = pooled.order(2, 1_000 * TOS, election);
+    assert!(sent(&again).is_some(), "the pool would not place another stake");
+}
+
 /// Terms that are not the shape of a stake are refused, and nothing is sent.
 #[test]
 fn terms_that_are_not_a_stake_are_refused_before_anything_is_sent() {

@@ -108,7 +108,12 @@ int check_new_stake_msg(slice cs);
         if (in_msg_body.slice_bits() >= 64) {
             in_msg_body~skip_bounce(); ;; skip 0xFFFFFFFF bounced prefix
             int op = in_msg_body~load_op();
-            if ((op == elector::new_stake) & (is_elector_address(sender_address))) {
+            ;; A stake this contract sent, come back. It goes to the Validator Controller
+            ;; now rather than to the elector, so this is that account refusing to relay it
+            ;; -- for a key it is not bound to, or for too little to pay the elector with.
+            ;; Returning to REST is what lets the next round be tried; without it the
+            ;; contract waits in SENT_STAKE_REQUEST for an answer that has already come.
+            if ((op == controller::relay_stake) & (equal_slice_bits(sender_address, validator_controller))) {
                 ;; `new_stake` from nominator-pool should always be handled without throws by elector
                 ;; because nominator-pool do `check_new_stake_msg` and `msg_value` checks before sending `new_stake`.
                 ;; If the stake is not accepted elector will send `new_stake_error` response message.
