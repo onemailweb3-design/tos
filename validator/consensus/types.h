@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "adnl/adnl-node-id.hpp"
+#include "crypto/pq/pq-consensus.h"
 #include "keys/keys.hpp"
 #include "tos/tos-types.h"
 
@@ -78,6 +79,19 @@ struct PeerValidator {
   bool operator==(const PeerValidator& other) const = default;
 
   PeerValidatorId idx;
+
+  // The post-quantum consensus key the set records for this validator: the one N4 signs
+  // and verifies Simplex messages with. It is not a transport identity.
+  tos::pq::ConsensusPQKey consensus_key;
+
+  // The Ed25519 transport/overlay identity, derived from the descriptor's ADNL address.
+  // It authorizes network traffic (private overlay, FEC), never a consensus signature.
+  PublicKeyHash transport_key_id;
+
+  // TODO(N4.1): `key` and `short_id` are being removed. During the expand-contract
+  // migration they are still populated so consumers can move one file at a time; the
+  // consensus verifier already uses `consensus_key`, and transport uses
+  // `transport_key_id`. Nothing new should read these two.
   PublicKey key;
   PublicKeyHash short_id;
   adnl::AdnlNodeIdShort adnl_id;

@@ -97,7 +97,7 @@ td::Ref<block::BlockSignatureSet> Certificate<T>::to_signature_set(const Candida
 
   std::vector<tos::BlockSignature> block_signatures;
   for (const auto& [validator, signature] : signatures) {
-    block_signatures.emplace_back(validator.get_using(bus).short_id.bits256_value(), signature.clone());
+    block_signatures.emplace_back(validator.get_using(bus).validator_id.value, signature.clone());
   }
 
   auto fn = block::BlockSignatureSet::create_simplex_approve;

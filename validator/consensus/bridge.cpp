@@ -233,8 +233,7 @@ class CandidateBroadcastRelayImpl : public td::actor::SpawnsWith<Bus>, public td
     // this relay. Re-broadcast recent non-empty candidates as a bounded
     // recovery path; older candidates are already covered by normal sync.
     if (event->candidate->is_empty() ||
-        (last_mc_finalized_seqno_ >= 2 &&
-         event->candidate->block_id().seqno() + 4 <= last_mc_finalized_seqno_)) {
+        (last_mc_finalized_seqno_ >= 2 && event->candidate->block_id().seqno() + 4 <= last_mc_finalized_seqno_)) {
       return;
     }
     send_candidate(*bus, event->candidate);
@@ -246,11 +245,11 @@ class CandidateBroadcastRelayImpl : public td::actor::SpawnsWith<Bus>, public td
   }
 
  private:
-  void send_candidate(const Bus &bus, const CandidateRef &candidate) {
+  void send_candidate(const Bus& bus, const CandidateRef& candidate) {
     if (candidate->is_empty()) {
       return;
     }
-    const auto &block = std::get<BlockCandidate>(candidate->block);
+    const auto& block = std::get<BlockCandidate>(candidate->block);
     if (!sent_candidates_.should_relay(block.id)) {
       return;
     }
@@ -361,21 +360,38 @@ class BridgeImpl final : public IValidatorGroup {
     size_t idx = 0;
     ValidatorWeight total_weight = 0;
     for (const auto& el : params_.validator_set->export_vector()) {
-      // Peer verification still uses the classical key; the post-quantum path
-      // arrives when Simplex itself is converted.
-      PublicKey key{pubkeys::Ed25519{el.classical_key()}};
-      PublicKeyHash short_id = key.compute_short_id();
+      // The transport/overlay identity, derived from the descriptor's ADNL address. For a
+      // classical descriptor this equals the old Ed25519 short id (validator_adnl_identity
+      // falls back to it), so migrating consumers from short_id to transport_key_id is a
+      // no-op for classical and correct for post-quantum.
+      auto adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(el)};
+      PublicKeyHash transport_key_id = adnl_id.pubkey_hash();
+
+      // The consensus key the set records. Post-quantum descriptors carry it directly; a
+      // classical descriptor still populates the legacy Ed25519 `key` during the
+      // expand-contract migration, and its consensus_key stays empty.
+      tos::pq::ConsensusPQKey consensus_key;
+      PublicKey key;
+      if (el.is_pq()) {
+        consensus_key.algorithm_id = static_cast<tos::pq::PQAlgorithmId>(el.algorithm_id);
+        std::memcpy(consensus_key.key_id.data(), el.key_id.value.data(), 32);
+        consensus_key.public_key = el.pq_public_key;
+      } else {
+        key = PublicKey{pubkeys::Ed25519{el.classical_key()}};
+      }
 
       bus->validator_set.push_back(PeerValidator{
           .validator_id = el.validator_id,
           .idx = PeerValidatorId{idx},
+          .consensus_key = std::move(consensus_key),
+          .transport_key_id = transport_key_id,
           .key = key,
-          .short_id = short_id,
-          .adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(el)},
+          .short_id = transport_key_id,
+          .adnl_id = adnl_id,
           .weight = el.weight,
       });
 
-      if (params_.local_id && short_id == *params_.local_id) {
+      if (params_.local_id && transport_key_id == *params_.local_id) {
         found = true;
         bus->local_id = bus->validator_set.back();
         CHECK(bus->validator_set.back().adnl_id == params_.local_adnl_id);
@@ -447,8 +463,7 @@ class BridgeImpl final : public IValidatorGroup {
     auto info = pool_result.move_as_ok();
 
     // Step 2: resolve the current chain state to obtain prev block ids and next seqno.
-    auto state_result =
-        co_await bus_.publish<simplex::ResolveState>(info.last_finalized_block).wrap();
+    auto state_result = co_await bus_.publish<simplex::ResolveState>(info.last_finalized_block).wrap();
     if (state_result.is_error()) {
       promise.set_error(state_result.move_as_error());
       co_return td::Unit{};
@@ -643,9 +658,9 @@ td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
     td::actor::ActorId<keyring::Keyring> keyring, td::actor::ActorId<adnl::Adnl> adnl,
     td::actor::ActorId<adnl::AdnlSenderEx> adnl_sender, td::actor::ActorId<overlay::Overlays> overlays,
     std::vector<adnl::AdnlNodeIdShort> all_validators, std::string db_root,
-    td::actor::ActorId<ValidatorManager> validator_manager,
-    td::actor::ActorId<CollationManager> collation_manager, bool create_session, bool allow_unsafe_self_blocks_resync,
-    td::Ref<ValidatorManagerOptions> opts, bool monitoring_shard) {
+    td::actor::ActorId<ValidatorManager> validator_manager, td::actor::ActorId<CollationManager> collation_manager,
+    bool create_session, bool allow_unsafe_self_blocks_resync, td::Ref<ValidatorManagerOptions> opts,
+    bool monitoring_shard) {
   LOG_CHECK(config.protocol_version_supported())
       << "Unsupported Simplex protocol version " << config.protocol_version << " (maximum supported is "
       << NewConsensusConfig::MAX_SUPPORTED_PROTOCOL_VERSION << ")";
@@ -682,12 +697,11 @@ td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
 
 td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge_observer(
     td::Slice name, ShardIdFull shard, adnl::AdnlNodeIdShort local_adnl_id, ValidatorSessionId session_id,
-    td::Ref<block::ValidatorSet> validator_set, NewConsensusConfig config,
-    td::actor::ActorId<keyring::Keyring> keyring, td::actor::ActorId<adnl::Adnl> adnl,
-    td::actor::ActorId<adnl::AdnlSenderEx> adnl_sender, td::actor::ActorId<overlay::Overlays> overlays,
-    std::vector<adnl::AdnlNodeIdShort> all_validators, std::string db_root,
-    td::actor::ActorId<ValidatorManager> validator_manager,
-    td::Ref<ValidatorManagerOptions> opts, bool monitoring_shard) {
+    td::Ref<block::ValidatorSet> validator_set, NewConsensusConfig config, td::actor::ActorId<keyring::Keyring> keyring,
+    td::actor::ActorId<adnl::Adnl> adnl, td::actor::ActorId<adnl::AdnlSenderEx> adnl_sender,
+    td::actor::ActorId<overlay::Overlays> overlays, std::vector<adnl::AdnlNodeIdShort> all_validators,
+    std::string db_root, td::actor::ActorId<ValidatorManager> validator_manager, td::Ref<ValidatorManagerOptions> opts,
+    bool monitoring_shard) {
   LOG_CHECK(config.protocol_version_supported())
       << "Unsupported Simplex protocol version " << config.protocol_version << " (maximum supported is "
       << NewConsensusConfig::MAX_SUPPORTED_PROTOCOL_VERSION << ")";

@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: LGPL-2.0-or-later
  */
 
+#include <limits>
+
 #include "auto/tl/tos_api.hpp"
 #include "keys/encryptor.h"
 #include "td/utils/overloaded.h"
-
-#include <limits>
 
 #include "bus.h"
 #include "checksum.h"
@@ -37,7 +37,7 @@ bool PeerValidator::check_signature(ValidatorSessionId session, td::Slice data, 
 }
 
 td::StringBuilder& operator<<(td::StringBuilder& stream, const PeerValidator& peer_validator) {
-  return stream << peer_validator.idx << " at " << peer_validator.short_id;
+  return stream << peer_validator.idx << " at " << peer_validator.transport_key_id;
 }
 
 CandidateId CandidateId::from_tl(const tl::CandidateIdRef& tl_parent) {
@@ -156,13 +156,12 @@ td::Result<CandidateRef> Candidate::deserialize(td::Slice data, const Bus& bus, 
     auto slot = static_cast<td::uint32>(block_broadcast.slot_);
     TRY_STATUS(set_check_leader(slot));
 
-    const td::uint64 max_candidate_payload = static_cast<td::uint64>(bus.config.max_block_size) +
-                                             bus.config.max_collated_data_size + 1024;
+    const td::uint64 max_candidate_payload =
+        static_cast<td::uint64>(bus.config.max_block_size) + bus.config.max_collated_data_size + 1024;
     if (max_candidate_payload > static_cast<td::uint64>(std::numeric_limits<int>::max())) {
       return td::Status::Error("configured candidate payload limit exceeds the codec range");
     }
-    TRY_RESULT(candidate,
-               deserialize_payload(block_broadcast.candidate_, static_cast<int>(max_candidate_payload)));
+    TRY_RESULT(candidate, deserialize_payload(block_broadcast.candidate_, static_cast<int>(max_candidate_payload)));
 
     if (!candidate->src_.is_zero()) {
       return td::Status::Error("src field of the candidate broadcast must be null");
@@ -243,8 +242,7 @@ td::BufferSlice Candidate::serialize() const {
         candidate.collated_data.clone());
 
     return create_serialize_tl_object<tl::block>(id.slot, CandidateId::parent_id_to_tl(parent_id),
-                                                 serialize_payload(candidate_tl).move_as_ok(),
-                                                 signature.clone());
+                                                 serialize_payload(candidate_tl).move_as_ok(), signature.clone());
   };
   return std::visit(td::overloaded(empty_fn, block_fn), block);
 }
