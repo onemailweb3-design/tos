@@ -976,9 +976,9 @@ def deploy_nominator_pool(
     #   stake_held_for(32) + config_proposal_votings(dict)
     #
     # Config cell:
-    #   validator_address(256) + validator_reward_share(16) +
-    #   max_nominators_count(16) + min_validator_stake(Grams) +
-    #   min_nominator_stake(Grams)
+    #   validator_address(256) + controller_address(256) +
+    #   validator_reward_share(16) + max_nominators_count(16) +
+    #   min_validator_stake(Grams) + min_nominator_stake(Grams)
     #
     # Nominator dict: udict keyed by 256-bit address, value = coins(amount) +
     #   coins(pending_deposit_amount).
@@ -1002,6 +1002,7 @@ constant nominators_dict
   0 Tomi,                            // validator_amount = 0
   <b                                  // config cell
     0 256 u,                          // validator_address (zero hash = fake)
+    0 256 u,                          // controller_address (zero hash = fake)
     {validator_reward_share} 16 u,
     {max_nominators} 16 u,
     {min_validator_stake} Tomi,
@@ -1073,6 +1074,7 @@ constant withdraw_dict
   0 Tomi,                            // validator_amount = 0
   <b
     0 256 u,                          // validator_address (fake)
+    0 256 u,                          // controller_address (fake)
     4000 16 u,
     40 16 u,
     1000000000 Tomi,

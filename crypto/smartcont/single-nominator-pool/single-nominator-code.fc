@@ -129,6 +129,11 @@ int check_new_stake_msg(slice cs) impure inline_ref;
 		}
 
 		;; second emergency safeguard to allow owner to replace nominator logic - you should never need to use this
+		;;
+		;; This replaces code and nothing else. Code that reads a storage layout this
+		;; account was not deployed with will underflow on its next message, and there is
+		;; no generic way for one contract to rewrite another's storage, so an upgrade
+		;; across a layout change is a redeployment rather than this operation.
 		if (op == OP::UPGRADE) {
 			cell code = in_msg_body~load_ref();
 			throw_if(ERROR::WRONG_SET_CODE, cell_null?(code));
