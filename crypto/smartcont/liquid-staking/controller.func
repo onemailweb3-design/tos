@@ -69,6 +69,12 @@ global slice governor;
 global slice halter;
 global slice approver;
 
+;; The account that stands in the election with this contract's money. This contract is a
+;; staking controller, which is a different thing: it holds the loan and the validator's
+;; own funds, and has no validator authority. The elector takes a stake from a post-quantum
+;; Validator Controller and from nowhere else, so a stake goes there.
+global slice validator_controller;
+
 
 
 const int state::REST = 0;
@@ -367,9 +373,13 @@ int check_new_stake_msg(slice cs);
                     validator_set_changes_count = 0;
                     validator_set_change_time = utime_since;
 
-                    send_msg(elector_address(),
+                    ;; To the Validator Controller, which reads this contract as the
+                    ;; account the money came from and states it to the elector. The terms
+                    ;; travel unchanged: this contract checks their shape and reads neither
+                    ;; the key nor the signature, as it never did.
+                    send_msg(validator_controller,
                              value,
-                             begin_cell().store_body_header(elector::new_stake, query_id).store_slice(msg).end_cell(),
+                             begin_cell().store_body_header(controller::relay_stake, query_id).store_slice(msg).end_cell(),
                              msgflag::BOUNCEABLE,
                              sendmode::PAY_FEES_SEPARETELY); ;; pay fee separately, revert on errors
 
@@ -506,6 +516,7 @@ int check_new_stake_msg(slice cs);
 
     approver = ds~load_msg_addr();
     halter = ds~load_msg_addr();
+    validator_controller = ds~load_msg_addr();
 }
 
 
@@ -526,11 +537,16 @@ int is_elector_address(slice address) inline_ref {
 
 ;; check the validity of the new_stake message
 int check_new_stake_msg(slice cs) impure inline_ref {
-    var validator_pubkey = cs~load_uint(256);
+    ;; The terms of a post-quantum stake, checked for shape and passed on. The key and the
+    ;; signature are the validator's; the Validator Controller compares the key against
+    ;; the one it was bound to, and the elector verifies the signature.
     var stake_at = cs~load_uint(32);
     var max_factor = cs~load_uint(32);
     var adnl_addr = cs~load_uint(256);
-    var signature = cs~load_ref().begin_parse().preload_bits(512);
+    var algorithm_id = cs~load_uint(16);
+    var public_key = cs~load_ref();
+    var signature = cs~load_ref();
+    var witness = cs~load_maybe_ref();
     cs.end_parse();
     return stake_at; ;; supposed start of next validation round (utime_since)
 }

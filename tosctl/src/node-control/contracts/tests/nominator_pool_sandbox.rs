@@ -7,14 +7,14 @@
 //! The nominator pool, run rather than read.
 //!
 //! This contract had no behavioural coverage at all, which is how it came to be unable to
-//! stake without anything going red. The post-quantum cutover gave the elector one stake
-//! operation, `PQst`, and this pool still sends the classical one; the elector does not
-//! know that opcode, so the message reaches its unknown-query branch and the money comes
-//! back. Nothing in the tree said so until here.
+//! stake without anything going red. It sent the classical stake operation straight to
+//! the elector, which since the post-quantum cutover has one stake operation and does not
+//! know that one; the message reached the unknown-query branch, the money came back, and
+//! the pool was left in state 1 believing a stake was out.
 //!
-//! The pooled-staking ruling relays a pool's stake through a Validator Controller. These
-//! tests exist so that the state the pool is in today is a fact the tree asserts, and so
-//! that the change has something that can fail.
+//! It stakes through its controller now, which is the account that stands in the election
+//! and the only kind of account the elector takes a stake from. The test that recorded
+//! the breakage is inverted below, which is what it was written for.
 
 use chain_block::{
     Account, BuilderData, Cell, Coins, ConfigParams, IBitstring, MsgAddressInt, Serializable,
@@ -27,6 +27,8 @@ const TOS: u64 = 1_000_000_000;
 /// The pool's own operation for "send a stake to the elector". It is also the opcode the
 /// pool forwards, which is the part the elector no longer knows.
 const NEW_STAKE: u32 = 0x4e73_744b;
+/// `PQrl`: what the pool asks its controller to relay.
+const RELAY_STAKE: u32 = 0x5051_726c;
 /// What the elector answers a message whose operation it does not recognise.
 const UNKNOWN_QUERY: u32 = 0xffff_ffff;
 /// The only refusal the pool understands.
@@ -89,9 +91,14 @@ fn pool_code() -> Cell {
 
 /// `state = 0`, no nominators, no withdrawals: a pool that has been funded by its
 /// validator and has never staked.
-fn pool_data(validator: &chain_block::AccountId, validator_amount: u64) -> Cell {
+fn pool_data(
+    validator: &chain_block::AccountId,
+    controller: &chain_block::AccountId,
+    validator_amount: u64,
+) -> Cell {
     let mut config = BuilderData::new();
     config.append_raw(&validator.get_bytestring(0), 256).expect("validator address");
+    config.append_raw(&controller.get_bytestring(0), 256).expect("controller address");
     config.append_u16(4_000).expect("reward share");
     config.append_u16(40).expect("max nominators");
     Coins::new(200 * TOS).write_to(&mut config).expect("min validator stake");
@@ -119,6 +126,7 @@ struct Pooled {
     elector: MsgAddressInt,
     pool: MsgAddressInt,
     validator: MsgAddressInt,
+    controller: MsgAddressInt,
 }
 
 /// A funded pool on a chain carrying the real elector, with an election open.
@@ -144,9 +152,15 @@ fn launch(validator_amount: u64, pool_balance: u64) -> Pooled {
     // The validator's own masterchain wallet, which is what the pool takes orders from.
     let validator = chain.treasury("pool-validator", 100_000 * TOS).expect("the validator wallet");
 
+    // The controller the stake goes through. A real one is a deployed Validator
+    // Controller; what this suite judges is that the stake is sent there and nowhere
+    // else, so an address is enough.
+    let controller = chain.treasury("pool-controller", 10_000 * TOS).expect("a controller");
+    let controller_address = controller.address().clone();
+
     let init = StateInit::with_code_and_data(
         pool_code(),
-        pool_data(&validator.address().address(), validator_amount),
+        pool_data(&validator.address().address(), &controller_address.address(), validator_amount),
     );
     let pool = MsgAddressInt::with_params(
         -1,
@@ -167,7 +181,13 @@ fn launch(validator_amount: u64, pool_balance: u64) -> Pooled {
         Account::from_message(&deployment).expect("an account from the deployment"),
     );
 
-    Pooled { chain, elector, pool, validator: validator.address().clone() }
+    Pooled {
+        chain,
+        elector,
+        pool,
+        validator: validator.address().clone(),
+        controller: controller_address,
+    }
 }
 
 /// The order an operator gives the pool: stake this much, on these terms.
@@ -182,19 +202,25 @@ fn launch(validator_amount: u64, pool_balance: u64) -> Pooled {
 /// The signature is a pattern. Nothing on this path verifies it: the pool does not, and
 /// the elector no longer reaches the code that would.
 fn stake_order(query_id: u64, value: u64, election: u32) -> Cell {
+    let mut key = BuilderData::new();
+    key.append_u32(1312).expect("declared length");
+    key.checked_append_reference(Cell::default()).expect("the key's bytes");
     let mut signature = BuilderData::new();
-    signature.append_raw(&[0x5a; 64], 512).expect("signature bits");
+    signature.append_u32(2420).expect("declared length");
+    signature.checked_append_reference(Cell::default()).expect("the signature's bytes");
 
     let mut body = BuilderData::new();
     body.append_u32(NEW_STAKE).expect("operation");
     body.append_u64(query_id).expect("query id");
     Coins::new(value).write_to(&mut body).expect("value");
-    body.append_raw(&[0x11; 32], 256).expect("validator public key");
     body.append_u32(election).expect("election");
     body.append_u32(0x10000).expect("max factor");
     body.append_raw(&[0xa5; 32], 256).expect("adnl address");
+    body.append_u16(1).expect("algorithm");
+    body.checked_append_reference(key.into_cell().expect("key cell")).expect("the key");
     body.checked_append_reference(signature.into_cell().expect("signature cell"))
-        .expect("signature reference");
+        .expect("the signature");
+    body.append_bit_zero().expect("no birth witness");
     body.into_cell().expect("stake order")
 }
 
@@ -245,6 +271,27 @@ impl Pooled {
 
 /// Every reply tag any account sent during the cascade, in order. A pool stake is a round
 /// trip -- order, forward, answer -- and which tag came back is the whole question.
+/// Where the first message the pool sent went, what it asked for, and what it carried.
+fn sent(result: &tos_sandbox::SendResult) -> Option<(MsgAddressInt, u32, u128)> {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    let mut out = None;
+    transaction
+        .iterate_out_msgs(|message| {
+            if out.is_none() {
+                if let Some(body) = message.body() {
+                    let mut body = body.clone();
+                    if let Ok(tag) = body.get_next_u32() {
+                        let value = message.get_value().map(|v| v.coins.as_u128()).unwrap_or(0);
+                        out = Some((message.dst().expect("a destination"), tag, value));
+                    }
+                }
+            }
+            Ok(true)
+        })
+        .expect("out messages");
+    out
+}
+
 fn reply_tags(result: &tos_sandbox::SendResult) -> Vec<u32> {
     let mut tags = Vec::new();
     for (_, transaction) in &result.transactions {
@@ -323,50 +370,36 @@ fn only_the_configured_validator_can_order_a_stake() {
     assert_eq!(pooled.state().0, 0, "a refused order moved the pool anyway");
 }
 
-/// A pool cannot stake, and does not learn that it cannot.
+/// The pool stakes through its controller, and records that it did.
 ///
-/// The elector has one stake operation and it is not this one, so the forwarded message
-/// reaches the unknown-query branch and the value returns. The pool recognises only
-/// `new_stake_error` as a refusal, so nothing tells it the stake was declined: it is left
-/// in state 1, believing a stake is out, until the validator-set changes it counts have
-/// gone by.
-///
-/// **This test is inverted when the Controller relay lands.** It asserts the breakage the
-/// pooled-staking ruling exists to remove, so that removing it has something to turn.
+/// This test was written the other way round: the pool sent the classical operation to
+/// the elector, which answered with its unknown-query tag, and the pool -- which
+/// recognises only `new_stake_error` as a refusal -- was left in state 1 believing a
+/// stake was out, refusing every later order until the validator set had changed three
+/// times. That is what a pool that cannot stake looks like from the inside.
 #[test]
-fn a_pools_stake_is_refused_by_the_elector_and_the_pool_is_left_believing_it_was_placed() {
+fn a_pools_stake_goes_to_its_controller_and_the_pool_records_it() {
     let mut pooled = launch(1_000 * TOS, 20_000 * TOS);
     let election = pooled.election();
     let staked = 1_000 * TOS;
+    let controller = pooled.controller.clone();
 
     let result = pooled.order(1, staked, election);
 
-    // The pool did send it, and the elector did answer.
-    let tags = reply_tags(&result);
-    assert!(tags.contains(&NEW_STAKE), "the pool did not forward a stake to the elector");
-
-    // The elector answered, rather than throwing: the opcode is unknown to it, so it never
-    // reaches the code that would refuse or accept a stake.
-    let elector = pooled.elector.clone();
-    let (aborted, answered) = elector_verdict(&result, &elector);
-    assert!(!aborted, "the elector tried to process the classical stake and threw");
-    assert_eq!(
-        answered.first().copied(),
-        Some(UNKNOWN_QUERY),
-        "the elector recognised the classical stake operation: {answered:02x?}"
-    );
-    assert!(!answered.contains(&NEW_STAKE_OK), "the elector accepted a classical stake");
+    let (to, tag, value) = sent(&result).expect("the pool sent nothing on");
+    assert_eq!(tag, RELAY_STAKE, "the pool did not ask its controller to relay a stake");
+    assert_eq!(to, controller, "the stake went somewhere that is not the controller");
+    assert!(value > u128::from(900 * TOS), "the stake carried {value} rather than the money");
     assert!(
-        !answered.contains(&NEW_STAKE_ERROR),
-        "the elector refused in a way the pool understands, so this test is stale"
+        !reply_tags(&result).contains(&NEW_STAKE),
+        "the classical stake operation is still being sent"
     );
 
-    // And the pool believes a stake is out.
-    let (state, sent) = pooled.state();
-    assert_eq!(state, 1, "the pool did not record a stake it thinks it placed");
-    assert_eq!(sent, u128::from(staked - TOS), "the pool recorded the wrong amount");
+    // The pool records what it placed and will not place another until this one is done.
+    let (state, sent_amount) = pooled.state();
+    assert_eq!(state, 1, "the pool did not record the stake it placed");
+    assert_eq!(sent_amount, u128::from(staked - TOS), "the pool recorded the wrong amount");
 
-    // Which means it will refuse the next order, having never validated anything.
     let again = stake_order(2, staked, election);
     pooled
         .chain
@@ -377,33 +410,60 @@ fn a_pools_stake_is_refused_by_the_elector_and_the_pool_is_left_believing_it_was
         .expect_exit_code(ERROR_NOT_IDLE);
 }
 
-/// The elector keeps nothing. The stake bounces rather than stranding a pool's capital,
-/// which is why this is a liveness failure and not a loss.
+/// Terms that are not the shape of a stake are refused, and nothing is sent.
 #[test]
-fn the_refused_stake_comes_back_to_the_pool() {
+fn terms_that_are_not_a_stake_are_refused_before_anything_is_sent() {
+    let mut pooled = launch(1_000 * TOS, 20_000 * TOS);
+    let election = pooled.election();
+
+    let mut body = BuilderData::new();
+    body.append_u32(NEW_STAKE).expect("operation");
+    body.append_u64(1).expect("query id");
+    Coins::new(1_000 * TOS).write_to(&mut body).expect("value");
+    body.append_u32(election).expect("election");
+    body.append_u32(0x10000).expect("max factor");
+    // And then it stops.
+
+    let result = pooled
+        .chain
+        .send_message(
+            MessageBuilder::internal(&pooled.validator, &pooled.pool, 2 * TOS)
+                .body(body.into_cell().expect("a truncated order"))
+                .build(),
+        )
+        .expect("delivered");
+    assert!(sent(&result).is_none(), "a stake with no terms was relayed anyway");
+    assert_eq!(pooled.state().0, 0, "a refused order moved the pool anyway");
+}
+
+/// A stake spends what it was told to spend, and no more.
+#[test]
+fn a_stake_spends_the_amount_it_was_ordered_to() {
     let mut pooled = launch(1_000 * TOS, 20_000 * TOS);
     let election = pooled.election();
     let before = pooled
         .chain
         .get_account(&pooled.pool)
-        .expect("the pool is deployed")
-        .balance()
-        .and_then(|balance| balance.coins.as_u64())
+        .and_then(|account| account.balance().and_then(|balance| balance.coins.as_u64()))
         .expect("a balance");
 
+    // The order carries two TOS of its own, which land in the pool before the stake
+    // leaves it, so the balance falls by the stake less what the order brought in.
+    let order_value = 2 * TOS;
     pooled.order(1, 1_000 * TOS, election);
 
     let after = pooled
         .chain
         .get_account(&pooled.pool)
-        .expect("the pool is deployed")
-        .balance()
-        .and_then(|balance| balance.coins.as_u64())
+        .and_then(|account| account.balance().and_then(|balance| balance.coins.as_u64()))
         .expect("a balance");
-    // Fees are spent on the way out and back; the stake itself is not.
+    let spent = before - after;
     assert!(
-        after > before - 100 * TOS,
-        "a refused stake cost the pool {} nanotomis",
-        before - after
+        spent < 1_000 * TOS - order_value + TOS,
+        "the stake cost the pool {spent}, which is more than it was told to spend"
+    );
+    assert!(
+        spent > 1_000 * TOS - order_value - TOS,
+        "the stake cost the pool only {spent}, so it did not send what it was ordered to"
     );
 }

@@ -368,6 +368,33 @@ fn a_stake_goes_to_the_controller_carrying_the_money_and_the_terms() {
     );
 }
 
+/// Terms that are not the shape of a stake are refused, and nothing is sent.
+///
+/// This contract reads neither the key nor the signature -- the controller compares the
+/// key and the elector verifies the signature -- but it does check that what it is
+/// forwarding has a stake's shape. Without that it would relay anything an operator
+/// typed, and the refusal would arrive two contracts later.
+#[test]
+fn terms_that_are_not_a_stake_are_refused_before_anything_is_sent() {
+    let mut pooled = launch(20_000 * TOS);
+    let election = pooled.election();
+
+    let mut body = BuilderData::new();
+    body.append_u32(NEW_STAKE).expect("operation");
+    body.append_u64(1).expect("query id");
+    Coins::new(1_000 * TOS).write_to(&mut body).expect("stake amount");
+    body.append_u32(election).expect("election");
+    body.append_u32(0x10000).expect("max factor");
+    // And then it stops: no transport address, no key, no signature.
+
+    let result = pooled.from(
+        &pooled.validator.clone(),
+        body.into_cell().expect("a truncated order"),
+        2 * TOS,
+    );
+    assert!(sent(&result).is_none(), "a stake with no terms was relayed anyway");
+}
+
 /// Only the validator may spend the owner's money on a stake, and a stake spends only
 /// what it was told to.
 #[test]

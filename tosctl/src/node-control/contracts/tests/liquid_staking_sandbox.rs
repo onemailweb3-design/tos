@@ -6,14 +6,15 @@
 
 //! The liquid-staking controller, run rather than read.
 //!
-//! Of the three pooled-staking contracts this is the one whose failure is not a missed
+//! Of the three pooled-staking contracts this is the one whose failure was not a missed
 //! round. It keeps a state machine, and in `SENT_STAKE_REQUEST` it recognises exactly two
-//! answers from the elector: the stake was taken, or the stake was refused. Anything else
-//! sets `halted?`, which is a permanent stop that only a governor can lift.
+//! answers: the stake was taken, or the stake was refused. Anything else sets `halted?`,
+//! which is a permanent stop only a governor can lift -- and the elector's unknown-query
+//! tag is neither, so the first stake this contract sent halted it for good.
 //!
-//! Since the post-quantum cutover the elector answers a classical stake with its
-//! unknown-query tag, which is neither of those two. So the first stake this controller
-//! sends halts it. Nothing said so, because the contract had no tests.
+//! It stakes through a Validator Controller now. That account is the one the elector takes
+//! a stake from, and it answers this contract in the two words this contract knows. The
+//! test that recorded the halt is inverted below.
 
 use chain_block::{
     Account, BuilderData, Cell, Coins, ConfigParams, IBitstring, MsgAddressInt, Serializable,
@@ -24,6 +25,8 @@ use tos_sandbox::{Blockchain, MessageBuilder, compile_func, generate_zerostate_s
 const TOS: u64 = 1_000_000_000;
 
 const NEW_STAKE: u32 = 0x4e73_744b;
+/// `PQrl`: what this contract asks a Validator Controller to relay.
+const RELAY_STAKE: u32 = 0x5051_726c;
 const UNKNOWN_QUERY: u32 = 0xffff_ffff;
 const NEW_STAKE_OK: u32 = 0xf374_484c;
 const NEW_STAKE_ERROR: u32 = 0xee6f_454c;
@@ -83,12 +86,14 @@ fn controller_data(
     validator: &MsgAddressInt,
     pool: &MsgAddressInt,
     governor: &MsgAddressInt,
+    validator_controller: &MsgAddressInt,
 ) -> Cell {
     let none = BuilderData::new();
 
     let mut roles = BuilderData::new();
     governor.write_to(&mut roles).expect("approver");
     governor.write_to(&mut roles).expect("halter");
+    validator_controller.write_to(&mut roles).expect("validator controller");
 
     let mut statics = BuilderData::new();
     statics.append_u32(0).expect("controller id");
@@ -125,6 +130,7 @@ struct Staking {
     elector: MsgAddressInt,
     controller: MsgAddressInt,
     validator: MsgAddressInt,
+    validator_controller: MsgAddressInt,
 }
 
 fn launch(balance: u64) -> Staking {
@@ -152,9 +158,21 @@ fn launch(balance: u64) -> Staking {
     let governor = chain.treasury("ls-governor", 10_000 * TOS).expect("the governor");
     let governor_address = governor.address().clone();
 
+    // The account that stands in the election. A real one is a deployed Validator
+    // Controller; what this suite judges is that the stake is sent there and nowhere
+    // else, so an address is enough.
+    let validator_controller =
+        chain.treasury("ls-validator-controller", 10_000 * TOS).expect("a validator controller");
+    let validator_controller_address = validator_controller.address().clone();
+
     let init = StateInit::with_code_and_data(
         controller_code(),
-        controller_data(&validator_address, &pool_address, &governor_address),
+        controller_data(
+            &validator_address,
+            &pool_address,
+            &governor_address,
+            &validator_controller_address,
+        ),
     );
     let controller = MsgAddressInt::with_params(
         -1,
@@ -174,26 +192,38 @@ fn launch(balance: u64) -> Staking {
         Account::from_message(&deployment).expect("an account from the deployment"),
     );
 
-    Staking { chain, elector, controller, validator: validator_address }
+    Staking {
+        chain,
+        elector,
+        controller,
+        validator: validator_address,
+        validator_controller: validator_controller_address,
+    }
 }
 
 /// The order: stake this much, on these terms. The payload is built into the body rather
 /// than into a cell of its own, because the contract reads it as a continuation of the
 /// same slice and a reference does not survive being appended as bits.
 fn stake_order(query_id: u64, value: u64, election: u32) -> Cell {
+    let mut key = BuilderData::new();
+    key.append_u32(1312).expect("declared length");
+    key.checked_append_reference(Cell::default()).expect("the key's bytes");
     let mut signature = BuilderData::new();
-    signature.append_raw(&[0x5a; 64], 512).expect("signature bits");
+    signature.append_u32(2420).expect("declared length");
+    signature.checked_append_reference(Cell::default()).expect("the signature's bytes");
 
     let mut body = BuilderData::new();
     body.append_u32(NEW_STAKE).expect("operation");
     body.append_u64(query_id).expect("query id");
     Coins::new(value).write_to(&mut body).expect("value");
-    body.append_raw(&[0x11; 32], 256).expect("validator public key");
     body.append_u32(election).expect("election");
     body.append_u32(0x10000).expect("max factor");
     body.append_raw(&[0xa5; 32], 256).expect("adnl address");
+    body.append_u16(1).expect("algorithm");
+    body.checked_append_reference(key.into_cell().expect("key cell")).expect("the key");
     body.checked_append_reference(signature.into_cell().expect("signature cell"))
-        .expect("signature reference");
+        .expect("the signature");
+    body.append_bit_zero().expect("no birth witness");
     body.into_cell().expect("stake order")
 }
 
@@ -239,19 +269,31 @@ impl Staking {
     }
 }
 
-/// What the elector itself did, separated from what came back. A throw inside the elector
-/// bounces a message whose first word is also `0xffffffff`, so a test that only looked
-/// for that tag could not tell a refusal from an abort.
-fn elector_verdict(result: &tos_sandbox::SendResult, elector: &MsgAddressInt) -> (bool, Vec<u32>) {
-    let mut aborted = false;
+/// Where the first message the contract sent went, what it asked for, and what it carried.
+fn sent(result: &tos_sandbox::SendResult) -> Option<(MsgAddressInt, u32, u128)> {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    let mut out = None;
+    transaction
+        .iterate_out_msgs(|message| {
+            if out.is_none() {
+                if let Some(body) = message.body() {
+                    let mut body = body.clone();
+                    if let Ok(tag) = body.get_next_u32() {
+                        let value = message.get_value().map(|v| v.coins.as_u128()).unwrap_or(0);
+                        out = Some((message.dst().expect("a destination"), tag, value));
+                    }
+                }
+            }
+            Ok(true)
+        })
+        .expect("out messages");
+    out
+}
+
+/// Every reply tag anyone sent during the cascade.
+fn reply_tags(result: &tos_sandbox::SendResult) -> Vec<u32> {
     let mut tags = Vec::new();
-    let mut ran = false;
-    for (address, transaction) in &result.transactions {
-        if address != elector {
-            continue;
-        }
-        ran = true;
-        aborted |= transaction.read_description().expect("description").is_aborted();
+    for (_, transaction) in &result.transactions {
         transaction
             .iterate_out_msgs(|message| {
                 if let Some(body) = message.body() {
@@ -264,8 +306,7 @@ fn elector_verdict(result: &tos_sandbox::SendResult, elector: &MsgAddressInt) ->
             })
             .expect("out messages");
     }
-    assert!(ran, "the elector was never reached");
-    (aborted, tags)
+    tags
 }
 
 #[test]
@@ -299,53 +340,91 @@ fn only_the_validator_can_order_a_stake() {
     assert_eq!(staking.state(), (STATE_REST, false), "a refused order moved the controller");
 }
 
-/// The first stake this controller sends stops it for good.
+/// The stake goes to the Validator Controller, and the contract records that it is out.
 ///
-/// The elector does not know the classical opcode, so it answers with its unknown-query
-/// tag. The controller is in `SENT_STAKE_REQUEST` and recognises only the two answers a
-/// stake used to produce; anything else means something it cannot account for has
-/// happened, so it halts. Its capital comes back and it can no longer do anything with
-/// it without a governor.
-///
-/// **This test is inverted when the Controller relay lands.**
+/// This test was written the other way round. The stake went to the elector, which does
+/// not know that operation and answered with its unknown-query tag; this contract, in
+/// `SENT_STAKE_REQUEST` and recognising only "taken" and "refused", concluded that
+/// something it could not account for had happened and halted itself permanently. That is
+/// what the first stake used to do.
 #[test]
-fn a_liquid_staking_controller_halts_on_the_first_stake_it_sends() {
+fn a_stake_goes_to_the_validator_controller_and_the_contract_keeps_running() {
     let mut staking = launch(100_000 * TOS);
     let election = staking.election();
+    let target = staking.validator_controller.clone();
 
     let result = staking.order(1, 60_000 * TOS, election);
 
-    // It did send a stake, and the elector answered rather than throwing.
-    let elector = staking.elector.clone();
-    let (aborted, answered) = elector_verdict(&result, &elector);
-    assert!(!aborted, "the elector tried to process the classical stake and threw");
-    assert_eq!(
-        answered.first().copied(),
-        Some(UNKNOWN_QUERY),
-        "the elector recognised the classical stake operation: {answered:02x?}"
-    );
-    assert!(!answered.contains(&NEW_STAKE_OK), "the elector accepted a classical stake");
-    assert!(
-        !answered.contains(&NEW_STAKE_ERROR),
-        "the elector refused in a way this controller understands, so this test is stale"
-    );
+    let (to, tag, value) = sent(&result).expect("the controller sent nothing on");
+    assert_eq!(tag, RELAY_STAKE, "the contract did not ask for a stake to be relayed");
+    assert_eq!(to, target, "the stake went somewhere that is not the validator controller");
+    assert!(value > u128::from(50_000 * TOS), "the stake carried {value} rather than the money");
 
-    // And the controller stopped. This is the difference between this contract and the
-    // other two: not a missed round, a halt.
+    // It is waiting for an answer, and it is still running.
     let (state, halted) = staking.state();
-    assert!(halted, "the controller carried on after an answer it could not account for");
-    assert_eq!(
-        state, STATE_SENT_STAKE_REQUEST,
-        "a halted controller should still remember it had sent a stake"
-    );
+    assert_eq!(state, STATE_SENT_STAKE_REQUEST, "the contract did not record the stake it sent");
+    assert!(!halted, "the contract halted itself on a stake it successfully sent");
 
-    // Halted, it refuses the next order rather than trying again.
-    let again = staking.order(2, 60_000 * TOS, election);
-    assert!(
-        again.transactions.iter().any(|(_, transaction)| transaction
-            .read_description()
-            .expect("description")
-            .is_aborted()),
-        "a halted controller took another order"
-    );
+    // And the elector was not asked anything: it takes a stake from a controller only.
+    let (_, _, went_to_elector) = (0, 0, reply_tags(&result).contains(&NEW_STAKE));
+    assert!(!went_to_elector, "the classical stake operation is still being sent");
+}
+
+/// Terms that are not the shape of a stake are refused, and nothing is sent.
+#[test]
+fn terms_that_are_not_a_stake_are_refused_before_anything_is_sent() {
+    let mut staking = launch(100_000 * TOS);
+    let election = staking.election();
+
+    let mut body = BuilderData::new();
+    body.append_u32(NEW_STAKE).expect("operation");
+    body.append_u64(1).expect("query id");
+    Coins::new(60_000 * TOS).write_to(&mut body).expect("value");
+    body.append_u32(election).expect("election");
+    body.append_u32(0x10000).expect("max factor");
+    // And then it stops.
+
+    let sender = staking.validator.clone();
+    let target = staking.controller.clone();
+    let result = staking
+        .chain
+        .send_message(
+            MessageBuilder::internal(&sender, &target, 2 * TOS)
+                .body(body.into_cell().expect("a truncated order"))
+                .build(),
+        )
+        .expect("delivered");
+    assert!(sent(&result).is_none(), "a stake with no terms was relayed anyway");
+    assert_eq!(staking.state(), (STATE_REST, false), "a refused order moved the contract");
+}
+
+/// Told the stake was taken, the contract says so; told it was refused, it goes back to
+/// rest and can try again. Those are the two answers it knows, and the Validator
+/// Controller is between it and the elector precisely so that it gets one of them.
+#[test]
+fn the_two_answers_it_knows_move_it_on_rather_than_halting_it() {
+    for (answer, expected_state) in [(NEW_STAKE_OK, 3u8), (NEW_STAKE_ERROR, STATE_REST)] {
+        let mut staking = launch(100_000 * TOS);
+        let election = staking.election();
+        staking.order(1, 60_000 * TOS, election);
+        assert_eq!(staking.state().0, STATE_SENT_STAKE_REQUEST, "the stake was not sent");
+
+        let mut body = BuilderData::new();
+        body.append_u32(answer).expect("the answer");
+        body.append_u64(1).expect("query id");
+        let elector = staking.elector.clone();
+        let target = staking.controller.clone();
+        staking
+            .chain
+            .send_message(
+                MessageBuilder::internal(&elector, &target, TOS)
+                    .body(body.into_cell().expect("an answer"))
+                    .build(),
+            )
+            .expect("the answer is delivered");
+
+        let (state, halted) = staking.state();
+        assert!(!halted, "an answer it knows halted it: {answer:08x}");
+        assert_eq!(state, expected_state, "an answer it knows left it in the wrong state");
+    }
 }
