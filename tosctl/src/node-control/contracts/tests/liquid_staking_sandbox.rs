@@ -31,8 +31,13 @@ const UNKNOWN_QUERY: u32 = 0xffff_ffff;
 const NEW_STAKE_OK: u32 = 0xf374_484c;
 const NEW_STAKE_ERROR: u32 = 0xee6f_454c;
 
+/// `PQsl`: naming the Validator Controller a stake travels through.
+const SET_VALIDATOR_CONTROLLER: u32 = 0x5051_736c;
+
 const STATE_REST: u8 = 0;
 const STATE_SENT_STAKE_REQUEST: u8 = 2;
+
+const ERROR_NO_VALIDATOR_CONTROLLER: i32 = 0xfc00;
 
 fn repo_root() -> std::path::PathBuf {
     std::env::var("TOS_ROOT").map(std::path::PathBuf::from).unwrap_or_else(|_| {
@@ -80,20 +85,69 @@ fn controller_code() -> Cell {
         .expect("the liquid-staking controller compiles")
 }
 
+/// The initial storage the pool writes, taken from the pool's own source.
+///
+/// Building it here instead would make this suite agree with itself: the layout that
+/// matters is the one `address_calculations.func` writes, and a field missing there is a
+/// field the controller underflows on at its first message. So the probe compiles that
+/// file and is asked for the cell.
+fn pool_written_controller_data(statics: Cell) -> Cell {
+    let probe = std::env::temp_dir().join("tos_liquid_init_probe.fc");
+    std::fs::write(
+        &probe,
+        r#"
+global cell controller_code;
+cell probe_controller_init_data(cell static_data) method_id {
+  return controller_init_data(static_data);
+}
+() recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
+}
+"#,
+    )
+    .expect("probe source");
+    let code = compile_func(&[
+        repo_root().join("crypto/smartcont/liquid-staking/stdlib.func"),
+        repo_root().join("crypto/smartcont/liquid-staking/types.func"),
+        repo_root().join("crypto/smartcont/liquid-staking/address_calculations.func"),
+        probe,
+    ])
+    .expect("the pool's address calculations and their probe compile");
+
+    let mut chain = Blockchain::new().expect("a chain for the probe");
+    chain.set_workchain(-1);
+    let address = masterchain(chain_block::AccountId::from([0x77u8; 32]));
+    let init = StateInit::with_code_and_data(code, Cell::default());
+    let deployment = MessageBuilder::internal(&address, &address, 1_000 * TOS)
+        .bounce(false)
+        .state_init(init)
+        .body(Cell::default())
+        .build();
+    chain.set_account(
+        address.clone(),
+        Account::from_message(&deployment).expect("the probe account"),
+    );
+    let result = chain
+        .run_get_method(
+            &address,
+            "probe_controller_init_data",
+            vec![tos_vm::stack::StackItem::Cell(statics)],
+        )
+        .expect("the probe answers");
+    assert_eq!(result.exit_code, 0, "probe_controller_init_data failed");
+    result.stack.last().expect("a cell").as_cell().expect("a cell").clone()
+}
+
 /// A controller at rest, approved, owing nothing. The static half lives behind two
 /// references, which is how the contract reads it back.
-fn controller_data(
+/// The half of a controller's storage the pool builds and the controller never writes.
+fn controller_statics(
     validator: &MsgAddressInt,
     pool: &MsgAddressInt,
     governor: &MsgAddressInt,
-    validator_controller: &MsgAddressInt,
 ) -> Cell {
-    let none = BuilderData::new();
-
     let mut roles = BuilderData::new();
     governor.write_to(&mut roles).expect("approver");
     governor.write_to(&mut roles).expect("halter");
-    validator_controller.write_to(&mut roles).expect("validator controller");
 
     let mut statics = BuilderData::new();
     statics.append_u32(0).expect("controller id");
@@ -103,6 +157,17 @@ fn controller_data(
     statics
         .checked_append_reference(roles.into_cell().expect("roles cell"))
         .expect("roles reference");
+    statics.into_cell().expect("statics cell")
+}
+
+fn controller_data(
+    validator: &MsgAddressInt,
+    pool: &MsgAddressInt,
+    governor: &MsgAddressInt,
+    validator_controller: &MsgAddressInt,
+) -> Cell {
+    let none = BuilderData::new();
+    let statics = controller_statics(validator, pool, governor);
 
     let mut data = BuilderData::new();
     data.append_u8(STATE_REST).expect("state");
@@ -119,8 +184,10 @@ fn controller_data(
     data.append_bits(0, 2).expect("no sudoer");
     data.append_bits(0, 48).expect("sudoer set at");
     data.append_bits(0, 24).expect("max expected interest");
-    data.checked_append_reference(statics.into_cell().expect("statics cell"))
-        .expect("statics reference");
+    // Named after deployment, not built into the address: the pool that deploys a
+    // controller does not know which account its validator stakes through.
+    validator_controller.write_to(&mut data).expect("validator controller");
+    data.checked_append_reference(statics).expect("statics reference");
     let _ = none;
     data.into_cell().expect("controller data")
 }
@@ -134,6 +201,15 @@ struct Staking {
 }
 
 fn launch(balance: u64) -> Staking {
+    launch_with(balance, true)
+}
+
+/// A controller as the pool deploys one: no Validator Controller named yet.
+fn launch_unnamed(balance: u64) -> Staking {
+    launch_with(balance, false)
+}
+
+fn launch_with(balance: u64, named: bool) -> Staking {
     let state = zerostate();
     let config = configuration(&state);
     let elector = masterchain(config.elector_address().expect("elector address"));
@@ -167,12 +243,21 @@ fn launch(balance: u64) -> Staking {
 
     let init = StateInit::with_code_and_data(
         controller_code(),
-        controller_data(
-            &validator_address,
-            &pool_address,
-            &governor_address,
-            &validator_controller_address,
-        ),
+        if named {
+            controller_data(
+                &validator_address,
+                &pool_address,
+                &governor_address,
+                &validator_controller_address,
+            )
+        } else {
+            // Not written here: what the pool's own source lays down when it deploys one.
+            pool_written_controller_data(controller_statics(
+                &validator_address,
+                &pool_address,
+                &governor_address,
+            ))
+        },
     );
     let controller = MsgAddressInt::with_params(
         -1,
@@ -266,6 +351,35 @@ impl Staking {
         self.chain
             .send_message(MessageBuilder::internal(&sender, &target, 2 * TOS).body(order).build())
             .expect("the order is delivered")
+    }
+
+    /// Name the account a stake is to travel through.
+    fn name_controller(
+        &mut self,
+        from: &MsgAddressInt,
+        named: &MsgAddressInt,
+    ) -> tos_sandbox::SendResult {
+        let mut body = BuilderData::new();
+        body.append_u32(SET_VALIDATOR_CONTROLLER).expect("operation");
+        body.append_u64(1).expect("query id");
+        named.write_to(&mut body).expect("the named account");
+        let target = self.controller.clone();
+        self.chain
+            .send_message(
+                MessageBuilder::internal(from, &target, TOS)
+                    .body(body.into_cell().expect("a naming"))
+                    .build(),
+            )
+            .expect("the naming is delivered")
+    }
+}
+
+/// What the contract itself made of a message, rather than what its answer looked like.
+fn exit_code(result: &tos_sandbox::SendResult) -> i32 {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    match transaction.read_description().expect("a description").compute_phase_ref() {
+        Some(chain_block::TrComputePhase::Vm(vm)) => vm.exit_code,
+        _ => panic!("the message was not executed"),
     }
 }
 
@@ -400,6 +514,66 @@ fn a_bounced_relay_returns_the_contract_to_rest() {
         (STATE_REST, false),
         "the contract is still waiting for a stake that came back"
     );
+}
+
+/// What the pool actually deploys, and what it can do before it is told anything.
+///
+/// A controller's initial storage is written by the pool, which deploys one for whichever
+/// validator asks and cannot know that validator's Validator Controller. So the account
+/// starts without one. The first thing this test asserts is that such an account can be
+/// read at all: a field the pool does not write is a field the contract underflows on, and
+/// every later message would fail before reaching any of its own checks.
+#[test]
+fn a_controller_the_pool_deployed_has_nowhere_to_stake_until_the_validator_says() {
+    let mut staking = launch_unnamed(100_000 * TOS);
+    let election = staking.election();
+
+    // Readable, which is the part the pool's layout decides.
+    let (state, halted) = staking.state();
+    assert_eq!(state, STATE_REST, "a freshly deployed controller is not at rest");
+    assert!(!halted, "a freshly deployed controller is halted");
+
+    // And it will not stake, because it has nowhere to stake to.
+    let refused = staking.order(1, 60_000 * TOS, election);
+    assert_eq!(
+        exit_code(&refused),
+        ERROR_NO_VALIDATOR_CONTROLLER,
+        "a controller with no validator controller sent a stake somewhere"
+    );
+    assert_eq!(staking.state().0, STATE_REST, "a refused stake moved the controller");
+
+    // A stranger cannot name it either.
+    let named = staking.validator_controller.clone();
+    let stranger = staking.chain.treasury("ls-stranger", 10_000 * TOS).expect("a stranger");
+    let stranger_address = stranger.address().clone();
+    let result = staking.name_controller(&stranger_address, &named);
+    assert_ne!(exit_code(&result), 0, "a stranger named the account a stake goes to");
+
+    // The validator does, and then the stake goes where it was told.
+    let validator = staking.validator.clone();
+    let result = staking.name_controller(&validator, &named);
+    assert_eq!(exit_code(&result), 0, "the validator could not name its own controller");
+
+    let result = staking.order(2, 60_000 * TOS, election);
+    let (to, tag, _) = sent(&result).expect("the controller sent nothing on");
+    assert_eq!(tag, RELAY_STAKE, "the contract did not ask for a stake to be relayed");
+    assert_eq!(to, named, "the stake went somewhere other than the named controller");
+    assert_eq!(staking.state().0, STATE_SENT_STAKE_REQUEST, "the stake was not recorded");
+}
+
+/// A name may not move while an answer is still coming back to it.
+#[test]
+fn the_account_a_stake_went_through_cannot_be_renamed_under_it() {
+    let mut staking = launch(100_000 * TOS);
+    let election = staking.election();
+    staking.order(1, 60_000 * TOS, election);
+    assert_eq!(staking.state().0, STATE_SENT_STAKE_REQUEST, "the stake was not sent");
+
+    let validator = staking.validator.clone();
+    let other = staking.chain.treasury("ls-other-controller", 10_000 * TOS).expect("another");
+    let other_address = other.address().clone();
+    let result = staking.name_controller(&validator, &other_address);
+    assert_ne!(exit_code(&result), 0, "the name moved while a stake was out");
 }
 
 /// Terms that are not the shape of a stake are refused, and nothing is sent.

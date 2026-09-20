@@ -73,6 +73,12 @@ global slice approver;
 ;; staking controller, which is a different thing: it holds the loan and the validator's
 ;; own funds, and has no validator authority. The elector takes a stake from a post-quantum
 ;; Validator Controller and from nowhere else, so a stake goes there.
+;;
+;; It is stored rather than built into this account's address. The address is derived by
+;; the pool, which deploys controllers for whichever validator asks and has no way to know
+;; that validator's Validator Controller; and a validator that rotates its controller
+;; should not have to abandon a staking controller holding a loan to do it. Until it is
+;; set there is no stake this contract can make, and it says so.
 global slice validator_controller;
 
 
@@ -335,9 +341,32 @@ int check_new_stake_msg(slice cs);
                              msgflag::NON_BOUNCEABLE,
                              sendmode::REGULAR);
 
+                } elseif (op == controller::set_validator_controller) {
+                    ;; The validator names the account its stake will travel through. It is
+                    ;; the validator's to name because the validator already decides every
+                    ;; stake this contract makes, and the money comes back here either way:
+                    ;; the relay states its own sender as the owner, and that is this
+                    ;; account.
+                    ;;
+                    ;; Only while nothing is out. A stake in flight is answered by the
+                    ;; account it went through, and moving the name while it travels would
+                    ;; leave this contract unable to recognise its own answer.
+                    assert_state!(state::REST);
+                    assert_sender!(sender_address, validator);
+                    throw_if(error::validator_controller_in_use, borrowed_amount);
+                    slice named = in_msg_body~load_msg_addr();
+                    in_msg_body.end_parse();
+                    (int named_wc, _) = parse_std_addr(named);
+                    throw_unless(error::no_validator_controller, named_wc == -1);
+                    validator_controller = named;
+
                 } elseif (op == controller::new_stake) {
                     assert_state!(state::REST);
                     assert_sender!(sender_address, validator);
+                    ;; Nowhere to send it. Said here rather than discovered as a message to
+                    ;; an address that does not parse.
+                    throw_unless(error::no_validator_controller,
+                                 validator_controller.slice_bits() > 2);
 
                     throw_unless(error::incorrect_new_stake::query_id, query_id); ;; query_id must be greater then 0 to receive confirmation message from elector
 
@@ -481,6 +510,7 @@ int check_new_stake_msg(slice cs);
         .store_slice(sudoer)
         .store_timestamp(sudoer_set_at)
         .store_share(max_expected_interest)
+        .store_slice(validator_controller)
         .store_slice(static_data)
         .end_cell());
 }
@@ -507,6 +537,7 @@ int check_new_stake_msg(slice cs);
     sudoer_set_at = ds~load_timestamp();
 
     max_expected_interest = ds~load_share();
+    validator_controller = ds~load_msg_addr();
 
     static_data = ds;
 
@@ -521,7 +552,6 @@ int check_new_stake_msg(slice cs);
 
     approver = ds~load_msg_addr();
     halter = ds~load_msg_addr();
-    validator_controller = ds~load_msg_addr();
 }
 
 
@@ -571,7 +601,10 @@ _ get_validator_controller_data() method_id {
       stake_held_for,
       
       borrowed_amount, borrowing_time,
-      validator, pool, sudoer
+      validator, pool, sudoer,
+      ;; Where a stake would go. Reported because a controller that cannot stake looks
+      ;; exactly like one that can until it is asked to.
+      validator_controller
       );
 }
 
