@@ -6,14 +6,13 @@
 // refuses: a rule whose input is also refused by the rule before it is a rule nothing
 // holds, and removing it would change no verdict.
 #undef NDEBUG  // the build is Release, and an assert that is compiled out proves nothing
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "consensus-key-file.h"
 
@@ -53,7 +52,7 @@ int main() {
   assert(made.algorithm_id == PQAlgorithmId::mldsa44);
   assert(made.public_key.size() == mldsa44_public_key_bytes);
   {
-    struct stat st {};
+    struct stat st{};
     assert(::stat(key.c_str(), &st) == 0);
     assert((st.st_mode & 077) == 0);
     assert(st.st_size == 32);
@@ -111,7 +110,7 @@ int main() {
   // and the case below stops being about the rule it names.
   assert(::chmod(open_dir.c_str(), 0777) == 0);
   {
-    struct stat st {};
+    struct stat st{};
     assert(::stat(open_dir.c_str(), &st) == 0);
     assert((st.st_mode & (S_IWGRP | S_IWOTH)) == (S_IWGRP | S_IWOTH));
   }

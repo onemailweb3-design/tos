@@ -113,8 +113,7 @@ int main() {
              tos::pq::VerifyResult::valid &&
          "a controller authorisation verifies under the election context");
   // And neither must it verify over a preimage that differs in one field.
-  assert(tos::pq::verify_mldsa44(tos::pq::controller_auth_preimage(-239, fill(0xa1), 7, 4, 1789434000u, 1,
-                                                                   fill(0xb2)),
+  assert(tos::pq::verify_mldsa44(tos::pq::controller_auth_preimage(-239, fill(0xa1), 7, 4, 1789434000u, 1, fill(0xb2)),
                                  context, signature, public_key) != tos::pq::VerifyResult::valid &&
          "a controller authorisation verifies with the nonce changed");
 
@@ -124,9 +123,9 @@ int main() {
 
   // This authority's tags must not collide with any already frozen, and they are one byte
   // apart from the complaint tags, which is exactly the kind of thing eyes miss.
-  const std::uint32_t frozen[] = {tos::pq::elector_pq_stake_op,       tos::pq::elector_pq_stake_sign_tag,
-                                  tos::pq::config_pq_vote_op,         tos::pq::config_pq_vote_sign_tag,
-                                  tos::pq::elector_pq_complaint_op,   tos::pq::elector_pq_complaint_sign_tag};
+  const std::uint32_t frozen[] = {tos::pq::elector_pq_stake_op,     tos::pq::elector_pq_stake_sign_tag,
+                                  tos::pq::config_pq_vote_op,       tos::pq::config_pq_vote_sign_tag,
+                                  tos::pq::elector_pq_complaint_op, tos::pq::elector_pq_complaint_sign_tag};
   for (auto tag : frozen) {
     assert(tag != tos::pq::controller_auth_op);
     assert(tag != tos::pq::controller_auth_sign_tag);

@@ -73,8 +73,7 @@ const char* describe(ConsensusKeyFileError error) noexcept {
   return "the consensus key file was refused";
 }
 
-std::variant<ValidatorPQKeyStore, ConsensusKeyFileError> load_consensus_key(
-    std::string_view path) noexcept {
+std::variant<ValidatorPQKeyStore, ConsensusKeyFileError> load_consensus_key(std::string_view path) noexcept {
   SeedBuffer seed;
   if (auto refused = detail::read_protected_seed(path, seed)) {
     return as_consensus_error(*refused);

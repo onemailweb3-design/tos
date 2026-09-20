@@ -32,16 +32,16 @@ namespace tos::pq {
 inline constexpr std::size_t consensus_seed_bytes = 32;
 
 enum class ConsensusKeyFileError {
-  cannot_open,           // absent, unreadable, or a symlink
-  not_a_regular_file,    // a directory, a device, a socket
-  wrong_owner,           // owned by somebody other than this process
-  readable_by_others,    // any group or world bit set
-  directory_writable,    // the directory holding it can be written by group or world
-  wrong_size,            // a seed is exactly 32 bytes
-  read_failed,           // short read, or an error part way through
-  derivation_failed,     // the backend refused the seed
-  already_exists,        // creating one would replace a key that is already there
-  write_failed,          // creating one did not complete
+  cannot_open,         // absent, unreadable, or a symlink
+  not_a_regular_file,  // a directory, a device, a socket
+  wrong_owner,         // owned by somebody other than this process
+  readable_by_others,  // any group or world bit set
+  directory_writable,  // the directory holding it can be written by group or world
+  wrong_size,          // a seed is exactly 32 bytes
+  read_failed,         // short read, or an error part way through
+  derivation_failed,   // the backend refused the seed
+  already_exists,      // creating one would replace a key that is already there
+  write_failed,        // creating one did not complete
 };
 
 // What went wrong, in the words an operator needs to fix it.
@@ -52,8 +52,7 @@ const char* describe(ConsensusKeyFileError error) noexcept;
 // The file must be a regular file this process owns, with no group or world bits, in a
 // directory no one else can write, and exactly 32 bytes long. A symlink is refused
 // rather than followed: the path an operator configured is the file that is read.
-std::variant<ValidatorPQKeyStore, ConsensusKeyFileError> load_consensus_key(
-    std::string_view path) noexcept;
+std::variant<ValidatorPQKeyStore, ConsensusKeyFileError> load_consensus_key(std::string_view path) noexcept;
 
 // Create a new seed at `path` from the system's secure random source, and return the
 // public key it derives. The file is owner-only from the moment it exists, written
@@ -62,8 +61,7 @@ std::variant<ValidatorPQKeyStore, ConsensusKeyFileError> load_consensus_key(
 //
 // Refuses to replace a key that is already there. Rotating one is removing the old file
 // deliberately, not overwriting it by accident.
-std::variant<ConsensusPQKey, ConsensusKeyFileError> create_consensus_key(
-    std::string_view path) noexcept;
+std::variant<ConsensusPQKey, ConsensusKeyFileError> create_consensus_key(std::string_view path) noexcept;
 
 // Write a seed an operator already holds -- from a backup taken before the host was
 // rebuilt -- to `path`, under exactly the rules a created one is written by, and return

@@ -13,17 +13,15 @@
 // The list lives here once. Two copies would be two sets of rules, and the one that
 // drifted would be the one nobody read until a key was readable by somebody else.
 
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <array>
 #include <cstddef>
+#include <fcntl.h>
+#include <openssl/crypto.h>
 #include <optional>
 #include <string>
 #include <string_view>
-
-#include <openssl/crypto.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace tos::pq::detail {
 
@@ -77,7 +75,7 @@ inline std::string parent_directory(std::string_view path) {
 // Anyone who can write the directory can replace the key in it, so the directory is part
 // of what protects the key and is checked with it.
 inline bool directory_is_private(std::string_view path) noexcept {
-  struct stat st {};
+  struct stat st{};
   if (::stat(parent_directory(path).c_str(), &st) != 0) {
     return false;
   }
@@ -104,7 +102,7 @@ inline std::optional<SeedFileRefusal> read_protected_seed(std::string_view path,
   if (!fd.valid()) {
     return SeedFileRefusal::cannot_open;
   }
-  struct stat st {};
+  struct stat st{};
   if (::fstat(fd.get(), &st) != 0) {
     return SeedFileRefusal::cannot_open;
   }

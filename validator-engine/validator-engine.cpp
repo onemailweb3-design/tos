@@ -91,6 +91,7 @@
 #include "interfaces/validator-manager.h"
 #include "pq/consensus-key-file.h"
 #include "pq/pq-elector.h"
+#include "pq/pq-stake-authorization.h"
 #include "tl-utils/lite-utils.hpp"
 
 #include "block-auto.h"
@@ -1033,23 +1034,19 @@ class PqStakeAuthorizationCreator : public td::actor::Actor {
       return;
     }
 
-    // Both are Bits256, so this is a copy, not a memcpy: Bits256::size() counts bits, and
-    // copying 256 bytes into a 32-byte buffer is a stack overflow the compiler would not
-    // catch. The equivalent line in the vote tool crashed exactly this way.
-    const td::Bits256 &key_id = self.key_id.value;
-    auto preimage =
-        tos::pq::stake_preimage(self.global_id, election_date_, max_factor_, self.validator_id.value, stake_owner_,
-                                static_cast<std::uint16_t>(tos::pq::PQAlgorithmId::mldsa44), key_id, adnl_addr_);
-    // Under the election domain, which the elector shares with complaint votes and with
-    // nothing a wallet ever signs.
-    auto signature = self.signer->sign_election(preimage);
-    if (!signature.has_value()) {
+    // The one routine that assembles and signs a stake, shared with the operator tool so
+    // the two cannot diverge. It derives the key identity from the signer, under the
+    // election domain the elector shares with complaint votes and with nothing a wallet
+    // ever signs. A stake consults no validator set: this is a node's first entry into one.
+    auto authorization = tos::pq::sign_stake_authorization(*self.signer, self.global_id, election_date_, max_factor_,
+                                                           self.validator_id.value, adnl_addr_, stake_owner_);
+    if (!authorization.has_value()) {
       abort_query(td::Status::Error("the post-quantum consensus key could not sign this stake"));
       return;
     }
 
     promise_.set_value(tos::create_serialize_tl_object<tos::tos_api::engine_validator_pqStakeAuthorization>(
-        self.validator_id.value, key_id, td::BufferSlice(signature->signature)));
+        self.validator_id.value, authorization->key_id, td::BufferSlice(authorization->signature.signature)));
     stop();
   }
 

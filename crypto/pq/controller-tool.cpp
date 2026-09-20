@@ -188,8 +188,7 @@ int main(int argc, char** argv) {
       const auto& key_id = root.root_key().key_id;
       std::cout << "algorithm_id " << static_cast<int>(root.root_key().algorithm_id) << '\n'
                 << "key_id "
-                << td::buffer_to_hex(td::Slice(reinterpret_cast<const char*>(key_id.data()), key_id.size()))
-                << '\n'
+                << td::buffer_to_hex(td::Slice(reinterpret_cast<const char*>(key_id.data()), key_id.size())) << '\n'
                 << "public_key " << td::base64_encode(td::Slice(root.root_key().public_key)) << '\n';
       return 0;
     }

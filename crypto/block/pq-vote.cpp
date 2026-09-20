@@ -1,11 +1,10 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
-#include "pq-vote.h"
-
 #include <functional>
 
 #include "pq/mldsa44.h"
-
 #include "vm/cellslice.h"
+
+#include "pq-vote.h"
 
 namespace block::pq {
 namespace {
@@ -13,8 +12,7 @@ namespace {
 // Both bodies have the same shape: the operation, a query id, what is being voted on,
 // and the signature behind a reference. Written once so the two cannot drift.
 td::Result<td::Ref<vm::Cell>> vote_body(td::uint32 op, td::uint64 query_id,
-                                        const std::function<bool(vm::CellBuilder&)>& subject,
-                                        td::Slice signature) {
+                                        const std::function<bool(vm::CellBuilder&)>& subject, td::Slice signature) {
   // Exactly the suite's length. The packer takes a ceiling, so a short signature would
   // otherwise encode into a well-formed vote that only the verifying instruction, on
   // the chain, would find to be nothing.
@@ -65,26 +63,25 @@ td::uint64 vote_query_id(td::uint32 now, const td::Bits256& subject) {
   return (static_cast<td::uint64>(now) << 32) | low;
 }
 
-td::Result<td::Ref<vm::Cell>> config_vote_body(td::uint64 query_id, td::uint16 idx,
-                                               const td::Bits256& proposal_hash,
+td::Result<td::Ref<vm::Cell>> config_vote_body(td::uint64 query_id, td::uint16 idx, const td::Bits256& proposal_hash,
                                                td::Slice signature) {
-  return vote_body(tos::pq::config_pq_vote_op, query_id,
-                   [&](vm::CellBuilder& cb) {
-                     return cb.store_long_bool(idx, 16) && cb.store_bits_bool(proposal_hash.cbits(), 256);
-                   },
-                   signature);
+  return vote_body(
+      tos::pq::config_pq_vote_op, query_id,
+      [&](vm::CellBuilder& cb) {
+        return cb.store_long_bool(idx, 16) && cb.store_bits_bool(proposal_hash.cbits(), 256);
+      },
+      signature);
 }
 
-td::Result<td::Ref<vm::Cell>> complaint_vote_body(td::uint64 query_id, td::uint16 idx,
-                                                  td::uint32 election_id,
-                                                  const td::Bits256& complaint_hash,
-                                                  td::Slice signature) {
-  return vote_body(tos::pq::elector_pq_complaint_op, query_id,
-                   [&](vm::CellBuilder& cb) {
-                     return cb.store_long_bool(idx, 16) && cb.store_long_bool(election_id, 32) &&
-                            cb.store_bits_bool(complaint_hash.cbits(), 256);
-                   },
-                   signature);
+td::Result<td::Ref<vm::Cell>> complaint_vote_body(td::uint64 query_id, td::uint16 idx, td::uint32 election_id,
+                                                  const td::Bits256& complaint_hash, td::Slice signature) {
+  return vote_body(
+      tos::pq::elector_pq_complaint_op, query_id,
+      [&](vm::CellBuilder& cb) {
+        return cb.store_long_bool(idx, 16) && cb.store_long_bool(election_id, 32) &&
+               cb.store_bits_bool(complaint_hash.cbits(), 256);
+      },
+      signature);
 }
 
 }  // namespace block::pq

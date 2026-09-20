@@ -104,6 +104,29 @@ elif ! grep -q "get_local_pq_identity" <<<"$CREATOR"; then
   status=1
 fi
 
+# The node and the operator tool must sign a stake through the one shared routine, so the
+# path a review can run and the path a real validator takes cannot diverge. The creator
+# delegates to it and assembles no preimage of its own; a bespoke stake_preimage call here
+# would be a second, untested road back. The tool must reach the same routine.
+if [[ -n "$CREATOR" ]]; then
+  if ! grep -q "sign_stake_authorization" <<<"$CREATOR"; then
+    echo "the stake authorisation creator does not use the shared sign_stake_authorization routine" >&2
+    status=1
+  fi
+  if grep -q "stake_preimage" <<<"$CREATOR"; then
+    echo "the stake authorisation creator assembles its own stake preimage instead of using the shared routine" >&2
+    status=1
+  fi
+fi
+TOOL="$REPO_ROOT/crypto/pq/vote-tool.cpp"
+if [[ ! -f "$TOOL" ]]; then
+  echo "the operator vote/stake tool is missing" >&2
+  status=1
+elif ! grep -q "sign_stake_authorization" "$TOOL"; then
+  echo "the operator tool signs a stake by a route other than the shared sign_stake_authorization" >&2
+  status=1
+fi
+
 # The node must still be able to load its own consensus key: a boundary that removed
 # both halves would pass every check above and leave a validator unable to sign.
 if ! grep -q "load_consensus_key" "$REPO_ROOT/validator-engine/validator-engine.cpp"; then

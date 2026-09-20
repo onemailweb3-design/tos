@@ -155,6 +155,12 @@ if(TARGET tos_crypto)
   target_compile_definitions(test-n3-controller-auth PRIVATE
     N3_CONTROLLER_AUTH_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-controller-auth-vectors.tsv")
   add_test(NAME n3-controller-auth-vectors COMMAND test-n3-controller-auth)
+  # The one routine the node and the operator tool both call to sign a stake.
+  add_executable(test-n3-stake-auth "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-stake-auth-test.cpp")
+  set_target_properties(test-n3-stake-auth PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-n3-stake-auth PRIVATE tos_block tos_crypto tos_mldsa44
+    tos_pq_consensus_signer tos_pq_consensus)
+  add_test(NAME n3-stake-auth COMMAND test-n3-stake-auth)
   # Configuration parameter 43 encodings both implementations must read identically.
   add_executable(config43-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors-gen.cpp")
   set_target_properties(config43-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

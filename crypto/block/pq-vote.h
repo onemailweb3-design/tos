@@ -32,15 +32,12 @@ td::Result<td::Bits256> parse_vote_subject(td::Slice text);
 td::uint64 vote_query_id(td::uint32 now, const td::Bits256& subject);
 
 // `PQvo`: a validator of the current set votes for a configuration proposal.
-td::Result<td::Ref<vm::Cell>> config_vote_body(td::uint64 query_id, td::uint16 idx,
-                                               const td::Bits256& proposal_hash,
+td::Result<td::Ref<vm::Cell>> config_vote_body(td::uint64 query_id, td::uint16 idx, const td::Bits256& proposal_hash,
                                                td::Slice signature);
 
 // `PQco`: a validator of the current set votes on a complaint against a validator of a
 // past election.
-td::Result<td::Ref<vm::Cell>> complaint_vote_body(td::uint64 query_id, td::uint16 idx,
-                                                  td::uint32 election_id,
-                                                  const td::Bits256& complaint_hash,
-                                                  td::Slice signature);
+td::Result<td::Ref<vm::Cell>> complaint_vote_body(td::uint64 query_id, td::uint16 idx, td::uint32 election_id,
+                                                  const td::Bits256& complaint_hash, td::Slice signature);
 
 }  // namespace block::pq

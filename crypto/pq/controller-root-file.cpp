@@ -1,6 +1,5 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
 #include "controller-root-file.h"
-
 #include "seed-file.h"
 
 namespace tos::pq {

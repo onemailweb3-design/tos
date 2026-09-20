@@ -12,12 +12,11 @@
 
 #include <array>
 #include <cstdint>
+#include <openssl/crypto.h>
+#include <openssl/rand.h>
 #include <optional>
 #include <string_view>
 #include <vector>
-
-#include <openssl/crypto.h>
-#include <openssl/rand.h>
 
 #include "mldsa_native.h"
 #include "pq-consensus.h"

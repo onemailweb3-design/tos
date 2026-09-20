@@ -229,8 +229,8 @@ TEST(Cells, pruned_branch_rebuilt_from_a_hash_and_a_depth) {
   // What the contract builds, from the four numbers a witness carries.
   auto rebuilt = [](td::Ref<vm::Cell> of) {
     vm::CellBuilder cb;
-    cb.store_long(1, 8);   // PrunedBranch
-    cb.store_long(1, 8);   // one level
+    cb.store_long(1, 8);  // PrunedBranch
+    cb.store_long(1, 8);  // one level
     cb.store_bytes(of->get_hash(0).as_slice());
     cb.store_long(of->get_depth(0), 16);
     return cb.finalize(true);
