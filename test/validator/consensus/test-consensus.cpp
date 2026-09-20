@@ -1268,37 +1268,49 @@ class TestConsensus : public td::actor::Actor {
 
     // --- Every node reaches an agreed, verified finality certificate ---
     //
-    // One certificate, not a stream of them. An N4-only build agrees on the first slot and
-    // then cannot go further: the next candidate would be collated on the state of a block
-    // that is never finalized, because finalizing it is what the seam refuses. That is the
-    // intended shape of this build, so the gate asks for the round that N4 owns and stops
-    // where N4 stops.
-    auto slots_observed_by_every_node = [&]() -> size_t {
+    // One certificate, not a stream of them. Candidate production does not stop -- the
+    // producer advances its own chain state from candidate data and keeps collating -- but
+    // no further slot is finalized: resolving the state a later step needs goes through
+    // the finalization of the agreed slot, and that finalization is latched at the seam,
+    // so it hands back the refusal instead of a state. That is the intended shape of this
+    // build, so the gate asks for the round N4 owns and stops where N4 stops.
+    // A slot every node finalized -- the intersection, not the smallest count. Nodes that
+    // each finalized a different slot have not agreed on anything, and counting per node
+    // would not notice.
+    auto slot_finalized_by_every_node = [&]() -> std::optional<td::uint32> {
       std::map<size_t, std::set<td::uint32>> per_node;
       for (const auto& observation : read_finality_log()) {
         per_node[observation.node_idx].insert(observation.id.slot);
       }
       if (per_node.size() < N_NODES) {
-        return 0;
+        return std::nullopt;
       }
-      size_t smallest = std::numeric_limits<size_t>::max();
+      std::set<td::uint32> common = per_node.begin()->second;
       for (const auto& [_, slots] : per_node) {
-        smallest = std::min(smallest, slots.size());
+        std::set<td::uint32> shared;
+        std::set_intersection(common.begin(), common.end(), slots.begin(), slots.end(),
+                              std::inserter(shared, shared.begin()));
+        common = std::move(shared);
       }
-      return smallest;
+      if (common.empty()) {
+        return std::nullopt;
+      }
+      return *common.begin();
     };
 
     auto deadline = td::Timestamp::in(DURATION * 0.5);
-    while (slots_observed_by_every_node() < 1 && !deadline.is_in_past()) {
+    while (!slot_finalized_by_every_node().has_value() && !deadline.is_in_past()) {
       co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
     }
-    if (slots_observed_by_every_node() < 1) {
-      fail(PSTRING() << "not every one of " << N_NODES << " nodes reached a finality certificate");
+    auto common_slot = slot_finalized_by_every_node();
+    if (!common_slot.has_value()) {
+      fail(PSTRING() << "there is no slot that all " << N_NODES << " nodes finalized");
       co_return td::Unit{};
     }
 
     auto observations = read_finality_log();
     std::map<td::uint32, CandidateId> agreed;
+    size_t observations_of_common_slot = 0;
     for (const auto& observation : observations) {
       if (auto defect = certificate_defect(observation.cert); !defect.empty()) {
         fail(PSTRING() << "node " << observation.node_idx << " accepted a finality certificate for slot "
@@ -1317,6 +1329,14 @@ class TestConsensus : public td::actor::Actor {
         fail(PSTRING() << "nodes disagreed on the candidate finalized at slot " << observation.id.slot);
         co_return td::Unit{};
       }
+      if (observation.id.slot == *common_slot) {
+        ++observations_of_common_slot;
+      }
+    }
+    if (observations_of_common_slot < N_NODES) {
+      fail(PSTRING() << "slot " << *common_slot << " was finalized by only " << observations_of_common_slot << " of "
+                     << N_NODES << " nodes");
+      co_return td::Unit{};
     }
 
     // --- A restarted node presents its journalled signature, not a new one ---
@@ -1394,8 +1414,11 @@ class TestConsensus : public td::actor::Actor {
         fail(PSTRING() << "the rebuilt certificate names signer " << signer << ", which is not a node");
         co_return td::Unit{};
       }
+      // The journal is held in a named local: own_vote_journal returns by value, and a
+      // slice into the temporary would outlive the buffers it points at.
+      auto signer_journal = own_vote_journal(nodes_[signer].instances[0]);
       td::Slice journalled;
-      for (const auto& entry : own_vote_journal(nodes_[signer].instances[0])) {
+      for (const auto& entry : signer_journal) {
         if (entry.is_signed && serialize_tl_object(entry.vote, true).as_slice() == wanted_vote.as_slice()) {
           journalled = entry.signature.as_slice();
         }
@@ -1421,6 +1444,9 @@ class TestConsensus : public td::actor::Actor {
     // restarted node starts it again from zero and reaches the boundary a second time when
     // it replays its certificate. Waiting for that is not weakening the assertion: a node
     // that never gets there fails on the deadline just the same.
+    // Asked about the slot every node agreed on, not about any slot: a count alone would
+    // be satisfied by some unrelated slot latching, which proves nothing about the
+    // certificate this gate just checked.
     auto boundary_deadline = td::Timestamp::in(DURATION * 0.2);
     while (true) {
       bool every_node_reached_it = true;
@@ -1429,8 +1455,8 @@ class TestConsensus : public td::actor::Actor {
           if (instance.status != Instance::Running) {
             continue;
           }
-          auto blocked = co_await instance.bus.publish(std::make_shared<simplex::QueryN5BlockedSlotCount>());
-          if (blocked == 0) {
+          auto boundary = co_await instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+          if (!boundary.slot_is_blocked) {
             every_node_reached_it = false;
             break;
           }
@@ -1440,7 +1466,8 @@ class TestConsensus : public td::actor::Actor {
         break;
       }
       if (boundary_deadline.is_in_past()) {
-        fail("a node finalized without ever reaching the N4/N5 carrier boundary");
+        fail(PSTRING() << "a node finalized slot " << *common_slot
+                       << " without that slot stopping at the N4/N5 carrier boundary");
         co_return td::Unit{};
       }
       co_await td::actor::coro_sleep(td::Timestamp::in(0.05));

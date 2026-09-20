@@ -174,12 +174,13 @@ set_tests_properties(
     PROPERTIES ENVIRONMENT
         "TOS_SIMPLEX_STATE_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_FINALIZED_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_CANDIDATE_RETENTION_SLOTS=8"
 )
-# N4.5 — the post-quantum round end to end, and the boundary it stops at. One agreed
-# finality certificate on every node, every signature in it verified independently, a
-# restart that rebuilds that certificate from persisted records and presents the same
-# signature bytes, and then nothing: no block signature set, no accepted block, no
-# finalized-block marker. One certificate is the whole of it, because an N4-only build
-# cannot collate on the state of a block it is not allowed to finalize.
+# N4.5 — the post-quantum round end to end, and the boundary it stops at. One slot
+# finalized by every node, every signature in its certificate verified independently, a
+# restart that rebuilds that certificate from persisted records with signatures matching
+# their signers' journals, and then nothing: no accepted block and no finalized-block
+# marker. One certificate is the whole of it: candidates keep being produced, but no
+# later slot is finalized, because resolving the state a later step needs goes through the
+# finalization that the seam has latched.
 add_test(
     NAME test-consensus-simplex2-pq-finality-e2e-single
     COMMAND test-consensus --duration 40 --n-nodes 1 --target-rate-ms 100
@@ -190,6 +191,13 @@ add_test(
     COMMAND test-consensus --duration 40 --n-nodes 4 --target-rate-ms 100
             --net-ping 0.005:0.02 --pq-finality-e2e-test
 )
+# The end-to-end gate can see that no block was accepted and no marker was written, but
+# not an object that was built and thrown away. "No legacy carrier is constructed" is a
+# structural property, so it is checked structurally.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME n4-no-legacy-carrier
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check-no-legacy-carrier.py)
+endif()
 
 # N4.4 — the two-phase own-vote journal: signed records replay byte for byte, an
 # intent-only record is signed once, and a record this node cannot verify as its own

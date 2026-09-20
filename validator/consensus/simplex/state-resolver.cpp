@@ -120,8 +120,15 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   }
 
   template <>
-  td::actor::Task<size_t> process(BusHandle, std::shared_ptr<QueryN5BlockedSlotCount>) {
-    co_return n5_blocked_slots_;
+  td::actor::Task<QueryN5Boundary::Result> process(BusHandle, std::shared_ptr<QueryN5Boundary> query) {
+    QueryN5Boundary::Result result{.blocked_slots = n5_blocked_slots_, .slot_is_blocked = false};
+    for (const auto& [id, state] : finalized_blocks_) {
+      if (state.blocked_on_n5 && id.slot == query->slot) {
+        result.slot_is_blocked = true;
+        break;
+      }
+    }
+    co_return result;
   }
 
  private:
