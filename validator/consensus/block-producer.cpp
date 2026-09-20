@@ -44,6 +44,11 @@ class BlockProducerImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   }
 
   template <>
+  void handle(BusHandle, std::shared_ptr<const N5BoundaryReached>) {
+    quiescent_ = true;
+  }
+
+  template <>
   void handle(BusHandle, std::shared_ptr<const StopRequested>) {
     current_leader_window_ = std::nullopt;
     cancellation_source_.cancel();
@@ -104,6 +109,9 @@ class BlockProducerImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     td::Timestamp slot_start = event->start_time;
 
     for (td::uint32 slot = event->start_slot; current_leader_window_ == window && slot < event->end_slot; ++slot) {
+      if (quiescent_) {
+        break;
+      }
       co_await td::actor::coro_sleep(slot_start - start_collate_before);
       if (current_leader_window_ != window) {
         break;
@@ -226,6 +234,11 @@ class BlockProducerImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       if (current_leader_window_ != window) {
         break;
       }
+      if (quiescent_) {
+        // Collation began before the boundary was reached. Publishing now would put a
+        // candidate into a round that has stopped taking them.
+        break;
+      }
       owning_bus().publish<CandidateGenerated>(candidate, collator);
       owning_bus().publish<CandidateReceived>(candidate);
       owning_bus().publish<TraceEvent>(stats::CandidateReceived::create(candidate, true));
@@ -243,6 +256,10 @@ class BlockProducerImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
 
   std::optional<td::uint32> current_leader_window_;
   td::CancellationTokenSource cancellation_source_;
+
+  // Set once this group reaches the carrier boundary. Producing more candidates for a round
+  // whose finality cannot be carried is work nothing can consume.
+  bool quiescent_ = false;
 
   BlockSeqno last_consensus_finalized_seqno_ = 0;
   BlockSeqno last_mc_finalized_seqno_ = 0;

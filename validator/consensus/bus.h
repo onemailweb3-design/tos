@@ -34,6 +34,21 @@ using StartEvent = std::shared_ptr<const Start>;
 
 struct StopRequested {};
 
+// This group has reached the N4/N5 carrier boundary: a certificate was agreed and verified,
+// and the conversion into block finality refused because that carrier is N5's.
+//
+// It is published once, and it is what makes the boundary a property of the group rather
+// than of one slot. The ruling is that an interim group stays alive but quiescent: the
+// actors keep answering queries and the manager keeps a healthy entry, and nothing new is
+// produced, because producing it would be work on a chain that cannot advance. Latching
+// only the slot left Consensus, Pool and the producer voting and collating past a boundary
+// they had no way to learn about.
+struct N5BoundaryReached {
+  td::uint32 slot;
+
+  std::string contents_to_string() const;
+};
+
 struct FinalizeBlock {
   using ReturnType = td::Unit;
 
@@ -181,10 +196,11 @@ class Db {
 
 class Bus : public td::actor::Bus {
  public:
-  using Events = td::TypeList<Start, StopRequested, FinalizeBlock, OurLeaderWindowStarted, CandidateGenerated,
-                              CandidateReceived, ValidationRequest, IncomingProtocolMessage, OutgoingProtocolMessage,
-                              IncomingOverlayRequest, OutgoingOverlayRequest, BlockFinalizedInMasterchain,
-                              MisbehaviorReport, TraceEvent, NoncriticalParamsUpdated, PrecheckCandidateBroadcast>;
+  using Events =
+      td::TypeList<Start, StopRequested, FinalizeBlock, OurLeaderWindowStarted, CandidateGenerated, CandidateReceived,
+                   ValidationRequest, IncomingProtocolMessage, OutgoingProtocolMessage, IncomingOverlayRequest,
+                   OutgoingOverlayRequest, BlockFinalizedInMasterchain, MisbehaviorReport, TraceEvent,
+                   NoncriticalParamsUpdated, PrecheckCandidateBroadcast, N5BoundaryReached>;
 
   Bus() = default;
   ~Bus() override {

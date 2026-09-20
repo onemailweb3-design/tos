@@ -68,6 +68,10 @@ std::string QueryResolverTrackedStateCount::contents_to_string() const {
   return PSTRING() << "{min_slot=" << min_slot << "}";
 }
 
+std::string QueryVoteIngress::contents_to_string() const {
+  return "{}";
+}
+
 td::Result<SkippedSlotResolution> select_skipped_slot_resolution(const CandidateId &requested, bool is_skipped,
                                                                  std::optional<CandidateId> notarized) {
   if (!is_skipped) {

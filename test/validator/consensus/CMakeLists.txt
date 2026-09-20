@@ -180,11 +180,13 @@ set_tests_properties(
 # journals, that slot latched at the carrier boundary, and then nothing: no accepted block
 # and no finalized-block marker on any node.
 #
-# How far the round gets is deliberately not part of the claim. Measured: four nodes agree
-# one slot, a hundred agree three or four, and exactly one slot reaches the carrier boundary
-# at either size. Agreeing a certificate and being latched at the seam are not the same
-# event, and the relationship between them is an open question recorded in the plan
-# document rather than asserted here.
+# How far the round gets is now part of the claim, because the group stops at the boundary
+# rather than only latching the slot that reached it. Measured after that change: one slot
+# reaches an agreed certificate, at four nodes and at a hundred, and it is slot 0 both times.
+# What the gate requires is that the slot every node agreed on is latched on every node, that
+# the group then produces no further candidate, vote or certificate across a settle window,
+# and that asking about a latched slot again is answered from the latch rather than waited
+# on.
 add_test(
     NAME test-consensus-simplex2-pq-finality-e2e-single
     COMMAND test-consensus --duration 40 --n-nodes 1 --target-rate-ms 100
@@ -207,6 +209,20 @@ add_test(
     NAME test-consensus-simplex2-pq-finality-e2e-100
     COMMAND test-consensus --duration 300 --n-nodes 100 --target-rate-ms 100
             --net-ping 0.005:0.02 --pq-finality-e2e-test
+)
+# The same gate with the finalization concurrency limit set to one, which is what lets the
+# retry probe build the pressure it needs: a finalization refused before its attempt begins,
+# and one that fails inside it. Both have to come back rather than disappear -- a certificate
+# dropped with nothing left to ask for it again costs nothing in an N4-only build, where the
+# chain does not advance either way, and is a stuck chain in N5.
+add_test(
+    NAME test-consensus-simplex2-pq-finality-retry
+    COMMAND test-consensus --duration 40 --n-nodes 4 --target-rate-ms 100
+            --net-ping 0.005:0.02 --pq-finality-e2e-test --finalization-retry-probe
+)
+set_tests_properties(
+    test-consensus-simplex2-pq-finality-retry
+    PROPERTIES ENVIRONMENT "TOS_SIMPLEX_FINALIZED_INFLIGHT_MAX=1"
 )
 # The same gate, with the adversarial scenarios turned on. Their attack machinery was never
 # the part that needed N5 -- only their `--min-finalized-blocks` assertion was -- so running
@@ -245,6 +261,16 @@ add_test(
     COMMAND test-consensus --duration 40 --n-nodes 7 --target-rate-ms 100
             --net-ping 0.005:0.02 --malicious-observer-attack --relay-loop-test
             --adaptive-byzantine-n 2 --adaptive-byzantine-period 0.35 --pq-finality-e2e-test
+)
+# One validator passes the others' signed votes on as its own, byte for byte, over its own
+# correctly authenticated transport. Nothing is forged and a vote carries no signer field, so
+# the only thing that could make a relayed vote count as the relayer's is the transport it
+# arrived over. This is the end-to-end form of the property the certificate conformance test
+# proves at unit level: attribution follows the signature, never the transport.
+add_test(
+    NAME test-consensus-simplex2-pq-byzantine-relay
+    COMMAND test-consensus --duration 40 --n-nodes 7 --target-rate-ms 100
+            --net-ping 0.005:0.02 --byzantine-relay-node 3 --pq-finality-e2e-test
 )
 add_test(
     NAME test-consensus-simplex2-pq-query-abuse

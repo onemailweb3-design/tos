@@ -145,11 +145,45 @@ struct QueryN5Boundary {
   struct Result {
     size_t blocked_slots = 0;
     bool slot_is_blocked = false;
+    // Finalizations this resolver has entered and finished since it came up. They are
+    // reported as a pair rather than as a gauge because the number that matters is the
+    // difference: a gap that never closes is a finalization waiting on a verdict nobody is
+    // left to deliver, which is exactly what a terminal state read as "not yet" produces.
+    size_t finalizations_started = 0;
+    size_t finalizations_settled = 0;
+    // Finalizations rescheduled after a failure that may not recur. Non-zero means the
+    // resolver has held on to a certificate whose first conversion attempt did not succeed,
+    // rather than dropping it with nothing left to re-trigger it. The second counter is the
+    // subset refused before the attempt began, by the concurrency limit; they are reported
+    // apart because they fail in different places and were fixed in different places, and a
+    // total alone lets either one of them go missing unnoticed.
+    size_t finalization_retries = 0;
+    size_t finalization_retries_at_admission = 0;
+    // Conversion attempts made for the queried slot. A slot latched at the boundary must
+    // stay at the attempt that latched it however many times it is asked for again.
+    size_t slot_attempts = 0;
   };
 
   using ReturnType = Result;
 
   td::uint32 slot = 0;
+
+  std::string contents_to_string() const;
+};
+
+// Read-only observability of vote ingress, counted per outcome. The split is the property
+// itself: a vote carries authority because of the signature on it, never because of the
+// transport it arrived on. A vote relayed by one validator over its own authenticated
+// transport, carrying another validator's signature, must land in `refused_bad_signature`
+// -- it got past every other gate and was refused exactly where attribution is decided --
+// and must never be counted as the relayer's vote.
+struct QueryVoteIngress {
+  struct Result {
+    size_t accepted = 0;
+    size_t refused_bad_signature = 0;
+  };
+
+  using ReturnType = Result;
 
   std::string contents_to_string() const;
 };
@@ -215,7 +249,7 @@ class Bus : public consensus::Bus {
   using Events = td::TypeList<BroadcastVote, PersistOwnVoteIntent, PersistOwnSignedVote, NotarizationObserved,
                               FinalizationObserved, LeaderWindowObserved, WaitForParent, ResolveCandidate,
                               StoreCandidate, ResolveState, SaveCertificate, QueryValidatorGroupInfo, QuerySlotSkipped,
-                              QueryResolverTrackedStateCount, QueryN5Boundary>;
+                              QueryResolverTrackedStateCount, QueryN5Boundary, QueryVoteIngress>;
 
   Bus() = default;
 

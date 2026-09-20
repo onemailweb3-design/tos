@@ -38,6 +38,12 @@ constexpr size_t DEFAULT_FINALIZED_CACHE_MAX_ENTRIES = 4096;
 // candidate. See MEMORY_DIAGNOSTICS simplex-state-resolver "state_inflight".
 constexpr size_t DEFAULT_STATE_INFLIGHT_MAX = 4096;
 constexpr size_t DEFAULT_FINALIZED_INFLIGHT_MAX = 4096;
+// How many times a finalization that failed transiently is tried again, and how long the
+// first wait is. Bounded on purpose: a candidate that cannot be finalized after this many
+// tries is a condition to report, not one to keep grinding at. Each wait is this delay
+// times the attempt number, so pressure that needs time gets it.
+constexpr size_t max_finalization_attempts = 4;
+constexpr double finalization_retry_delay = 0.2;
 
 size_t cache_limit_from_env(const char* name, size_t default_value) {
   const char* value = std::getenv(name);
@@ -54,6 +60,26 @@ size_t cache_limit_from_env(const char* name, size_t default_value) {
 
 class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<Bus> {
   using ResolvedState = ResolveState::Result;
+
+  // What has happened to one candidate's finalization. This was three booleans, and the
+  // combination that mattered could not be read: a caller that asked only "is it done" met
+  // an entry which had already refused permanently, and waited on a promise nobody was left
+  // to keep. Naming the states forces every reader to say which one it means, and makes the
+  // terminal one impossible to mistake for one that is still coming.
+  enum class Finalization {
+    // Nothing is running. Either no attempt has been made, or one failed for a reason that
+    // may not recur, and the next caller starts another. Keeping the entry rather than
+    // erasing it is what stops a certificate being forgotten because the event that would
+    // have retried it was consumed long ago.
+    Idle,
+    // An attempt is running. A waiter added here will be resolved when it finishes.
+    InFlight,
+    // The block is finalized.
+    Finalized,
+    // Terminal for this build: the certificate reached the N4/N5 seam and the carrier
+    // refused. The entry is kept precisely so the conversion is not attempted again.
+    BlockedOnN5,
+  };
 
  public:
   TOS_RUNTIME_DEFINE_EVENT_HANDLER();
@@ -121,11 +147,20 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
 
   template <>
   td::actor::Task<QueryN5Boundary::Result> process(BusHandle, std::shared_ptr<QueryN5Boundary> query) {
-    QueryN5Boundary::Result result{.blocked_slots = n5_blocked_slots_, .slot_is_blocked = false};
+    QueryN5Boundary::Result result{.blocked_slots = n5_blocked_slots_,
+                                   .slot_is_blocked = false,
+                                   .finalizations_started = finalizations_started_,
+                                   .finalizations_settled = finalizations_settled_,
+                                   .finalization_retries = finalization_retries_,
+                                   .finalization_retries_at_admission = finalization_retries_at_admission_,
+                                   .slot_attempts = 0};
     for (const auto& [id, state] : finalized_blocks_) {
-      if (state.blocked_on_n5 && id.slot == query->slot) {
+      if (id.slot != query->slot) {
+        continue;
+      }
+      result.slot_attempts = std::max(result.slot_attempts, state.attempts);
+      if (state.state == Finalization::BlockedOnN5) {
         result.slot_is_blocked = true;
-        break;
       }
     }
     co_return result;
@@ -200,26 +235,41 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     maybe_log_cache_stats(false);
   }
 
-  td::actor::Task<bool> is_finalized(CandidateId id, bool skip_db_for_newer_slot = false) {
+  // What state this candidate's finalization is in, waiting only on an attempt that can
+  // still change it. Answering "not finalized yet" for a terminal refusal, or waiting on
+  // one, is how a latch meant to suppress retries became a permanent hang.
+  td::actor::Task<Finalization> finalization_of(CandidateId id, bool skip_db_for_newer_slot = false) {
     auto it = finalized_blocks_.find(id);
     if (it != finalized_blocks_.end()) {
-      if (it->second.done) {
-        touch_finalized_cache(id);
-        co_return true;
+      switch (it->second.state) {
+        case Finalization::Finalized:
+          touch_finalized_cache(id);
+          co_return Finalization::Finalized;
+        case Finalization::BlockedOnN5:
+          co_return Finalization::BlockedOnN5;
+        case Finalization::Idle:
+          co_return Finalization::Idle;
+        case Finalization::InFlight:
+          break;
       }
       // A concurrent finalization is already materializing this candidate in
       // ManagerFacade and persisting its finalized marker. Replaying the same
       // ancestor chain in parallel can combine a pre-finalization manager
       // anchor with newer candidates. Wait for the authoritative finalization
       // instead; this is especially important during cold-start catch-up.
-      CHECK(it->second.started);
       auto [task, promise] = td::actor::StartedTask<td::Unit>::make_bridge();
       it->second.waiters.push_back(std::move(promise));
-      co_await std::move(task);
+      // Wrapped: the attempt may have refused, and a refusal is something to report from
+      // the state below rather than to throw out of a question about state.
+      auto ignored = co_await std::move(task).wrap();
       auto completed = finalized_blocks_.find(id);
-      CHECK(completed != finalized_blocks_.end() && completed->second.done);
-      touch_finalized_cache(id);
-      co_return true;
+      if (completed == finalized_blocks_.end()) {
+        co_return Finalization::Idle;
+      }
+      if (completed->second.state == Finalization::Finalized) {
+        touch_finalized_cache(id);
+      }
+      co_return completed->second.state;
     }
 
     // During steady-state processing, a candidate newer than the latest
@@ -229,20 +279,20 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     // FinalizationObserved event, and finalize_blocks() always checks the DB.
     if (skip_db_for_newer_slot && latest_finalized_slot_.has_value() && id.slot > *latest_finalized_slot_) {
       ++finalized_db_skips_;
-      co_return false;
+      co_return Finalization::Idle;
     }
 
     auto key = create_serialize_tl_object<tl::db_key_finalizedBlock>(id.to_tl());
     auto value = co_await owning_bus()->db->get_latest(std::move(key));
     if (!value.has_value()) {
       ++finalized_db_misses_;
-      co_return false;
+      co_return Finalization::Idle;
     }
 
     ++finalized_db_hits_;
-    finalized_blocks_[id].done = true;
+    finalized_blocks_[id].state = Finalization::Finalized;
     touch_finalized_cache(id);
-    co_return true;
+    co_return Finalization::Finalized;
   }
 
   td::actor::Task<ResolvedState> resolve_state_inner(ParentId id) {
@@ -301,7 +351,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         gen_utime_exact = candidate_gen_utime.move_as_ok();
       }
 
-      if (!reconstruct_from_candidate_data && co_await is_finalized(*id, true)) {
+      if (!reconstruct_from_candidate_data && (co_await finalization_of(*id, true)) == Finalization::Finalized) {
         auto genesis = co_await genesis_.get();
         auto manager_state =
             co_await ChainState::from_manager(owning_bus()->manager, owning_bus()->shard,
@@ -344,12 +394,8 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
 
   // ===== Block finalization =====
   struct FinalizedBlock {
-    bool done = false;
-    bool started = false;
-    // Terminal: this slot reached the N4/N5 seam and the carrier refused. The entry is kept
-    // precisely so the conversion is not attempted again -- erasing it, as an ordinary
-    // failure does, would retry the same permanent refusal forever and re-log it each time.
-    bool blocked_on_n5 = false;
+    Finalization state = Finalization::Idle;
+    size_t attempts = 0;
     std::vector<td::Promise<td::Unit>> waiters;
   };
 
@@ -363,6 +409,12 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   // Slots latched at the N4/N5 carrier boundary. A non-zero value is the explicit, expected
   // state of an N4-only build, not a fault to chase.
   size_t n5_blocked_slots_ = 0;
+  // Finalizations entered and finished. Kept as two counters rather than one gauge so a
+  // finalization that never returns is visible as a gap that stops closing.
+  size_t finalizations_started_ = 0;
+  size_t finalizations_settled_ = 0;
+  size_t finalization_retries_ = 0;
+  size_t finalization_retries_at_admission_ = 0;
   size_t finalized_db_hits_ = 0;
   size_t finalized_db_misses_ = 0;
   size_t finalized_db_skips_ = 0;
@@ -374,7 +426,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     }
     auto it = finalized_blocks_.find(*evicted);
     CHECK(it != finalized_blocks_.end());
-    CHECK(it->second.done);
+    CHECK(it->second.state == Finalization::Finalized);
     CHECK(it->second.waiters.empty());
     finalized_blocks_.erase(it);
     ++finalized_cache_evictions_;
@@ -406,7 +458,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       size_t finalized_inflight = 0;
       size_t finalized_waiters = 0;
       for (const auto& [_, entry] : finalized_blocks_) {
-        finalized_inflight += entry.started && !entry.done;
+        finalized_inflight += entry.state == Finalization::InFlight;
         finalized_waiters += entry.waiters.size();
       }
       LOG(WARNING) << "MEMORY_DIAGNOSTICS simplex-state-resolver"
@@ -421,45 +473,98 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
                    << " finalized_inflight_admission=" << finalized_inflight_.count() << "/"
                    << finalized_inflight_.capacity()
                    << " finalized_admission_rejections=" << finalized_admission_rejections_
-                   << " n5_blocked_slots=" << n5_blocked_slots_ << " finalized_db_hits=" << finalized_db_hits_
-                   << " finalized_db_misses=" << finalized_db_misses_ << " finalized_db_skips=" << finalized_db_skips_;
+                   << " n5_blocked_slots=" << n5_blocked_slots_ << " finalization_retries=" << finalization_retries_
+                   << " finalization_retries_at_admission=" << finalization_retries_at_admission_
+                   << " finalizations_outstanding=" << (finalizations_started_ - finalizations_settled_)
+                   << " finalized_db_hits=" << finalized_db_hits_ << " finalized_db_misses=" << finalized_db_misses_
+                   << " finalized_db_skips=" << finalized_db_skips_;
     }
   }
 
   td::actor::Task<> finalize_blocks(CandidateId id, std::optional<FinalCertRef> final_cert,
                                     std::optional<CandidateRef> final_candidate) {
-    if (co_await is_finalized(id)) {
-      co_return td::Unit{};
+    ++finalizations_started_;
+    SCOPE_EXIT {
+      ++finalizations_settled_;
+    };
+    switch (co_await finalization_of(id)) {
+      case Finalization::Finalized:
+        co_return td::Unit{};
+      case Finalization::BlockedOnN5:
+        // Already latched. Answer without re-running the conversion and without logging
+        // again, and above all without waiting: nothing will ever move this entry.
+        co_return td::Status::Error(n5_carrier_required_error_code, PSTRING()
+                                                                        << "Simplex state-resolver: slot " << id.slot
+                                                                        << " is blocked at the N4/N5 carrier boundary");
+      case Finalization::InFlight:
+        // The attempt this waited on finished and another has already started. Fall through
+        // to the re-read below, which attaches to whichever attempt is now running.
+      case Finalization::Idle:
+        break;
     }
-    if (!finalized_blocks_.contains(id) && !finalized_inflight_.try_admit()) {
-      ++finalized_admission_rejections_;
-      co_return td::Status::Error(ErrorCode::notready,
-                                  PSTRING() << "Simplex state-resolver: too many concurrent finalizations ("
-                                            << finalized_inflight_.count() << "/" << finalized_inflight_.capacity()
-                                            << ")");
+    // finalization_of() may have suspended on a database read, so the entry can have been
+    // decided by another attempt while this one was waiting. Read it again before committing
+    // to anything: adding a waiter to an entry that has already resolved its waiters is a
+    // promise nobody is left to keep.
+    if (auto it = finalized_blocks_.find(id); it != finalized_blocks_.end()) {
+      switch (it->second.state) {
+        case Finalization::Finalized:
+          touch_finalized_cache(id);
+          co_return td::Unit{};
+        case Finalization::BlockedOnN5:
+          co_return td::Status::Error(
+              n5_carrier_required_error_code,
+              PSTRING() << "Simplex state-resolver: slot " << id.slot << " is blocked at the N4/N5 carrier boundary");
+        case Finalization::InFlight: {
+          // Someone else owns the attempt; wait for its verdict rather than starting a
+          // second conversion of the same certificate.
+          auto [task, promise] = td::actor::StartedTask<td::Unit>::make_bridge();
+          it->second.waiters.push_back(std::move(promise));
+          co_return co_await std::move(task);
+        }
+        case Finalization::Idle:
+          break;
+      }
     }
+    // Every attempt is admitted, including a retry of one that failed transiently: an entry
+    // left behind by a failed attempt no longer holds an admission slot, and retries that
+    // skipped admission would be exactly the concurrency the limit exists to bound.
+    //
+    // A rejection here is the transient failure that costs the most, because it happens
+    // before anything has been recorded. The event that carried this certificate is already
+    // consumed, so returning the rejection alone drops the certificate with nothing left to
+    // ask for it again. The attempt is counted against an entry and retried, exactly as a
+    // failure inside the attempt is.
     FinalizedBlock& state = finalized_blocks_[id];
-    if (state.done) {
-      touch_finalized_cache(id);
-      co_return td::Unit{};
+    if (!finalized_inflight_.try_admit()) {
+      ++finalized_admission_rejections_;
+      ++state.attempts;
+      auto rejection =
+          td::Status::Error(ErrorCode::notready,
+                            PSTRING() << "Simplex state-resolver: too many concurrent finalizations ("
+                                      << finalized_inflight_.count() << "/" << finalized_inflight_.capacity() << ")");
+      if (state.attempts < max_finalization_attempts) {
+        ++finalization_retries_;
+        ++finalization_retries_at_admission_;
+        retry_finalization(id, final_cert, final_candidate, state.attempts).start().detach();
+      } else {
+        LOG(ERROR) << "Simplex state-resolver: giving up on finalizing slot " << id.slot << " after " << state.attempts
+                   << " attempts; the last failure was " << rejection.message();
+        forget_exhausted(id);
+      }
+      co_return std::move(rejection);
     }
-    if (state.blocked_on_n5) {
-      // Already latched. Answer without re-running the conversion and without logging again.
-      co_return td::Status::Error(n5_carrier_required_error_code, PSTRING()
-                                                                      << "Simplex state-resolver: slot " << id.slot
-                                                                      << " is blocked at the N4/N5 carrier boundary");
-    }
-    auto [task, promise] = td::actor::StartedTask<td::Unit>::make_bridge();
-    state.waiters.push_back(std::move(promise));
-    if (!state.started) {
-      state.started = true;
+    state.state = Finalization::InFlight;
+    ++state.attempts;
+    bool exhausted = false;
+    {
       SCOPE_EXIT {
         finalized_inflight_.release();
       };
       auto result = co_await finalize_blocks_inner(id, final_cert, final_candidate).wrap();
       auto waiters = std::move(state.waiters);
       if (result.is_ok()) {
-        state.done = true;
+        state.state = Finalization::Finalized;
         touch_finalized_cache(id);
       } else if (is_n5_carrier_required(result.error())) {
         // Not a transient failure: this build has no post-quantum block-signature carrier,
@@ -467,20 +572,62 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         // so the refusal is neither retried nor re-logged. The actor stays alive and the
         // manager keeps a healthy group -- stopping it here would recreate the dead-entry
         // lifecycle bug this design already fixed once.
-        state.blocked_on_n5 = true;
+        state.state = Finalization::BlockedOnN5;
         ++n5_blocked_slots_;
         LOG(ERROR) << "Simplex consensus is blocked at the N4/N5 boundary: the certificate for slot " << id.slot
                    << " was agreed and verified, but " << result.error().message()
                    << ". No block was finalized, accepted or persisted. This is expected in an N4-only build.";
+        owning_bus().publish<N5BoundaryReached>(id.slot);
       } else {
-        finalized_blocks_lru_.erase(id);
-        finalized_blocks_.erase(id);
+        // Transient: admission pressure, a timeout, an ancestor not ready yet. The entry
+        // goes back to Idle rather than being erased, because erasing it loses the fact
+        // that this candidate still needs finalizing -- and the FinalizationObserved that
+        // would have said so again was consumed when this attempt started. A retry is
+        // scheduled while the certificate is still in hand.
+        state.state = Finalization::Idle;
+        if (state.attempts < max_finalization_attempts) {
+          ++finalization_retries_;
+          retry_finalization(id, final_cert, final_candidate, state.attempts).start().detach();
+        } else {
+          LOG(ERROR) << "Simplex state-resolver: giving up on finalizing slot " << id.slot << " after "
+                     << state.attempts << " attempts; the last failure was " << result.error().message();
+          exhausted = true;
+        }
       }
       for (auto& p : waiters) {
         p.set_result(result.clone());
       }
+      if (exhausted) {
+        forget_exhausted(id);
+      }
+      co_return std::move(result);
     }
-    co_return co_await std::move(task);
+  }
+
+  // Drop the record of a finalization that has run out of attempts. Keeping an entry is how
+  // a certificate is remembered between tries; once there are no tries left there is nothing
+  // to remember, and an entry per abandoned candidate would grow without bound under exactly
+  // the pressure the admission limit exists to survive. Only an entry nobody is waiting on
+  // can go: a waiter is a promise, and dropping the entry would drop the promise with it.
+  void forget_exhausted(const CandidateId& id) {
+    auto it = finalized_blocks_.find(id);
+    if (it != finalized_blocks_.end() && it->second.waiters.empty()) {
+      finalized_blocks_.erase(it);
+    }
+  }
+
+  // Try a transiently failed finalization again, after a backoff that grows with the
+  // attempt. Detached on purpose: the caller that met the failure has already been told,
+  // and this exists so the certificate is not forgotten, not so anyone waits for it.
+  td::actor::Task<> retry_finalization(CandidateId id, std::optional<FinalCertRef> final_cert,
+                                       std::optional<CandidateRef> final_candidate, size_t attempts) {
+    co_await td::actor::coro_sleep(td::Timestamp::in(finalization_retry_delay * static_cast<double>(attempts)));
+    auto result = co_await finalize_blocks(id, std::move(final_cert), std::move(final_candidate)).wrap();
+    if (result.is_error() && !is_n5_carrier_required(result.error()) && result.error().code() != ErrorCode::cancelled) {
+      LOG(DEBUG) << "Simplex state-resolver: retry of slot " << id.slot
+                 << " did not finalize it yet: " << result.error().message();
+    }
+    co_return td::Unit{};
   }
 
   td::actor::Task<> finalize_blocks_inner(CandidateId id, std::optional<FinalCertRef> final_cert,

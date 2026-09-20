@@ -74,6 +74,10 @@ std::string Start::contents_to_string() const {
   return PSTRING() << "{state=" << state << "}";
 }
 
+std::string N5BoundaryReached::contents_to_string() const {
+  return PSTRING() << "{slot=" << slot << "}";
+}
+
 std::string FinalizeBlock::contents_to_string() const {
   return PSTRING() << "{candidate=" << candidate_to_string(candidate)
                    << ", signatures=" << block_signature_set_to_string(signatures) << "}";

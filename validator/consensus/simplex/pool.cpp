@@ -381,6 +381,11 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
   }
 
   template <>
+  void handle(BusHandle, std::shared_ptr<const N5BoundaryReached>) {
+    quiescent_ = true;
+  }
+
+  template <>
   void handle(BusHandle, std::shared_ptr<const StopRequested>) {
     stop();
   }
@@ -447,14 +452,20 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
         return;
       }
 
+      // Attribution is decided here and nowhere else: the signature has to verify under the
+      // key the set records for the validator this message came from. A validator relaying
+      // another's signed vote over its own authenticated transport arrives with valid
+      // transport and someone else's signature, and is refused exactly here.
       auto maybe_vote = Signed<Vote>::from_tl(std::move(*tl_vote), source_validator, bus);
       if (maybe_vote.is_error()) {
+        ++votes_refused_bad_signature_;
         LOG(WARNING) << "Dropping bad vote from " << source_validator << " : " << maybe_vote.move_as_error();
         ban(message->source);
         return;
       }
 
       auto vote = maybe_vote.move_as_ok();
+      ++votes_accepted_;
       handle_vote(source_validator.get_using(bus), std::move(vote));
     }
 
@@ -533,6 +544,12 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
       requests_.pop_back();
     }
     co_return co_await std::move(bridge);
+  }
+
+  template <>
+  td::actor::Task<QueryVoteIngress::Result> process(BusHandle, std::shared_ptr<QueryVoteIngress>) {
+    co_return QueryVoteIngress::Result{.accepted = votes_accepted_,
+                                       .refused_bad_signature = votes_refused_bad_signature_};
   }
 
   template <>
@@ -855,6 +872,11 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
     auto &bus = *owning_bus();
     CHECK(bus.is_validator());
 
+    if (quiescent_) {
+      // The boundary was reached while this vote was being prepared. Consensus stops
+      // producing new ones, but one already in flight arrives here regardless.
+      co_return td::Unit{};
+    }
     if (!vote_journal_failure_.empty()) {
       LOG(ERROR) << "consensus: refusing to vote, the vote journal is unusable: " << vote_journal_failure_;
       co_return td::Unit{};
@@ -1166,6 +1188,9 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
     return true;
   }
 
+  size_t votes_accepted_ = 0;
+  size_t votes_refused_bad_signature_ = 0;
+
   td::uint32 slots_per_leader_window_;
   NewConsensusConfig::NoncriticalParams params_;
 
@@ -1178,6 +1203,8 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
   // is a terminal condition for the group: casting a fresh vote would create a second
   // signature for a vote that may already be in a peer's certificate.
   std::string vote_journal_failure_;
+  // Set once this group reaches the N4/N5 carrier boundary.
+  bool quiescent_ = false;
   td::uint32 now_ = 0;
 
   std::set<td::uint32> skip_intervals_;

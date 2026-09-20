@@ -88,12 +88,27 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
       auto end_slot = window * slots_per_leader_window_;
       for (td::uint32 i = start_slot; i < end_slot; ++i) {
         auto slot = state_->slot_at(i);
-        if (slot.has_value() && !slot->state->voted_final) {
+        if (slot.has_value() && !slot->state->voted_final && !quiescent_) {
           slot->state->voted_skip = true;
           owning_bus().publish<BroadcastVote>(SkipVote{i}).start().detach();
         }
       }
     }
+  }
+
+  template <>
+  void handle(BusHandle, std::shared_ptr<const N5BoundaryReached> event) {
+    if (quiescent_) {
+      return;
+    }
+    quiescent_ = true;
+    // Alive, and producing nothing. The actor keeps answering queries and the manager keeps
+    // a healthy entry; what stops is new work, because a vote or a candidate now is work on
+    // a chain that cannot take it. Latching only the slot left this actor voting and
+    // collating past a boundary it had no way to learn about.
+    LOG(ERROR) << "Simplex consensus is quiescent: slot " << event->slot
+               << " reached the N4/N5 carrier boundary, so this group produces no further votes or candidates "
+                  "until N5 supplies the post-quantum carrier.";
   }
 
   template <>
@@ -151,7 +166,7 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
     td::uint32 window_end = window_start + slots_per_leader_window_;
     for (td::uint32 i = range_start; i < window_end; ++i) {
       auto slot = state_->slot_at(i);
-      if (slot && !slot->state->voted_final) {
+      if (slot && !slot->state->voted_final && !quiescent_) {
         owning_bus().publish<BroadcastVote>(SkipVote{i}).start().detach();
         slot->state->voted_skip = true;
         previous_window_had_skip_ = true;
@@ -217,7 +232,7 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
       start_time = std::min(start_time, td::Timestamp::in(params_.target_rate));
     }
 
-    if (current_window_ != start_slot / slots_per_leader_window_) {
+    if (current_window_ != start_slot / slots_per_leader_window_ || quiescent_) {
       co_return td::Unit{};
     }
 
@@ -259,6 +274,9 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
     }
     co_await std::move(store_candidate);
 
+    if (quiescent_) {
+      co_return td::Unit{};
+    }
     slot.state->voted_notar = candidate->id;
 
     owning_bus().publish<BroadcastVote>(NotarizeVote{candidate->id}).start().detach();
@@ -298,7 +316,8 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
   void try_vote_final(State::SlotRef slot) {
     CHECK(slot.state->voted_notar || slot.state->notar_cert);
 
-    if (!slot.state->voted_skip && !slot.state->voted_final && slot.state->voted_notar == slot.state->notar_cert) {
+    if (!slot.state->voted_skip && !slot.state->voted_final && slot.state->voted_notar == slot.state->notar_cert &&
+        !quiescent_) {
       owning_bus().publish<BroadcastVote>(FinalizeVote{*slot.state->voted_notar}).start().detach();
       slot.state->voted_final = true;
     }
@@ -311,6 +330,8 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
   td::uint32 timeout_slot_ = 0;  // By alarm_timestamp(), slots < timeout_slot_ should be notarized.
   std::chrono::duration<double> first_block_timeout_;
   bool previous_window_had_skip_ = false;
+  // Set once this group reaches the N4/N5 carrier boundary. Terminal for the session.
+  bool quiescent_ = false;
   std::optional<State> state_;
   td::uint32 current_window_ = 0;
 };

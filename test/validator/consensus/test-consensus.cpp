@@ -125,7 +125,17 @@ size_t ADAPTIVE_BYZANTINE_N = 0;
 double ADAPTIVE_BYZANTINE_PERIOD = 0.5;
 bool MALICIOUS_OBSERVER_ATTACK = false;
 bool RELAY_LOOP_TEST = false;
+// The validator index that relays other validators' signed votes over its own transport,
+// or -1 for none. The bytes are passed on unmodified: a vote carries no signer field, so all
+// a receiver has to attribute it by is the transport it arrived over -- and that must not be
+// what decides whose vote it is.
+int BYZANTINE_RELAY_NODE = -1;
 bool QUERY_ABUSE_TEST = false;
+// Publish two finalizations of candidates the resolver has never seen, so that a
+// concurrency limit set to one refuses the second at the door. Requires
+// TOS_SIMPLEX_FINALIZED_INFLIGHT_MAX=1 to be set for the run; without it nothing is refused
+// and the probe fails, which is the intended behaviour of a probe whose pressure is missing.
+bool FINALIZATION_RETRY_PROBE = false;
 bool EMPTY_CHAIN_RESTART_TEST = false;
 bool VOTE_JOURNAL_TEST = false;
 bool PQ_FINALITY_E2E_TEST = false;
@@ -138,6 +148,10 @@ std::atomic<size_t> INJECTED_PACKET_LOSSES = 0;
 std::atomic<size_t> INJECTED_NODE_KILLS = 0;
 std::atomic<size_t> INJECTED_NETWORK_CUTS = 0;
 std::atomic<size_t> EMPTY_CHAIN_MANAGER_ANCHOR_FAILURES = 0;
+// Candidates produced anywhere in the network. Read twice, a settle window apart, it says
+// whether collation has actually stopped.
+std::atomic<size_t> CANDIDATES_GENERATED = 0;
+std::atomic<size_t> BYZANTINE_RELAYS_SENT = 0;
 double CATCH_UP_DOWNTIME = -1.0;
 
 std::pair<double, double> DB_DELAY = {0.0, 0.0};
@@ -307,6 +321,21 @@ class TestOverlayNode : public td::actor::SpawnsWith<Bus>, public td::actor::Con
   }
 
   void receive_message(PeerValidator src, td::BufferSlice data) {
+    auto& bus = *owning_bus();
+    // Pass another validator's signed message on as this node's own, byte for byte. The
+    // transport is genuinely this node's and authenticates correctly; the signature inside
+    // is somebody else's. Nothing about the message is forged, which is the point: the only
+    // thing that could make it count as this node's vote is the transport it came over.
+    if (BYZANTINE_RELAY_NODE >= 0 && bus.local_id->idx.value() == static_cast<size_t>(BYZANTINE_RELAY_NODE) &&
+        src.idx.value() != bus.local_id->idx.value()) {
+      ++BYZANTINE_RELAYS_SENT;
+      for (size_t i = 0; i < bus.validator_set.size(); ++i) {
+        if (i != bus.local_id->idx.value() && i != src.idx.value()) {
+          td::actor::ask(test_overlay, &TestOverlay::send_message, *bus.local_id, instance_idx_, i, data.clone())
+              .detach_silent();
+        }
+      }
+    }
     owning_bus().publish<IncomingProtocolMessage>(src.idx, src.adnl_id, std::move(data));
   }
 
@@ -580,6 +609,14 @@ class TestFinalityObserver : public td::actor::SpawnsWith<simplex::Bus>, public 
       return;
     }
     record_finalization(ObservedFinalization{bus->local_id->idx.value(), instance_idx_, event->id, event->certificate});
+  }
+
+  // Candidates this network has put into the round, counted across every node. It is how the
+  // gate can say that collation stopped, rather than that no further block was accepted --
+  // which would be true of a build that never had a carrier whether it stopped or not.
+  template <>
+  void handle(simplex::BusHandle, std::shared_ptr<const CandidateGenerated>) {
+    ++CANDIDATES_GENERATED;
   }
 
  private:
@@ -1308,6 +1345,8 @@ class TestConsensus : public td::actor::Actor {
         {ADAPTIVE_BYZANTINE_N != 0, [this] { return adaptive_byzantine_epochs_ >= 2; },
          "an adaptive Byzantine rotation"},
         {QUERY_ABUSE_TEST, [this] { return query_abuse_completed_; }, "the candidate query flood"},
+        {BYZANTINE_RELAY_NODE >= 0, [] { return BYZANTINE_RELAYS_SENT.load() > 0; },
+         "a validator relaying another's signed vote"},
     };
     auto adversity_deadline = td::Timestamp::in(DURATION * 0.3);
     for (const auto& adversity : adversities) {
@@ -1548,6 +1587,240 @@ class TestConsensus : public td::actor::Actor {
       co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
     }
 
+    // --- A valid transport is not consensus authority ---
+    //
+    // A validator passed another validator's signed vote on as its own, byte for byte, over
+    // its own correctly authenticated transport. Nothing was forged, and a vote carries no
+    // signer field, so the only thing a receiver could attribute it by is the transport it
+    // arrived over. It must not be enough: the signature has to verify under the key the set
+    // records for whoever the message came from, and here it does not.
+    //
+    // The instrument is where the refusal lands. A vote dropped for being too new, for being
+    // unwanted, or for coming from a banned peer is dropped silently and counts nowhere; a
+    // vote that reached the point where attribution is decided and failed there is counted
+    // as a bad signature. Requiring that counter to move is therefore requiring that the
+    // relay got past every other gate and was stopped by this one.
+    //
+    // The control is the run itself: those same bytes, arriving over their own signer's
+    // transport, are what carried this round to an agreed certificate on every node, which
+    // the gate has already required above.
+    if (BYZANTINE_RELAY_NODE >= 0) {
+      size_t refusals = 0;
+      size_t accepted = 0;
+      for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
+        for (auto& instance : nodes_[node_idx].instances) {
+          if (instance.status != Instance::Running) {
+            continue;
+          }
+          auto ingress = co_await instance.bus.publish(std::make_shared<simplex::QueryVoteIngress>());
+          refusals += ingress.refused_bad_signature;
+          accepted += ingress.accepted;
+        }
+      }
+      if (refusals == 0) {
+        fail(PSTRING() << "validator " << BYZANTINE_RELAY_NODE << " relayed " << BYZANTINE_RELAYS_SENT.load()
+                       << " of other validators' signed votes over its own transport and not one was refused for "
+                       << "carrying a signature that does not verify under the sender's key");
+        co_return td::Unit{};
+      }
+      if (accepted == 0) {
+        fail("no vote was accepted anywhere, so the refusals above say nothing about attribution");
+        co_return td::Unit{};
+      }
+    }
+
+    // --- And the whole group stops, not only the slot that latched ---
+    //
+    // The boundary belongs to the validator group, not to one certificate. A node that keeps
+    // voting and collating after reaching it is producing evidence whose finality can never
+    // be carried, while an operator watches a round that looks alive. The slot latch cannot
+    // say anything about that: it reports one certificate's fate.
+    //
+    // "It stopped" is not observable at an instant, so the instrument is a settle window.
+    // Everything the round produces -- candidates anywhere in the network, finality
+    // observations, and every node's own vote journal -- is read twice, a window apart, and
+    // has to be identical. An earlier version of this gate asserted that the round stops
+    // without measuring it, and the count was still moving when it said so.
+    //
+    // Scenarios that churn nodes are excluded, and only those: quiescence lives in memory,
+    // so a node the gremlin has just restarted is legitimately voting again until it
+    // re-reaches the boundary, and a window that lands on one measures the gremlin.
+    struct RoundActivity {
+      size_t candidates = 0;
+      size_t finality_observations = 0;
+      std::vector<size_t> journalled_votes;
+
+      bool operator==(const RoundActivity&) const = default;
+    };
+    auto round_activity = [&]() {
+      RoundActivity activity;
+      activity.candidates = CANDIDATES_GENERATED.load();
+      activity.finality_observations = read_finality_log().size();
+      for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
+        for (const auto& instance : nodes_[node_idx].instances) {
+          activity.journalled_votes.push_back(own_vote_journal(instance).size());
+        }
+      }
+      return activity;
+    };
+
+    const double settle_window = std::clamp(DURATION * 0.05, 0.3, 2.0);
+    if (!node_churn_active) {
+      co_await td::actor::coro_sleep(td::Timestamp::in(settle_window));
+      auto before = round_activity();
+      co_await td::actor::coro_sleep(td::Timestamp::in(settle_window));
+      auto after = round_activity();
+      if (after.candidates != before.candidates) {
+        fail(PSTRING() << "after every node reached the N4/N5 boundary the network produced "
+                       << (after.candidates - before.candidates) << " further candidates in " << settle_window
+                       << "s; the group has not stopped");
+        co_return td::Unit{};
+      }
+      if (after.journalled_votes != before.journalled_votes) {
+        fail(PSTRING() << "after every node reached the N4/N5 boundary a node cast a further vote of its own in "
+                       << settle_window << "s; the group has not stopped");
+        co_return td::Unit{};
+      }
+      if (after.finality_observations != before.finality_observations) {
+        fail(PSTRING() << "after every node reached the N4/N5 boundary the network agreed "
+                       << (after.finality_observations - before.finality_observations)
+                       << " further finality certificates in " << settle_window << "s; the group has not stopped");
+        co_return td::Unit{};
+      }
+    }
+
+    // --- Asking again about a latched slot is answered, never waited on ---
+    //
+    // The latch is terminal, and the danger in a terminal state is that a reader takes it for
+    // one that has simply not arrived yet. This was three booleans, and a caller that read
+    // "not finalized" off a permanently refused entry added itself to a waiter list nobody
+    // was left to drain; the refusal became a hang, in a path with no timeout above it.
+    //
+    // The instrument is the pair of counters, not a gauge: every finalization entered must
+    // settle. A run of further finalizations of an already-latched certificate has to leave
+    // no gap behind, must not convert that certificate again, and must not latch it twice.
+    //
+    // It is asked of a node that is up and has observed the agreed slot, chosen here rather
+    // than fixed in advance. The probes are skipped where a gremlin owns node lifecycles:
+    // the node chosen can be taken down between the choice and the answer, and the resulting
+    // silence would be reported as a hang that never happened. The property is proven by the
+    // variants that do not churn, the same division the journal-replay phase above makes.
+    constexpr size_t repeated_finalizations = 8;
+    simplex::QueryN5Boundary::Result probed;
+    if (!node_churn_active) {
+      std::optional<ObservedFinalization> latched;
+      for (const auto& observation : read_finality_log()) {
+        if (observation.id.slot != *common_slot) {
+          continue;
+        }
+        if (nodes_[observation.node_idx].instances[observation.instance_idx].status != Instance::Running) {
+          continue;
+        }
+        latched = observation;
+        break;
+      }
+      if (!latched.has_value()) {
+        fail("no running node had observed the agreed slot when the boundary was probed");
+        co_return td::Unit{};
+      }
+      probe_node_idx_ = latched->node_idx;
+      probe_instance_idx_ = latched->instance_idx;
+      auto& probe_instance = nodes_[probe_node_idx_].instances[probe_instance_idx_];
+
+      auto baseline = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+      for (size_t i = 0; i < repeated_finalizations; ++i) {
+        probe_instance.bus.publish<simplex::FinalizationObserved>(latched->id, latched->cert);
+      }
+      auto probe_deadline = td::Timestamp::in(std::max(2.0, settle_window * 2));
+      while (true) {
+        probed = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+        if (probed.finalizations_started >= baseline.finalizations_started + repeated_finalizations &&
+            probed.finalizations_settled == probed.finalizations_started) {
+          break;
+        }
+        if (probe_deadline.is_in_past()) {
+          fail(PSTRING() << "after " << repeated_finalizations
+                         << " further finalizations of a certificate already latched at the N4/N5 boundary, "
+                         << (probed.finalizations_started - probed.finalizations_settled)
+                         << " were still waiting for a verdict nobody is left to deliver");
+          co_return td::Unit{};
+        }
+        co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
+      }
+      if (!probed.slot_is_blocked) {
+        fail(PSTRING() << "slot " << *common_slot << " stopped being latched at the boundary after being asked again");
+        co_return td::Unit{};
+      }
+      if (probed.slot_attempts != baseline.slot_attempts) {
+        fail(PSTRING() << "a certificate already latched at the N4/N5 boundary was converted again ("
+                       << baseline.slot_attempts << " -> " << probed.slot_attempts << " attempts)");
+        co_return td::Unit{};
+      }
+      if (probed.blocked_slots != baseline.blocked_slots) {
+        fail(PSTRING() << "an already-latched slot was counted at the boundary a second time ("
+                       << baseline.blocked_slots << " -> " << probed.blocked_slots << ")");
+        co_return td::Unit{};
+      }
+
+      // A state resolution that walks through a latched candidate asks the resolver the same
+      // question, and the shape that hung answered it with "not yet, wait here". It is run
+      // detached and polled on purpose: a probe that could hang must not be able to hang the
+      // gate, or the failure arrives as a harness timeout with nothing said about why.
+      blocked_state_resolution_answered_ = false;
+      probe_blocked_state_resolution(latched->id).start().detach();
+      auto resolve_deadline = td::Timestamp::in(std::max(2.0, settle_window * 2));
+      while (!blocked_state_resolution_answered_ && !resolve_deadline.is_in_past()) {
+        co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
+      }
+      if (!blocked_state_resolution_answered_) {
+        fail("resolving state through a candidate latched at the N4/N5 boundary never answered");
+        co_return td::Unit{};
+      }
+
+      // --- A finalization refused at the door is kept, not dropped ---
+      //
+      // The failure that costs the most is the one that happens before anything is recorded.
+      // A concurrent-finalization limit rejects the call, the event that carried the
+      // certificate is already consumed, and unless the resolver holds on to it nothing will
+      // ever ask again -- measured once as slots agreed by every node that reached no
+      // boundary at all, and in N5 it would be a chain that stops.
+      //
+      // Pressure like that cannot be produced by asking politely, so it is built: with the
+      // limit set to one, two finalizations of candidates this resolver has never seen are
+      // published at once. The first takes the only slot and waits for candidate data that
+      // will never arrive, which is what holds the limit closed; the second is refused at
+      // the door, and has to come back rather than disappear. It is deliberately last in the
+      // gate, because it leaves that first finalization outstanding on purpose.
+      // Both doors are required to hold, and they are counted apart because either one alone
+      // satisfies "something was retried": the one refused before the attempt began, and the
+      // one that failed inside it -- here, waiting for candidate data that never comes.
+      if (FINALIZATION_RETRY_PROBE) {
+        auto before = probed;
+        for (td::uint32 offset = 1; offset <= 2; ++offset) {
+          CandidateId unseen = latched->id;
+          unseen.slot = latched->id.slot + 1000 * offset;
+          probe_instance.bus.publish<simplex::FinalizationObserved>(unseen, latched->cert);
+        }
+        auto retry_deadline = td::Timestamp::in(std::max(4.0, settle_window * 4));
+        while (true) {
+          probed = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+          const bool at_admission = probed.finalization_retries_at_admission > before.finalization_retries_at_admission;
+          const bool inside_attempt = (probed.finalization_retries - probed.finalization_retries_at_admission) >
+                                      (before.finalization_retries - before.finalization_retries_at_admission);
+          if (at_admission && inside_attempt) {
+            break;
+          }
+          if (retry_deadline.is_in_past()) {
+            fail(PSTRING() << "a finalization that failed for a reason that may not recur was dropped instead of "
+                           << "being tried again (refused at the concurrency limit: " << at_admission
+                           << ", failed inside the attempt: " << inside_attempt << ")");
+            co_return td::Unit{};
+          }
+          co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
+        }
+      }
+    }  // !node_churn_active
+
     for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
       for (size_t instance_idx = 0; instance_idx < nodes_[node_idx].instances.size(); ++instance_idx) {
         auto& instance = nodes_[node_idx].instances[instance_idx];
@@ -1607,8 +1880,27 @@ class TestConsensus : public td::actor::Actor {
                                                    << checked_against_journals
                                                    << " signatures matched their signers' journals byte for byte")
                  << "; every node stopped at the N4/N5 boundary with no block accepted and no finalized marker "
-                 << "written";
+                 << "written"
+                 << (node_churn_active ? std::string("")
+                                       : PSTRING()
+                                             << "; node " << probe_node_idx_ << " answered " << repeated_finalizations
+                                             << " further finalizations of that certificate from the latch, "
+                                             << "resolved state through it, and retried " << probed.finalization_retries
+                                             << " finalization(s) that had failed transiently");
     pq_finality_completed_ = true;
+    co_return td::Unit{};
+  }
+
+  // Ask node 0 to resolve chain state through a candidate that is latched at the carrier
+  // boundary, and record only that an answer came back. Which answer it is does not matter:
+  // an N4-only build has no accepted chain, so either outcome is legitimate. What is being
+  // measured is that the resolver answers at all.
+  td::actor::Task<> probe_blocked_state_resolution(CandidateId id) {
+    auto ignored = co_await nodes_[probe_node_idx_]
+                       .instances[probe_instance_idx_]
+                       .bus.publish(std::make_shared<simplex::ResolveState>(ParentId{id}))
+                       .wrap();
+    blocked_state_resolution_answered_ = true;
     co_return td::Unit{};
   }
 
@@ -1754,7 +2046,13 @@ class TestConsensus : public td::actor::Actor {
     // the stop arrived is legitimately left as an intent; that is the state the journal
     // exists to express, and phase 3 shows how it recovers. What must hold here is that
     // every record the node did finish carries a signature it can prove is its own.
-    constexpr size_t REQUIRED_VOTES = 4;
+    // Two, because two is all a single validator casts in an N4-only build: it notarizes
+    // slot 0, is its own quorum, finalizes it, and the group then reaches the carrier
+    // boundary and stops taking new votes. Asking for more would be asking the round to keep
+    // going past the point this build deliberately stops at. Two is still every shape the
+    // later phases need -- one record to compare byte for byte across a restart, and one to
+    // downgrade to an intent and watch be signed again.
+    constexpr size_t REQUIRED_VOTES = 2;
     auto signed_count = [&] {
       auto journal = own_vote_journal(instance);
       return std::count_if(journal.begin(), journal.end(), [](const JournalledVote& v) { return v.is_signed; });
@@ -1853,9 +2151,17 @@ class TestConsensus : public td::actor::Actor {
     auto downgraded_seqno = newest_signed->seqno;
     auto original_record = newest_signed->value.clone();
     auto original_signature = newest_signed->signature.clone();
+    auto downgraded_vote_tl = serialize_tl_object(take_unsigned_vote(original_record.as_slice()), true);
     overwrite_journal_record(instance, downgraded_key.as_slice(),
                              create_serialize_tl_object<tos_api::consensus_simplex_db_ourVoteIntent>(
                                  take_unsigned_vote(original_record), downgraded_seqno));
+    if (erase_certificates_over_vote(instance, downgraded_vote_tl.as_slice()) == 0) {
+      // Not a formality. A single validator is its own quorum, so the vote being downgraded
+      // is inside a stored certificate; finding none means the record picked is not the one
+      // this phase believes it picked, and the recovery below would prove nothing.
+      fail("the downgraded vote was in no stored certificate, so the crash window was not reconstructed");
+      co_return td::Unit{};
+    }
 
     // New votes are blocked here for the same reason as in phase 2: the signer count is
     // only evidence while nothing else can reach the signer.
@@ -2085,6 +2391,44 @@ class TestConsensus : public td::actor::Actor {
   }
 
   // Move the unsigned vote out of a serialized journal record, whichever state it is in.
+  // Remove every cached certificate that carries this exact vote. A crash between the vote
+  // decision and its signature means the signature never existed, so nothing could have put
+  // it into a certificate either -- and a journal holding an intent while the certificate
+  // built from that vote's signature is still on disk is a state no crash could produce.
+  // Leaving one behind also finalizes the vote's slot at startup, which prunes the slot the
+  // recovered intent belongs to, so the recovery being tested never even starts.
+  size_t erase_certificates_over_vote(const Instance& instance, td::Slice unsigned_vote) const {
+    std::vector<td::BufferSlice> to_erase;
+    {
+      std::scoped_lock lock(instance.db_inner->mutex);
+      const td::uint32 prefix = tos_api::consensus_simplex_db_key_vote::ID;
+      for (const auto& [key, value] : instance.db_inner->map) {
+        if (key.size() < sizeof(prefix) || std::memcmp(key.data(), &prefix, sizeof(prefix)) != 0) {
+          continue;
+        }
+        auto parsed = fetch_tl_object<tos_api::consensus_simplex_db_Vote>(value.as_slice(), true);
+        if (parsed.is_error()) {
+          continue;
+        }
+        bool carries_the_vote = false;
+        tos_api::downcast_call(
+            *parsed.ok(), td::overloaded([&](tos_api::consensus_simplex_db_ourVoteIntent&) {},
+                                         [&](tos_api::consensus_simplex_db_ourSignedVote&) {},
+                                         [&](tos_api::consensus_simplex_db_cert& r) {
+                                           carries_the_vote =
+                                               serialize_tl_object(r.cert_->vote_, true).as_slice() == unsigned_vote;
+                                         }));
+        if (carries_the_vote) {
+          to_erase.push_back(key.clone());
+        }
+      }
+    }
+    for (const auto& key : to_erase) {
+      erase_journal_record(instance, key.as_slice());
+    }
+    return to_erase.size();
+  }
+
   static tl_object_ptr<tos_api::consensus_simplex_UnsignedVote> take_unsigned_vote(td::Slice record) {
     auto parsed = fetch_tl_object<tos_api::consensus_simplex_db_Vote>(record, true).move_as_ok();
     tl_object_ptr<tos_api::consensus_simplex_UnsignedVote> vote;
@@ -2341,6 +2685,9 @@ class TestConsensus : public td::actor::Actor {
   std::string vote_journal_error_;
   bool pq_finality_completed_ = false;
   std::string pq_finality_error_;
+  bool blocked_state_resolution_answered_ = false;
+  size_t probe_node_idx_ = 0;
+  size_t probe_instance_idx_ = 0;
   size_t accepted_block_count_ = 0;
   bool finishing_ = false;
 };
@@ -3310,6 +3657,18 @@ int main(int argc, char* argv[]) {
                [&]() { EMPTY_CHAIN_RESTART_TEST = true; });
   p.add_option('\0', "vote-journal-test", "restart across the two-phase own-vote journal and require exact-byte replay",
                [&]() { VOTE_JOURNAL_TEST = true; });
+  p.add_checked_option('\0', "byzantine-relay-node",
+                       "the validator that relays other validators' signed votes over its own transport",
+                       [&](td::Slice arg) {
+                         TRY_RESULT_ASSIGN(BYZANTINE_RELAY_NODE, td::to_integer_safe<int>(arg));
+                         if (BYZANTINE_RELAY_NODE < 0) {
+                           return td::Status::Error(PSTRING() << "invalid byzantine-relay-node value " << arg);
+                         }
+                         return td::Status::OK();
+                       });
+  p.add_option('\0', "finalization-retry-probe",
+               "refuse a finalization with the concurrency limit and require it to be tried again",
+               [&]() { FINALIZATION_RETRY_PROBE = true; });
   p.add_option('\0', "pq-finality-e2e-test",
                "require an agreed post-quantum finality certificate on every node, and nothing past it",
                [&]() { PQ_FINALITY_E2E_TEST = true; });
