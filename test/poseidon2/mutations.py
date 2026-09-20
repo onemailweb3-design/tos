@@ -114,7 +114,7 @@ CASES = [
          expect_red={'cpp': ['was accepted at version']},
          expect_green=['block', 'vm']),
     Case('cpp/zero-gas', 'the instruction charges nothing, C++',
-         [(CPP_HEADER, replace('poseidon2_perm8_gas_price = 3000', 'poseidon2_perm8_gas_price = 0'))],
+         [(CPP_HEADER, replace('poseidon2_perm8_gas_price = 3500', 'poseidon2_perm8_gas_price = 0'))],
          expect_red={'cpp': ['gas is']},
          expect_green=['block', 'vm']),
 
@@ -155,7 +155,7 @@ CASES = [
          expect_red={'vm': ['neither_instruction_exists_before_its_version']},
          expect_green=['cpp']),
     Case('rust/zero-gas', 'the instruction charges nothing, Rust',
-         [(RS_OPS, replace('pub(super) const GAS_PRICE: i64 = 3000;',
+         [(RS_OPS, replace('pub(super) const GAS_PRICE: i64 = 3500;',
                            'pub(super) const GAS_PRICE: i64 = 0;'))],
          expect_red={'vm': ['both_instructions_cost_the_tariff']},
          expect_green=['cpp']),

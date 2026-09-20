@@ -24,10 +24,10 @@
 #include <vector>
 
 #include "common/bitstring.h"
-#include "td/utils/logging.h"
 #include "td/utils/base64.h"
 #include "td/utils/buffer.h"
 #include "td/utils/filesystem.h"
+#include "td/utils/logging.h"
 #include "vm/boc.h"
 #include "vm/cells.h"
 #include "vm/cp0.h"
@@ -54,9 +54,9 @@ struct Subject {
 // the other does not. An anchor the two implementations disagree about by four
 // hundred times cannot calibrate either of them.
 const std::vector<Subject> kSubjects = {
-    {"POSEIDON2_PERM8", 0, 118365, 113038},   {"POSEIDON2_HASH7", 0, 80881, 65739},
-    {"BLS_G1_ADD", 3900, 71435, 95410},       {"BLS_G1_NEG", 750, 79976, 121841},
-    {"BLS_G1_INGROUP", 2950, 118906, 70687},  {"BLS_G2_ADD", 6100, 129497, 116093},
+    {"POSEIDON2_PERM8", 0, 118365, 113038},  {"POSEIDON2_HASH7", 0, 80881, 65739},
+    {"BLS_G1_ADD", 3900, 71435, 95410},      {"BLS_G1_NEG", 750, 79976, 121841},
+    {"BLS_G1_INGROUP", 2950, 118906, 70687}, {"BLS_G2_ADD", 6100, 129497, 116093},
 };
 
 struct Sample {

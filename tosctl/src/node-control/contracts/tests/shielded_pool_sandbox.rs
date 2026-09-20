@@ -50,7 +50,10 @@ const OP_RESERVE_TOPUP: u32 = 0x5348_5003;
 /// not have before it parses anything that follows it.
 const OP_UNKNOWN: u32 = 0x5348_50ff;
 
-const DEPOSIT_GAS_CEILING: i64 = 500_000;
+/// Section 14.1, frozen by the production rule at the 3,500 Poseidon2
+/// tariff: a deposit measures 132,220 and the rule gives 170,000.
+const DEPOSIT_GAS_CEILING: i64 = 170_000;
+const DEPOSIT_MEASURED_MAX_GAS: i64 = 132_220;
 /// ConfigParam 21 of this chain's zero state, which
 /// `chain_gas_envelope_sandbox.rs` generates and holds against the
 /// executor's table.
@@ -58,14 +61,16 @@ const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
 /// Section 14.1, frozen by the production rule: a top-up executes no
 /// Poseidon2, so the tariff cannot move it, and 10,000 is the rule's floor.
 const TOPUP_GAS_CEILING: i64 = 10_000;
-/// Measured. The ceiling has to stay above it with the ruled 25% headroom.
-const TOPUP_MEASURED_MAX_GAS: i64 = 2_458;
+/// Measured on the deployed configuration. The ceiling has to stay above it
+/// with the ruled 25% headroom.
+const TOPUP_MEASURED_MAX_GAS: i64 = 2_480;
 /// ConfigParam 21 of this chain's zero state, beyond the flat segment.
 const NANOTOS_PER_GAS: u64 = 400;
 const RESERVE_FLOOR: u64 = 5 * TOS;
 /// What a deposit must carry beyond its principal. 500,000 gas at the sandbox's
 /// 400 nanotos per gas unit, which the suite re-derives rather than assumes.
-const COMPUTE_FEE: u64 = 500_000 * 400;
+/// What a deposit has to fund: the ceiling, not what it will use.
+const COMPUTE_FEE: u64 = DEPOSIT_GAS_CEILING as u64 * NANOTOS_PER_GAS;
 
 type Field = [u8; 32];
 const ZERO: Field = [0u8; 32];
@@ -508,11 +513,19 @@ fn the_gas_ceiling_does_not_depend_on_how_much_money_arrived() {
     // And the frozen ceiling still satisfies the rule it was frozen by:
     // C = max(10,000, round_up_10,000(ceil(M * 5 / 4))). A top-up's measured
     // maximum is far below the floor, so the floor is what binds.
-    let with_headroom = (TOPUP_MEASURED_MAX_GAS * 5 + 3) / 4;
-    let by_rule = 10_000.max((with_headroom + 9_999) / 10_000 * 10_000);
+    let by_rule = |measured: i64| -> i64 {
+        let with_headroom = (measured * 5 + 3) / 4;
+        10_000.max((with_headroom + 9_999) / 10_000 * 10_000)
+    };
     assert_eq!(
-        TOPUP_GAS_CEILING, by_rule,
+        TOPUP_GAS_CEILING,
+        by_rule(TOPUP_MEASURED_MAX_GAS),
         "the top-up ceiling is no longer the one the production rule gives"
+    );
+    assert_eq!(
+        DEPOSIT_GAS_CEILING,
+        by_rule(DEPOSIT_MEASURED_MAX_GAS),
+        "the deposit ceiling is no longer the one the production rule gives"
     );
 
     // What this does NOT establish, stated so it is not mistaken for evidence:

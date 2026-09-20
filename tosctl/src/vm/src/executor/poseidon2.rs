@@ -5,17 +5,21 @@
 //! the tariff, and the refusal of anything that is not already a field element.
 
 use super::{
-    engine::{storage::fetch_stack, Engine},
+    engine::{Engine, storage::fetch_stack},
     gas::gas_state::Gas,
     types::Instruction,
 };
-use crate::stack::{integer::IntegerData, StackItem};
-use chain_block::{fail, poseidon2, ExceptionCode, Result, Status};
+use crate::stack::{StackItem, integer::IntegerData};
+use chain_block::{ExceptionCode, Result, Status, fail, poseidon2};
 
 pub(super) const MIN_VERSION: u32 = 17;
-/// Development tariff, matching `poseidon2_perm8_gas_price` in the C++ VM. A
-/// production price replaces both at once.
-pub(super) const GAS_PRICE: i64 = 3000;
+/// Measured against instructions whose price is already fixed, and matching
+/// `poseidon2_perm8_gas_price` in the C++ VM. See the note there; the two are
+/// changed at once.
+///
+/// This VM is the slower of the two for this instruction -- 1.66x, where the
+/// BLS anchors differ by 1.08 to 1.17 -- so this price is the one it set.
+pub(super) const GAS_PRICE: i64 = 3500;
 
 const STATE_WIDTH: usize = 8;
 

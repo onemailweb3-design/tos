@@ -46,19 +46,26 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 ;;       the final Poseidon2 tariff, on the exact candidate code and config
 ;;   C = max(10000, round_up_10000(ceil(M * 5 / 4)))
 ;;
-;; Only the top-up ceiling can be frozen by that rule today. It executes no
-;; Poseidon2 at all, so the tariff cannot move it: 2,458 gas measured, and
-;; 10,000 is the rule's floor.
+;; All four are now frozen, at the Poseidon2 tariff of 3,500 that measuring
+;; the instruction against already-priced ones settled. The measured maxima,
+;; on the deployed configuration, are:
+;;
+;;   reserve top-up     2,480    0 Poseidon2 operations
+;;   deposit          132,220   14
+;;   recovery         165,324   15
+;;   withdrawal     1,565,327  142   -- the worst legal transact
+;;
+;; A transfer is 1,539,618, so a withdrawal is what sets the transact ceiling.
+;; The top-up's ceiling is the rule's floor rather than its measurement.
+;;
+;; The transact figure is measured with an anchor of the current root, which
+;; is the cheapest of the three kinds; a recent or epoch anchor adds one
+;; dictionary lookup, on the order of hundreds of gas against 394,673 of
+;; headroom.
 int topup_gas_ceiling() asm "10000 PUSHINT";
-
-;; The other three are still development ceilings, and deliberately generous.
-;; Each runs Poseidon2 -- 14 times for a deposit, 15 for a recovery, 142 for a
-;; transact -- so the tariff moves every one of them, and a ceiling frozen
-;; before it is known would make a legal path run out of gas. A deposit
-;; measured at 125,220 would not fit 160,000 once the instruction cost 5,484.
-int deposit_gas_ceiling() asm "500000 PUSHINT";
-int transact_gas_ceiling() asm "2000000 PUSHINT";
-int bounce_gas_ceiling() asm "500000 PUSHINT";
+int deposit_gas_ceiling() asm "170000 PUSHINT";
+int transact_gas_ceiling() asm "1960000 PUSHINT";
+int bounce_gas_ceiling() asm "210000 PUSHINT";
 
 ;; Section 16.1, in its order.
 () handle_deposit(int msg_value, slice body) impure {

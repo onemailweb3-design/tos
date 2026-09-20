@@ -327,7 +327,7 @@ void check_gas() {
   namespace kat = vm::poseidon2::kat;
   // Specification literals, not implementation constants: the development
   // tariff, the cost of a 24-bit instruction, and the implicit return.
-  const long long expected = 3000 + 34 + 5;
+  const long long expected = 3500 + 34 + 5;
   const auto inputs = state_inputs(kat::perm8[0].input);
   for (unsigned opcode : {vm::poseidon2_perm8_opcode, vm::poseidon2_hash7_opcode}) {
     const auto baseline = run(opcode, inputs);
@@ -343,7 +343,7 @@ void check_gas() {
     bad[0] = int_of(vm::poseidon2::modulus_be);
     const auto refused = run(opcode, bad);
     require(refused.exit == 5, "the refusal changed");
-    require(refused.gas >= 3000, "a refused input was charged less than the tariff");
+    require(refused.gas >= 3500, "a refused input was charged less than the tariff");
   }
 }
 

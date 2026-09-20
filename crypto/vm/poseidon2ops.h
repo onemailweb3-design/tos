@@ -8,11 +8,20 @@ class OpcodeTable;
 inline constexpr unsigned poseidon2_perm8_opcode = 0xf93200;
 inline constexpr unsigned poseidon2_hash7_opcode = 0xf93201;
 inline constexpr int poseidon2_min_version = 17;
-// Development tariff, not a production claim: overpricing only makes tests
-// expensive, while underpricing is a denial-of-service surface. Both VMs carry
-// the same number, and a production price replaces it in both at once.
-inline constexpr long long poseidon2_perm8_gas_price = 3000;
-inline constexpr long long poseidon2_hash7_gas_price = 3000;
+// Measured, on 2026-09-20, against instructions whose price is already fixed:
+// BLS12-381 G1 addition, G1 subgroup check and G2 addition, on the same curve
+// over the same field. The permutation came to between 2,137 and 3,462 gas in
+// the slower of the two VMs, and this is that upper bound rounded up.
+//
+// Rounded up rather than to the middle because the two directions are not
+// symmetric: overpricing costs users money, underpricing is a
+// denial-of-service surface. The anchors agree with one another only to
+// within 1.61x, so a tighter figure would be false precision.
+//
+// Both VMs carry the same number and it is changed in both at once.
+// `test/poseidon2/mutations.py` fails if they drift apart.
+inline constexpr long long poseidon2_perm8_gas_price = 3500;
+inline constexpr long long poseidon2_hash7_gas_price = 3500;
 
 void register_poseidon2_ops(OpcodeTable& table);
 

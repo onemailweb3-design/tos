@@ -48,7 +48,13 @@ const EPOCH_NONE: u32 = 0xffff_ffff;
 const OP_TRANSACT: u32 = 0x5348_5002;
 const RESERVE_FLOOR: u64 = 5 * TOS;
 /// 2,000,000 gas at the sandbox's 400 nanotos per unit.
-const TRANSACT_FEE: u64 = 2_000_000 * 400;
+/// Section 14.1, frozen by the production rule at the 3,500 Poseidon2
+/// tariff: the worst legal transact is a withdrawal at 1,565,327 and the rule
+/// gives 1,960,000. A sender funds the ceiling, not what the path will use.
+const TRANSACT_GAS_CEILING: i64 = 1_960_000;
+const TRANSACT_MEASURED_MAX_GAS: i64 = 1_565_327;
+const NANOTOS_PER_GAS: u64 = 400;
+const TRANSACT_FEE: u64 = TRANSACT_GAS_CEILING as u64 * NANOTOS_PER_GAS;
 
 type Field = [u8; 32];
 const ZERO: Field = [0u8; 32];

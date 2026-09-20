@@ -10,19 +10,21 @@
 //! the version it starts at, what it refuses, and what it costs.
 
 use chain_block::{
+    ExceptionCode,
     poseidon2_kat::{HASH7, PERM8},
     poseidon2_params::MODULUS_BE,
-    ExceptionCode,
 };
-use tos_vm::stack::{integer::IntegerData, Stack, StackItem};
+use tos_vm::stack::{Stack, StackItem, integer::IntegerData};
 
 mod common;
 use common::*;
 
 const ACTIVE_VERSION: u32 = 17;
-/// The development tariff, the cost of a 24-bit instruction, and the implicit
-/// return. Written as specification literals, not read from the implementation.
-const EXPECTED_GAS: i64 = 3000 + 34 + 5;
+/// The measured tariff, the cost of a 24-bit instruction, and the implicit
+/// return. Written as specification literals, not read from the
+/// implementation: a test that reads the constant it checks cannot catch that
+/// constant changing.
+const EXPECTED_GAS: i64 = 3500 + 34 + 5;
 
 fn stack_of(values: &[[u8; 32]]) -> Stack {
     let mut stack = Stack::new();
@@ -187,6 +189,6 @@ fn both_instructions_cost_the_tariff() {
     test_case("POSEIDON2_PERM8")
         .with_block_version(ACTIVE_VERSION)
         .with_stack(stack_with_lane(&input, 7, field(&MODULUS_BE)))
-        .with_gas_limit(3000 - 1)
+        .with_gas_limit(3500 - 1)
         .expect_failure(ExceptionCode::OutOfGas);
 }

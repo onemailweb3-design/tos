@@ -71,7 +71,7 @@ CASES = [
          '    msg_value >= deposit_amount + get_compute_fee(0, deposit_gas_ceiling()));',
          '    msg_value >= get_compute_fee(0, deposit_gas_ceiling()));', FUNDING_TEST),
     Case('gas-ceiling-live', 'the ceiling is below what the path needs', POOL,
-         'int deposit_gas_ceiling() asm "500000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "170000 PUSHINT";',
          'int deposit_gas_ceiling() asm "5000 PUSHINT";', LEDGER_TEST),
 
     # Section 12.1: the body, and what may be deposited.
@@ -161,7 +161,7 @@ CASES = [
          '  groth16_require_valid(vk, proof_a, proof_b, proof_c, inputs);\n', '',
          PROOF_TEST, TRANSACT_SUITE),
     Case('transact-gas-ceiling', 'the ceiling is below what the path needs', POOL,
-         'int transact_gas_ceiling() asm "2000000 PUSHINT";',
+         'int transact_gas_ceiling() asm "1960000 PUSHINT";',
          'int transact_gas_ceiling() asm "5000 PUSHINT";', ORDER_TEST, TRANSACT_SUITE),
 
     # A message with no operation must not be mistaken for one.
