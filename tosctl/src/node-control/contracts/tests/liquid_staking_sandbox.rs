@@ -33,6 +33,7 @@ const NEW_STAKE_ERROR: u32 = 0xee6f_454c;
 
 /// `PQsl`: naming the Validator Controller a stake travels through.
 const SET_VALIDATOR_CONTROLLER: u32 = 0x5051_736c;
+const TOP_UP: u32 = 0xd372_158c;
 
 const STATE_REST: u8 = 0;
 const STATE_SENT_STAKE_REQUEST: u8 = 2;
@@ -532,6 +533,25 @@ fn a_controller_the_pool_deployed_has_nowhere_to_stake_until_the_validator_says(
     let (state, halted) = staking.state();
     assert_eq!(state, STATE_REST, "a freshly deployed controller is not at rest");
     assert!(!halted, "a freshly deployed controller is halted");
+
+    // And writeable: an ordinary message writes the storage back, empty field and all. A
+    // layout that only survives being read is one that fails on the first message that
+    // saves.
+    let mut top_up = BuilderData::new();
+    top_up.append_u32(TOP_UP).expect("operation");
+    top_up.append_u64(1).expect("query id");
+    let from = staking.validator.clone();
+    let target = staking.controller.clone();
+    let funded = staking
+        .chain
+        .send_message(
+            MessageBuilder::internal(&from, &target, 10 * TOS)
+                .body(top_up.into_cell().expect("a top-up"))
+                .build(),
+        )
+        .expect("the top-up is delivered");
+    assert_eq!(exit_code(&funded), 0, "a controller with no name set could not be topped up");
+    assert_eq!(staking.state(), (STATE_REST, false), "the saved storage no longer reads back");
 
     // And it will not stake, because it has nowhere to stake to.
     let refused = staking.order(1, 60_000 * TOS, election);
