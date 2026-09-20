@@ -34,6 +34,27 @@ is fixed.
   this branch.** Until it is, treat it as source that compiled elsewhere, not
   as evidence here.
 
+**Compiled but not yet run**
+
+- `tosctl/src/node-control/contracts/tests/shielded_pool_deposit_sandbox.rs` — the
+  two gates at the top of the safety list, P0-0 (the contract computes the note
+  from the principal it actually admitted; a depositor-supplied commitment is
+  read and ignored) and P0-1 (no `ACCEPT` anywhere; an underfunded deposit is
+  refused with exit 40 rather than paid for from the pool; balance ≥ liability +
+  reserve asserted after every transaction, once by the contract and once from
+  account state). Four mutations are listed at the bottom of the file, each
+  named against the assertion it must turn red.
+
+  It compiles cleanly against the sandbox API. **It has not executed.** The
+  FunC compiler could not be built on the macOS development machine: the QUIC
+  dependency had to be switched off (`-DUSE_QUIC=OFF`), `blst` then failed to
+  find `stdlib.h` because Homebrew LLVM 20 and 16 sit ahead of `/usr/bin/clang`
+  on `PATH`, and after forcing Apple clang the vendored OpenSSL archive was
+  built by the wrong `ar` (`ld: archive member '/' not a mach-o file`). All
+  three are toolchain-path problems on that machine, not problems in the code
+  under test, and none apply to the Linux toolchain `BUILD.md` documents.
+  Development moves to a Linux host for this reason.
+
 **Nothing else.** No pool contract, no circuit, no instruction, no wallet.
 
 ## What gates this branch
