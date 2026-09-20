@@ -20,21 +20,14 @@
 //! the signatures cover is the one the circuit computed, which the contract
 //! recomputes.
 
-use ark_ff::AdditiveGroup;
-use fips204::ml_dsa_44;
-use fips204::traits::{SerDes, Signer};
+use ark_ff::{AdditiveGroup, PrimeField};
 
-use chain_block::{BuilderData, Cell, IBitstring};
 use shielded_pool_circuit::circuit::{HeldNote, ShieldedTransactionCircuit, TransactionBuilder};
 use shielded_pool_circuit::field::Fr;
-use shielded_pool_circuit::public_inputs::PublicInputs;
 use shielded_pool_circuit::tree::Frontier;
 use shielded_pool_circuit::{groth16, imt, notes, wire};
-use shielded_pool_circuit_crosscheck::imt_probe::encode_witness;
-use shielded_pool_circuit_crosscheck::pool::{
-    addr_none, be, dec, development_vk_bytes, refs_only, store_coins, Pool, DENOMINATION,
-    OP_TRANSACT,
-};
+use shielded_pool_circuit_crosscheck::pool::{be, dec, development_vk_bytes, Pool, DENOMINATION};
+use shielded_pool_circuit_crosscheck::transact::{AuthKey, Transact};
 use shielded_pool_circuit_crosscheck::wire::byte_chain;
 
 const TOS: u64 = 1_000_000_000;
@@ -60,29 +53,6 @@ fn payload(seed: u8) -> Vec<u8> {
     (0..wire::OUTPUT_DATA_BYTES as u32).map(|i| (i as u8) ^ seed).collect()
 }
 
-/// A one-time ML-DSA-44 key, as section 4.1 requires per note.
-struct AuthKey {
-    public: [u8; 1312],
-    secret: ml_dsa_44::PrivateKey,
-}
-
-impl AuthKey {
-    fn generate() -> Self {
-        let (public, secret) = ml_dsa_44::try_keygen().expect("ML-DSA-44 keygen");
-        AuthKey { public: public.into_bytes(), secret }
-    }
-
-    fn hash(&self) -> Fr {
-        wire::pq_auth_key_hash(&self.public)
-    }
-
-    fn sign(&self, digest: Fr) -> [u8; 2420] {
-        self.secret
-            .try_sign(&be(digest), b"TOS-SHIELDED-POOL-MLDSA44-v1")
-            .expect("ML-DSA-44 signing")
-    }
-}
-
 /// What to break, so the test can be shown to be able to fail.
 #[derive(Clone, Copy, Default)]
 struct Tamper {
@@ -94,89 +64,6 @@ struct Tamper {
     payload: bool,
     /// Send a nullifier other than the one the proof committed to.
     nullifier: bool,
-}
-
-/// Section 12.2's transact body, built from the public inputs the circuit
-/// proved and the proof it produced.
-#[allow(clippy::too_many_arguments)]
-fn transact_body(
-    public: &PublicInputs,
-    proof: &groth16::CanonicalProof,
-    other: &groth16::CanonicalProof,
-    anchor_root: Fr,
-    valid_until: u32,
-    payloads: &[Vec<u8>; 3],
-    keys: &[&AuthKey; 2],
-    signatures: &[[u8; 2420]; 2],
-    witnesses: &[imt::Witness; 2],
-    tamper: Tamper,
-) -> Cell {
-    let mut proof_bundle = BuilderData::new();
-    proof_bundle.append_raw(&be(anchor_root), 256).unwrap();
-    proof_bundle.append_raw(&be(public.nullifier_0), 256).unwrap();
-    let mut nullifier_1 = be(public.nullifier_1);
-    if tamper.nullifier {
-        nullifier_1[31] ^= 1;
-    }
-    proof_bundle.append_raw(&nullifier_1, 256).unwrap();
-    let mut bodies = BuilderData::new();
-    for body in [public.note_body_0, public.note_body_1, public.note_body_2] {
-        bodies.append_raw(&be(body), 256).unwrap();
-    }
-    proof_bundle.checked_append_reference(bodies.into_cell().unwrap()).unwrap();
-
-    // Section 10.1: A and C in the root, B in the reference.
-    let used = if tamper.other_proof { other } else { proof };
-    let mut proof_ac = BuilderData::new();
-    proof_ac.append_raw(&used.a, 384).unwrap();
-    proof_ac.append_raw(&used.c, 384).unwrap();
-    let mut proof_b = BuilderData::new();
-    proof_b.append_raw(&used.b, 768).unwrap();
-    proof_ac.checked_append_reference(proof_b.into_cell().unwrap()).unwrap();
-    proof_bundle.checked_append_reference(proof_ac.into_cell().unwrap()).unwrap();
-
-    // A transfer carries no recovery material.
-    let mut output = BuilderData::new();
-    output.append_raw(&[0u8; 32], 256).unwrap();
-    for (slot, bytes) in payloads.iter().enumerate() {
-        let mut sent = bytes.clone();
-        if tamper.payload && slot == 0 {
-            sent[17] ^= 1;
-        }
-        output.checked_append_reference(byte_chain(&sent).unwrap()).unwrap();
-    }
-    output.checked_append_reference(Cell::default()).unwrap();
-
-    let auth = refs_only(&[
-        byte_chain(&keys[0].public).unwrap(),
-        byte_chain(&signatures[0]).unwrap(),
-        byte_chain(&keys[1].public).unwrap(),
-        byte_chain(&signatures[1]).unwrap(),
-    ])
-    .unwrap();
-
-    let witness_bundle = refs_only(&[
-        encode_witness(&witnesses[0]).unwrap(),
-        encode_witness(&witnesses[1]).unwrap(),
-    ])
-    .unwrap();
-
-    let digest = be(public.transaction_intent_digest);
-    let mut builder = BuilderData::new();
-    builder.append_u32(OP_TRANSACT).unwrap();
-    builder.append_u64(u64::from_be_bytes(digest[24..].try_into().unwrap())).unwrap();
-    builder.append_u8(0).unwrap(); // anchor kind: the current root
-    builder.append_u32(0).unwrap(); // anchor id
-    builder.append_u32(valid_until).unwrap();
-    store_coins(&mut builder, 0).unwrap(); // a transfer moves nothing out
-    store_coins(&mut builder, 0).unwrap(); // and pays no withdrawal fee
-    addr_none(&mut builder).unwrap();
-    builder.append_raw(&digest, 256).unwrap();
-    builder.checked_append_reference(proof_bundle.into_cell().unwrap()).unwrap();
-    builder.checked_append_reference(output.into_cell().unwrap()).unwrap();
-    builder.checked_append_reference(auth).unwrap();
-    builder.checked_append_reference(witness_bundle).unwrap();
-    builder.into_cell().expect("a transact body")
 }
 
 /// Deposit one note, then spend it: two inputs (one real, one phantom), three
@@ -216,8 +103,8 @@ fn a_private_transfer_with_a_proof_that_verifies() {
     // Its owner commitment is built from preimages the prover keeps, and one
     // of them is the hash of a real ML-DSA key. The contract will mint the
     // note from this commitment and the amount it actually admits.
-    let input_key = AuthKey::generate();
-    let phantom_key = AuthKey::generate();
+    let input_key = AuthKey::generate().expect("an ML-DSA key");
+    let phantom_key = AuthKey::generate().expect("an ML-DSA key");
     let owner_nf_key = Fr::from(0x11_2233_4455_6677u64);
     let note_secret = Fr::from(0x99_aabb_ccdd_eeffu64);
     let deposit_payload = payload(0x21);
@@ -347,7 +234,10 @@ fn a_private_transfer_with_a_proof_that_verifies() {
 
     // --- the message ------------------------------------------------------
     let digest = public.transaction_intent_digest;
-    let signatures = [input_key.sign(digest), phantom_key.sign(digest)];
+    let signatures = [
+        input_key.sign(digest).expect("a signature"),
+        phantom_key.sign(digest).expect("a signature"),
+    ];
 
     let mut tree = nullifiers.clone();
     let (witness_0, after_first) = tree.witness_for(&public.nullifier_0).expect("first witness");
@@ -355,18 +245,35 @@ fn a_private_transfer_with_a_proof_that_verifies() {
     let (witness_1, _) = tree.witness_for(&public.nullifier_1).expect("second witness");
 
     let build = |tamper: Tamper| {
-        transact_body(
-            &public,
-            &canonical,
-            &elsewhere,
-            root,
+        // Each tamper is a well-formed message a wallet could send, wrong in
+        // exactly one of the things the proof binds.
+        let mut sent = public;
+        if tamper.nullifier {
+            let mut bytes = be(public.nullifier_1);
+            bytes[31] ^= 1;
+            sent.nullifier_1 = Fr::from_be_bytes_mod_order(&bytes);
+        }
+        let mut payloads = output_payloads.clone();
+        if tamper.payload {
+            payloads[0][17] ^= 1;
+        }
+        Transact {
+            public: &sent,
+            proof: if tamper.other_proof { &elsewhere } else { &canonical },
+            anchor_root: root,
             valid_until,
-            &output_payloads,
-            &[&input_key, &phantom_key],
-            &signatures,
-            &[witness_0.clone(), witness_1.clone()],
-            tamper,
-        )
+            output_payloads: &payloads,
+            keys: [&input_key, &phantom_key],
+            signatures: &signatures,
+            witnesses: &[witness_0.clone(), witness_1.clone()],
+            public_amount_out: 0,
+            withdrawal_fee: 0,
+            recipient: None,
+            recovery_owner_commitment: Fr::ZERO,
+            recovery_payload: None,
+        }
+        .body()
+        .expect("a transact body")
     };
 
     // A test that has never failed is not known to be able to. Each of these

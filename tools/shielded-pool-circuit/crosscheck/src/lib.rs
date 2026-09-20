@@ -32,6 +32,7 @@ pub(crate) const ACTIVE_VERSION: u32 = 17;
 
 pub mod imt_probe;
 pub mod pool;
+pub mod transact;
 pub mod wire;
 
 /// Anything that stops the cross-check from producing a comparison.
