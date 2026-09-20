@@ -206,11 +206,20 @@ add_test(
 )
 # The same gate, with the adversarial scenarios turned on. Their attack machinery was never
 # the part that needed N5 -- only their `--min-finalized-blocks` assertion was -- so running
-# them against the post-quantum gate restores what N4.5's own checklist asks for at the
-# end-to-end level: that a wrong source or index does not become authority merely because
-# the transport is valid, that certificate gossip deduplicates, that role/session/slot
-# substitution fails, and that the round still reaches an agreed certificate under packet
-# loss, node churn and partition.
+# them against the post-quantum gate restores the end-to-end half of N4.5's checklist: that
+# traffic from outside the validator set does not become authority, that certificate gossip
+# deduplicates, that an adaptive Byzantine membership does not stop the round, and that an
+# agreed certificate is still reached under packet loss, node churn and partition. Each
+# scenario has to inject its adversity before the round it is credited with.
+#
+# What these do NOT establish, despite the temptation to claim it: that a *valid* signature
+# attributed to the wrong signer index is refused. The malicious observer sends a
+# classical-length signature from outside the set, so a rejection here could be for the
+# length rather than for the attribution. That property is proven where the inputs can be
+# built exactly -- n4-certificate-conformance, with real post-quantum signatures, covers a
+# vote signed by one validator presented as another, an out-of-range index and a repeated
+# signer; and n4-consensus-verify covers a genuine transport-key signature carrying no
+# consensus authority.
 add_test(
     NAME test-consensus-simplex2-pq-malicious-observer
     COMMAND test-consensus --duration 40 --n-nodes 5 --target-rate-ms 100

@@ -1016,8 +1016,9 @@ class TestConsensus : public td::actor::Actor {
     if (cnt == 0) {
       co_return td::Unit{};
     }
-    ++INJECTED_NODE_KILLS;
     co_await stop_instance(kill_node_idx, kill_inst_idx);
+    // Counted once the node is actually down, so "it happened" is not "it was started".
+    ++INJECTED_NODE_KILLS;
     co_await td::actor::coro_sleep(
         td::Timestamp::in(td::Random::fast(GREMLIN_DOWNTIME.first, GREMLIN_DOWNTIME.second)));
     if (finishing_) {
@@ -1064,9 +1065,10 @@ class TestConsensus : public td::actor::Actor {
       co_return td::Unit{};
     }
     nodes_[selected_node_idx].instances[selected_inst_idx].net_gremlin_active = true;
-    ++INJECTED_NETWORK_CUTS;
     co_await td::actor::ask(test_overlay, &TestOverlay::set_instance_disabled, selected_node_idx, selected_inst_idx,
                             true);
+    // Counted once the network is actually cut, for the same reason.
+    ++INJECTED_NETWORK_CUTS;
     co_await td::actor::coro_sleep(
         td::Timestamp::in(td::Random::fast(NET_GREMLIN_DOWNTIME.first, NET_GREMLIN_DOWNTIME.second)));
     co_await td::actor::ask(test_overlay, &TestOverlay::set_instance_disabled, selected_node_idx, selected_inst_idx,
@@ -1276,6 +1278,44 @@ class TestConsensus : public td::actor::Actor {
   td::actor::Task<> run_pq_finality_e2e_test() {
     auto fail = [&](std::string message) { pq_finality_error_ = std::move(message); };
 
+    // --- Whatever adversity this scenario configures happens first ---
+    //
+    // The round this gate checks has to be the round that ran under the adversity. Waiting
+    // for the injection afterwards would accept one that began after the agreement it is
+    // supposed to have tested -- and the gate reaches its verdict in well under a second,
+    // sooner than a gremlin's first period, so that is the normal case rather than a rare
+    // one. Each condition below is true only once the effect is in place: the node down,
+    // the network cut, the attack message delivered.
+    struct Adversity {
+      bool configured;
+      std::function<bool()> happened;
+      const char* name;
+    };
+    const std::vector<Adversity> adversities = {
+        {NET_LOSS > 0.0, [] { return INJECTED_PACKET_LOSSES.load() > 0; }, "packet loss"},
+        {GREMLIN_PERIOD.first >= 0.0, [] { return INJECTED_NODE_KILLS.load() > 0; }, "a node restart"},
+        {NET_GREMLIN_PERIOD.first >= 0.0, [] { return INJECTED_NETWORK_CUTS.load() > 0; }, "a network partition"},
+        {MALICIOUS_OBSERVER_ATTACK, [this] { return malicious_observer_messages_ > 0; }, "the malicious observer"},
+        {RELAY_LOOP_TEST, [this] { return candidate_relay_total_ > 0; }, "candidate relay traffic"},
+        {ADAPTIVE_BYZANTINE_N != 0, [this] { return adaptive_byzantine_epochs_ >= 2; },
+         "an adaptive Byzantine rotation"},
+        {QUERY_ABUSE_TEST, [this] { return query_abuse_completed_; }, "the candidate query flood"},
+    };
+    auto adversity_deadline = td::Timestamp::in(DURATION * 0.3);
+    for (const auto& adversity : adversities) {
+      if (!adversity.configured) {
+        continue;
+      }
+      while (!adversity.happened() && !adversity_deadline.is_in_past()) {
+        co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
+      }
+      if (!adversity.happened()) {
+        fail(PSTRING() << "this scenario configures " << adversity.name
+                       << ", but it had not happened before the round was checked");
+        co_return td::Unit{};
+      }
+    }
+
     // --- Every node reaches an agreed, verified finality certificate ---
     //
     // One certificate, not a stream of them. Candidate production does not stop -- the
@@ -1364,19 +1404,9 @@ class TestConsensus : public td::actor::Actor {
     const bool node_churn_active = GREMLIN_PERIOD.first >= 0.0 || NET_GREMLIN_PERIOD.first >= 0.0;
     size_t checked_against_journals = 0;
     if (!node_churn_active) {
-      // A companion scenario that drives node 0 has to finish before node 0 is taken away
-      // from under it. Waiting is not optional politeness: restarting mid-flight makes its
-      // requests fail for the wrong reason and it reports a rate limit that was never tested.
-      if (QUERY_ABUSE_TEST) {
-        auto companion_deadline = td::Timestamp::in(DURATION * 0.2);
-        while (!query_abuse_completed_ && !companion_deadline.is_in_past()) {
-          co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
-        }
-        if (!query_abuse_completed_) {
-          fail("the candidate-query rate-limit probe did not finish before the restart phase");
-          co_return td::Unit{};
-        }
-      }
+      // Any companion scenario that drives node 0 has already finished: the adversity
+      // block at the top of this gate waited for it, which is also what stops node 0 being
+      // taken away mid-flight and the companion reporting a result it never measured.
       auto& restarted = nodes_[0].instances[0];
       auto signed_before = own_vote_journal(restarted);
       std::erase_if(signed_before, [](const JournalledVote& v) { return !v.is_signed; });
@@ -1522,37 +1552,6 @@ class TestConsensus : public td::actor::Actor {
     // the harness's own verification before arriving here. It is kept because N5 is what
     // makes acceptance possible, and this is the line that should start being able to fail
     // then -- for the right reason.
-    // --- The adversity this scenario was configured with has to have happened ---
-    //
-    // The gate reaches its verdict in well under a second, sooner than a gremlin's first
-    // period, so a scenario could otherwise pass having injected nothing at all. Each
-    // configured adversity is waited for and then required; the ones with their own
-    // injection assertions in finalize() -- the malicious observer, the adaptive Byzantine
-    // rotation, the relay loop, the query flood -- are left to those.
-    struct ConfiguredAdversity {
-      bool configured;
-      const std::atomic<size_t>* counter;
-      const char* name;
-    };
-    const ConfiguredAdversity adversities[] = {
-        {NET_LOSS > 0.0, &INJECTED_PACKET_LOSSES, "packet loss"},
-        {GREMLIN_PERIOD.first >= 0.0, &INJECTED_NODE_KILLS, "node restarts"},
-        {NET_GREMLIN_PERIOD.first >= 0.0, &INJECTED_NETWORK_CUTS, "network partitions"},
-    };
-    auto adversity_deadline = td::Timestamp::in(DURATION * 0.3);
-    for (const auto& adversity : adversities) {
-      if (!adversity.configured) {
-        continue;
-      }
-      while (adversity.counter->load() == 0 && !adversity_deadline.is_in_past()) {
-        co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
-      }
-      if (adversity.counter->load() == 0) {
-        fail(PSTRING() << "this scenario configures " << adversity.name << " but none was injected before it finished");
-        co_return td::Unit{};
-      }
-    }
-
     if (accepted_block_count_ != 0) {
       fail(PSTRING() << "the network accepted " << accepted_block_count_
                      << " blocks; an N4-only build has no carrier to accept one with");

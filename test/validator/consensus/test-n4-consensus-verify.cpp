@@ -132,7 +132,10 @@ int main() {
          "a failed post-quantum check must not be retried as Ed25519");
 
   // There is no classical consensus key left to remove, which is why removing one cannot
-  // cause a fallback: the field does not exist. Re-adding one would fail to compile here.
+  // cause a fallback: the field does not exist. Re-adding one under its historical name
+  // fails to compile here; re-adding one under a new name is caught by check-no-fallback.py,
+  // which forbids a classical key type anywhere under validator/consensus. Neither catches
+  // a raw byte array pressed into that service, and nothing short of reflection would.
   static_assert(!HasClassicalConsensusKey<PeerValidator>, "PeerValidator must carry no classical consensus key");
 
   std::printf(
