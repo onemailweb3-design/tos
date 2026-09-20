@@ -1492,6 +1492,10 @@ struct RootedValidator {
     address: MsgAddressInt,
     root: PqValidator,
     consensus: PqValidator,
+    /// What it was deployed with. A birth witness is a record of this, not a reading of
+    /// the account: binding a consensus key changes the data, and every controller binds
+    /// one before it first stakes.
+    birth: Option<(chain_block::Cell, chain_block::Cell)>,
 }
 
 /// The domain a controller root signs under, distinct from the election domain so that
@@ -1571,23 +1575,39 @@ fn deploy_single_nominator(
 }
 
 fn deploy_rooted_validator(chain: &mut Chain, index: u8) -> RootedValidator {
-    use chain_block::{GetRepresentationHash, IBitstring, Serializable};
-    let root = PqValidator::new(0x80 + index);
-    let consensus = PqValidator::new(0x90 + index);
+    deploy_controller_with(chain, index, PqValidator::new(0x80 + index), PqValidator::new(0x90 + index), true)
+}
 
-    // Deployed with its consensus key already bound, which is the state an operator
-    // reaches by authorising one bind with the offline root and is the state every
-    // election afterwards runs in.
+/// A controller as an operator first has one: the root is in its initial data, and no
+/// consensus key is bound yet. Reaching the state above is a ceremony, and a test that
+/// starts after it has already happened proves nothing about the ceremony.
+fn deploy_unbound_validator(chain: &mut Chain, index: u8) -> RootedValidator {
+    deploy_controller_with(chain, index, PqValidator::new(0x80 + index), PqValidator::new(0x90 + index), false)
+}
+
+fn deploy_controller_with(
+    chain: &mut Chain,
+    index: u8,
+    root: PqValidator,
+    consensus: PqValidator,
+    bound: bool,
+) -> RootedValidator {
+    use chain_block::{GetRepresentationHash, IBitstring, Serializable};
+
+    // Deployed with its consensus key already bound is the state an operator reaches by
+    // authorising one bind with the offline root, and is the state every election
+    // afterwards runs in. Deployed without one is the state the bind starts from.
     let mut data = chain_block::BuilderData::new();
     data.append_u64(0).expect("epoch");
     data.append_u64(0).expect("nonce");
-    data.append_u16(1).expect("consensus algorithm");
-    data.append_raw(consensus.key_id().as_slice(), 256).expect("consensus key identity");
+    data.append_u16(if bound { 1 } else { 0 }).expect("consensus algorithm");
+    let key_id = if bound { consensus.key_id() } else { chain_block::UInt256::default() };
+    data.append_raw(key_id.as_slice(), 256).expect("consensus key identity");
     data.checked_append_reference(stored_bytes(&root.public_key)).expect("root key");
-    let state = chain_block::StateInit::with_code_and_data(
-        controller_code(),
-        data.into_cell().expect("controller data"),
-    );
+    let birth_code = controller_code();
+    let birth_data = data.into_cell().expect("controller data");
+    let state =
+        chain_block::StateInit::with_code_and_data(birth_code.clone(), birth_data.clone());
     let address = MsgAddressInt::with_params(
         -1,
         state.write_to_new_cell().expect("state").into_cell().expect("state cell").hash(0),
@@ -1610,7 +1630,7 @@ fn deploy_rooted_validator(chain: &mut Chain, index: u8) -> RootedValidator {
         .expect("the controller is deployed")
         .expect_success();
 
-    RootedValidator { address, root, consensus }
+    RootedValidator { address, root, consensus, birth: Some((birth_code, birth_data)) }
 }
 
 /// The 93 bytes a controller root signs to authorise one action.
@@ -3361,6 +3381,57 @@ fn vote_tool() -> std::path::PathBuf {
         "the node's vote producer is needed: build it with `ninja -C build tos-pq-vote`, or \
          point PQ_VOTE_TOOL at it"
     );
+}
+
+/// The operator's root-authorisation tool, built from the repository.
+///
+/// This is the other half of the custody boundary: the node's tool signs votes and holds
+/// no root, and this one signs controller authorisations and is not linked into any node.
+fn controller_tool() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("PQ_CONTROLLER_TOOL") {
+        return std::path::PathBuf::from(path);
+    }
+    let root = repo_root();
+    for candidate in ["build/crypto/tos-pq-controller", "build/tos-pq-controller"] {
+        let path = root.join(candidate);
+        if path.exists() {
+            return path;
+        }
+    }
+    panic!(
+        "the operator's root-authorisation tool is needed: build it with \
+         `ninja -C build tos-pq-controller`, or point PQ_CONTROLLER_TOOL at it"
+    );
+}
+
+/// The tool takes a cell the way an operator hands it one: base64 of its BOC.
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// One authorisation, produced by the command an operator runs.
+fn run_controller_tool(arguments: &[String]) -> chain_block::Cell {
+    let out = std::process::Command::new(controller_tool())
+        .args(arguments)
+        .output()
+        .expect("the root-authorisation tool runs");
+    assert!(
+        out.status.success(),
+        "the operator could not authorise this: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let encoded = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    chain_block::read_single_root_boc(base64_decode(&encoded)).expect("an authorisation cell")
 }
 
 fn repo_root() -> std::path::PathBuf {
@@ -5910,5 +5981,357 @@ fn a_post_quantum_stake_without_a_transport_address_is_returned() {
         reply(&result),
         (STAKE_RETURNED, REASON_NO_ADNL),
         "a validator registered without a transport address, so nothing could reach it"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// N3.9 — the sequence an operator actually runs
+//
+// Everything above proves the contracts. This proves the path: two real seed files in
+// two separate custody domains, the two real tools built from this repository, and the
+// real contracts required to accept what those tools emit, from a controller that has
+// never been told which key it acts through to a governed change that only the elected
+// set could make.
+//
+// What it adds over the cutover run above is the part that had never been executed
+// anywhere: the bind ceremony, and the root authorisation coming out of the operator's
+// command rather than being assembled in this file. A test that builds the
+// authorisation itself proves the contract reads that shape; it does not prove the
+// tool writes it.
+// ---------------------------------------------------------------------------
+
+impl RootedValidator {
+    /// Bind this controller's consensus key the way an operator does: the offline root
+    /// authorises it, the incoming key proves its own private half exists, and both
+    /// signatures come out of one command.
+    fn bind_consensus_with_tool(&self, chain: &mut Chain) -> tos_sandbox::SendResult {
+        let nonce = self.stored_nonce(chain);
+        let valid_until = chain.blockchain.now() + 600;
+        let authorisation = run_controller_tool(&[
+            "bind".to_string(),
+            seed_file_for(&self.root).to_str().expect("path").to_string(),
+            global_id(chain).to_string(),
+            hex::encode(self.id().as_slice()),
+            "0".to_string(),
+            nonce.to_string(),
+            valid_until.to_string(),
+            seed_file_for(&self.consensus).to_str().expect("path").to_string(),
+        ]);
+
+        let operator = chain
+            .blockchain
+            .treasury(&format!("operator-{}", hex::encode(&self.id().as_slice()[..4])), 1_000 * TOS)
+            .expect("an operator account");
+        chain
+            .blockchain
+            .send_message(operator.build_message(&self.address, 10 * TOS, true, Some(authorisation)))
+            .expect("the authorisation is delivered")
+    }
+
+    /// What the controller believes about its own consensus key.
+    fn bound_key(&self, chain: &Chain) -> (u64, chain_block::UInt256) {
+        let result = chain
+            .blockchain
+            .run_get_method(&self.address, "controller_state", vec![])
+            .expect("the controller answers");
+        assert_eq!(result.exit_code, 0, "controller_state failed");
+        let algorithm: u64 =
+            result.stack[2].as_integer().expect("an algorithm").to_string().parse().expect("a number");
+        let key_id = result.stack[3].as_integer().expect("a key identity").to_string();
+        // The getter hands back an integer; the identity is its 32 bytes.
+        let digits = key_id.trim_start_matches('-');
+        let value = num_to_uint256(digits);
+        (algorithm, value)
+    }
+
+    /// Have the controller send a body to the elector, authorised by the operator's tool
+    /// rather than by a signature this file made.
+    fn send_to_elector_with_tool(
+        &self,
+        chain: &mut Chain,
+        value: u64,
+        body: chain_block::Cell,
+    ) -> tos_sandbox::SendResult {
+        use chain_block::{IBitstring, Serializable};
+
+        // The message the controller is to emit, built as a contract builds one: no
+        // source, and the body behind a reference.
+        let mut message = chain_block::BuilderData::new();
+        message.append_bits(0x18, 6).expect("int_msg_info, bounceable, no source");
+        message.append_bits(0b100, 3).expect("addr_std, no anycast");
+        message.append_i8(-1).expect("the masterchain");
+        message
+            .append_raw(&chain.elector.address().get_bytestring(0), 256)
+            .expect("the elector's address");
+        chain_block::Coins::new(value).write_to(&mut message).expect("the value it carries");
+        message.append_bits(0, 1 + 4 + 4).expect("no other currencies and no fees");
+        message.append_u64(0).expect("created_lt, filled in by the chain");
+        message.append_u32(0).expect("created_at, filled in by the chain");
+        message.append_bit_zero().expect("no state init");
+        message.append_bit_one().expect("the body is a reference");
+        message.checked_append_reference(body).expect("the body");
+        let message = message.into_cell().expect("an outbound message");
+
+        let nonce = self.stored_nonce(chain);
+        let valid_until = chain.blockchain.now() + 600;
+        let authorisation = run_controller_tool(&[
+            "send".to_string(),
+            seed_file_for(&self.root).to_str().expect("path").to_string(),
+            global_id(chain).to_string(),
+            hex::encode(self.id().as_slice()),
+            "0".to_string(),
+            nonce.to_string(),
+            valid_until.to_string(),
+            "3".to_string(),
+            base64_encode(&chain_block::write_boc(&message).expect("the message serialises")),
+        ]);
+
+        let relayer = chain
+            .blockchain
+            .treasury(&format!("tool-relayer-{}", hex::encode(&self.id().as_slice()[..4])), 40_000 * TOS)
+            .expect("a relayer");
+        chain
+            .blockchain
+            .send_message(relayer.build_message(&self.address, 12_000 * TOS, true, Some(authorisation)))
+            .expect("the authorisation is delivered")
+    }
+}
+
+/// The getter returns an identity as an integer; this is its 32 bytes, big-endian.
+fn num_to_uint256(decimal: &str) -> chain_block::UInt256 {
+    let mut bytes = [0u8; 32];
+    let mut value: Vec<u8> = vec![0];
+    for digit in decimal.bytes() {
+        let add = u32::from(digit - b'0');
+        let mut carry = add;
+        for byte in value.iter_mut().rev() {
+            let n = u32::from(*byte) * 10 + carry;
+            *byte = (n & 0xff) as u8;
+            carry = n >> 8;
+        }
+        while carry > 0 {
+            value.insert(0, (carry & 0xff) as u8);
+            carry >>= 8;
+        }
+    }
+    let start = 32usize.saturating_sub(value.len());
+    bytes[start..].copy_from_slice(&value[value.len().saturating_sub(32)..]);
+    chain_block::UInt256::from_slice(&bytes)
+}
+
+#[test]
+fn the_operator_tools_carry_a_validator_from_no_key_to_a_governed_change() {
+    let (mut chain, _treasury, election) = open_election("n39-sequence", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+
+    // --- controllers as an operator first has them: a root, and no consensus key -----
+    let mut validators: Vec<RootedValidator> =
+        (0..4u8).map(|index| deploy_unbound_validator(&mut chain, index)).collect();
+    admit_code_of(&mut chain, &validators[0].address);
+
+    for validator in &validators {
+        let (algorithm, key_id) = validator.bound_key(&chain);
+        assert_eq!(algorithm, 0, "a controller was deployed already bound");
+        assert_eq!(key_id, chain_block::UInt256::default(), "a controller knows a key it was never told");
+    }
+
+    // A controller with no key bound cannot stake: the elector would take it, but the
+    // controller has nothing to relay through and nothing signed the stake it would make.
+    // The ceremony is what turns that into a validator.
+    for validator in &validators {
+        let result = validator.bind_consensus_with_tool(&mut chain);
+        assert_eq!(
+            exit_code_of(&result),
+            0,
+            "the controller refused the authorisation the operator's tool produced"
+        );
+        let (algorithm, key_id) = validator.bound_key(&chain);
+        assert_eq!(algorithm, 1, "the bind did not record the suite");
+        assert_eq!(
+            key_id,
+            validator.consensus.key_id(),
+            "the controller bound a key that is not the one the operator installed"
+        );
+    }
+
+    // --- each controller places a stake, authorised through the operator's command ---
+    for (index, validator) in validators.iter().enumerate() {
+        let preimage = pq_stake_preimage(
+            global_id(&chain),
+            election,
+            0x10000,
+            &validator.id(),
+            &validator.consensus.key_id(),
+            &validator.consensus.adnl,
+        );
+        let signature = validator.consensus.sign(&preimage);
+        // From the deployment record, through the tool -- not from the live account,
+        // whose data the bind above has already changed.
+        let (code, data) = validator.birth.clone().expect("the deployment record");
+        let witness = run_controller_tool(&[
+            "witness".to_string(),
+            base64_encode(&chain_block::write_boc(&code).expect("the code serialises")),
+            base64_encode(&chain_block::write_boc(&data).expect("the data serialises")),
+        ]);
+        let body = pq_stake_body(
+            20 + index as u64,
+            &validator.consensus,
+            election,
+            0x10000,
+            &signature,
+            Some(witness),
+        );
+        let result = validator.send_to_elector_with_tool(&mut chain, 11_000 * TOS, body);
+        result.expect_success();
+        assert!(
+            replies(&result).contains(&STAKE_ACCEPTED),
+            "the elector refused a stake the operator's tool authorised: {:02x?}",
+            replies(&result)
+        );
+    }
+
+    // --- the election selects them and the configuration contract installs them ------
+    let closes = election - chain.elect_end_before;
+    chain.blockchain.set_now(closes);
+    let result =
+        chain.blockchain.tick_tock(&chain.elector, TransactionTickTock::Tick).expect("tick runs");
+    result.expect_success();
+    assert!(
+        replies(&result).contains(&VALIDATOR_SET_INSTALLED),
+        "the configuration contract refused the elected set: {:02x?}",
+        replies(&result)
+    );
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    let takes_over = chain
+        .blockchain
+        .config_params()
+        .next_validator_set()
+        .expect("the next set is installed")
+        .utime_since();
+    chain.blockchain.set_now(takes_over);
+    chain
+        .blockchain
+        .tick_tock(&chain.config_contract, TransactionTickTock::Tock)
+        .expect("tock runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the rotated set");
+
+    let set = chain.blockchain.config_params().validator_set().expect("a current set");
+    assert_eq!(set.list().len(), 4, "every controller should have been elected");
+    for descriptor in set.list() {
+        assert!(descriptor.pq_key().is_some(), "the elected set carries a classical descriptor");
+        assert!(
+            validators.iter().any(|v| v.id() == descriptor.validator_id().expect("an identity")),
+            "the set names an identity no controller has"
+        );
+    }
+
+    // --- the node's own tool votes, and the vote is counted -------------------------
+    let proposal = propose(&mut chain, 42, 0xbeef);
+    let relay = chain.blockchain.treasury("n39-relay", 1_000 * TOS).expect("an account");
+    let voter = &validators[0];
+    let idx = index_of_pq(&chain, &voter.consensus);
+
+    let vote = run_vote_tool(&[
+        "config".to_string(),
+        seed_file_for(&voter.consensus).to_str().expect("path").to_string(),
+        global_id(&chain).to_string(),
+        hex::encode(current_set_id(&chain)),
+        hex::encode(voter.id().as_slice()),
+        idx.to_string(),
+        hex::encode(proposal),
+    ]);
+    let result = chain
+        .blockchain
+        .send_message(relay.build_message(&chain.config_contract, VOTE_VALUE, true, Some(vote)))
+        .expect("the vote is delivered");
+    assert_eq!(exit_code_of(&result), 0, "the node's own vote was refused");
+    assert_eq!(proposal_voters(&chain, &proposal), vec![idx], "the node's vote was not counted");
+
+    // --- and complains about a validator of the closed election ---------------------
+    let accused = validator_id_at(&chain, index_of_pq(&chain, &validators[3].consensus));
+    let complainant = chain.blockchain.treasury("n39-complainant", 10_000 * TOS).expect("an account");
+    let filed = chain
+        .blockchain
+        .send_message(complainant.build_message(
+            &chain.elector,
+            300 * TOS,
+            true,
+            Some(complaint_body(1, election, &accused)),
+        ))
+        .expect("the complaint is delivered");
+    assert!(replies(&filed).contains(&COMPLAINT_ACCEPTED), "the elector refused the complaint");
+    let complaint = complaint_hashes(&chain, election)[0];
+
+    let complaint_vote = run_vote_tool(&[
+        "complaint".to_string(),
+        seed_file_for(&voter.consensus).to_str().expect("path").to_string(),
+        global_id(&chain).to_string(),
+        hex::encode(current_set_id(&chain)),
+        hex::encode(voter.id().as_slice()),
+        idx.to_string(),
+        election.to_string(),
+        hex::encode(complaint),
+    ]);
+    let counted = chain
+        .blockchain
+        .send_message(relay.build_message(&chain.elector, VOTE_VALUE, true, Some(complaint_vote)))
+        .expect("the complaint vote is delivered");
+    counted.expect_success();
+    assert_eq!(
+        complaint_voters(&chain, election, &complaint),
+        vec![idx],
+        "the node's complaint vote was not counted"
+    );
+
+    // --- and no administrator appeared anywhere along the way -----------------------
+    //
+    // The unilateral path was deleted rather than disabled, so what is checked is that
+    // the message it took has nowhere to arrive: the configuration contract has no
+    // external handler, and the parameter stays unset.
+    use chain_block::IBitstring;
+    let parameter = 78i32;
+    assert!(
+        !parameter_present(&configuration_from_contract(&chain), parameter as u32),
+        "the fixture needs a parameter that is not already set"
+    );
+    let admin = ed25519_dalek::SigningKey::from_bytes(&[0x7c; 32]);
+    let mut value = chain_block::BuilderData::new();
+    value.append_u32(0xc0ffee).expect("a value");
+    let mut signed = chain_block::BuilderData::new();
+    signed.append_u32(0x43665021).expect("the action that changed a parameter");
+    signed.append_u32(0).expect("sequence number");
+    signed.append_u32(chain.blockchain.now() + 600).expect("valid until");
+    signed.append_i32(parameter).expect("parameter");
+    signed.checked_append_reference(value.into_cell().expect("value")).expect("value");
+    let signed_cell = signed.into_cell().expect("the signed part");
+    let signature: [u8; 64] =
+        ed25519_dalek::Signer::sign(&admin, signed_cell.hash(0).as_slice()).to_bytes();
+    let mut body = chain_block::BuilderData::new();
+    body.append_raw(&signature, 512).expect("signature");
+    body.checked_append_references_and_data(
+        &chain_block::SliceData::load_cell(signed_cell).expect("the signed part"),
+    )
+    .expect("the signed part follows the signature");
+    assert!(
+        chain
+            .blockchain
+            .send_message(
+                tos_sandbox::MessageBuilder::external(&chain.config_contract)
+                    .body(body.into_cell().expect("administrator message"))
+                    .build(),
+            )
+            .is_err(),
+        "an administrator message was accepted after the whole sequence"
+    );
+    assert!(
+        !parameter_present(&configuration_from_contract(&chain), parameter as u32),
+        "a single key changed a parameter after the whole sequence"
     );
 }

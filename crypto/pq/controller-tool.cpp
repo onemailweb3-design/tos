@@ -121,6 +121,7 @@ std::string authorisation_boc(const tos::pq::ValidatorControllerRootKeyStore& ro
   throw std::runtime_error(
       "usage:\n"
       "  tos-pq-controller show ROOTSEED\n"
+      "  tos-pq-controller witness CODE_BOC_B64 INITIAL_DATA_BOC_B64\n"
       "  tos-pq-controller send ROOTSEED GLOBAL_ID CONTROLLER_HEX EPOCH NONCE VALID_UNTIL MODE MESSAGE_BOC_B64\n"
       "  tos-pq-controller bind ROOTSEED GLOBAL_ID CONTROLLER_HEX EPOCH NONCE VALID_UNTIL CONSENSUS_SEED\n"
       "  tos-pq-controller rotate-root ROOTSEED GLOBAL_ID CONTROLLER_HEX EPOCH NONCE VALID_UNTIL NEXT_ROOT_SEED\n"
@@ -137,6 +138,45 @@ int main(int argc, char** argv) {
       usage();
     }
     const std::string command(argv[1]);
+
+    // The one command that needs no key: what an account was deployed as.
+    //
+    // A first stake carries this, and the elector rebuilds the sender's address from it.
+    // The four numbers are a record of the deployment, not a reading of the account:
+    // binding a consensus key changes the controller's data, and every validator binds
+    // one before it first stakes, so an account's live data has already moved on by then.
+    // An operator keeps the code and the initial data they deployed with; this turns them
+    // into the witness and prints the address they must match.
+    if (command == "witness") {
+      if (argc != 4) {
+        usage();
+      }
+      auto code = cell_from_base64(argv[2]);
+      auto data = cell_from_base64(argv[3]);
+
+      vm::CellBuilder witness;
+      witness.store_bits(code->get_hash(0).bits(), 256);
+      witness.store_long(code->get_depth(0), 16);
+      witness.store_bits(data->get_hash(0).bits(), 256);
+      witness.store_long(data->get_depth(0), 16);
+
+      // The state init the elector rebuilds, so an operator can check the address before
+      // they find out from a refusal.
+      vm::CellBuilder state;
+      state.store_long(0x06, 5);
+      state.store_ref(code);
+      state.store_ref(data);
+      const auto address = state.finalize()->get_hash(0);
+
+      auto serialized = vm::std_boc_serialize(witness.finalize());
+      if (serialized.is_error()) {
+        throw std::runtime_error(serialized.move_as_error().to_string());
+      }
+      std::cout << td::base64_encode(serialized.move_as_ok().as_slice()) << '\n';
+      std::cerr << "address -1:" << td::buffer_to_hex(address.as_slice()) << '\n';
+      return 0;
+    }
+
     auto root = open_key(argv[2]);
 
     if (command == "show") {
