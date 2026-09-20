@@ -5437,7 +5437,11 @@ fn a_members_stake_owner_is_fixed_by_its_first_stake() {
     assert!(value > (10_900 * TOS) as u128, "the refused stake did not bring its money back");
 
     // And nothing moved.
-    assert_eq!(pq_member_owner_at(&chain, validator.address()), Some(a.clone()), "the owner changed");
+    assert_eq!(
+        pq_member_owner_at(&chain, validator.address()),
+        Some(a.clone()),
+        "the owner changed"
+    );
     assert_eq!(pq_stake_of(&chain, &validator), stake_before, "the stake changed");
     assert_eq!(
         pq_member_key_id_at(&chain, validator.address()),

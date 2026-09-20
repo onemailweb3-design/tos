@@ -46,8 +46,12 @@ impl NominatorWrapperImpl {
     ) -> anyhow::Result<Self> {
         let state_init =
             Some(Self::build_state_init(owner_address, validator_address, controller_address)?);
-        let nominator_addr =
-            Self::calculate_address(workchain, owner_address, validator_address, controller_address)?;
+        let nominator_addr = Self::calculate_address(
+            workchain,
+            owner_address,
+            validator_address,
+            controller_address,
+        )?;
         Ok(Self { provider, nominator_addr, state_init })
     }
 

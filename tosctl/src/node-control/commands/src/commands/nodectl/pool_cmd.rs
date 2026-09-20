@@ -1579,8 +1579,8 @@ impl PoolSingleCmd {
 
 impl PoolSingleCreateCmd {
     pub async fn run(&self, config_path: &str) -> anyhow::Result<()> {
-        use colored::Colorize;
         use chain_block::MsgAddressInt;
+        use colored::Colorize;
         use common::app_config::PoolConfig;
         use contracts::nominator::{NOMINATOR_POOL_WORKCHAIN, NominatorWrapperImpl};
         use std::path::Path;

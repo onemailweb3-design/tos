@@ -677,13 +677,12 @@ fn open_nominator_pool(
                         &controller_addr,
                         -1,
                     )?;
-                    let calculated_addr =
-                        NominatorWrapperImpl::calculate_address(
-                            -1,
-                            &owner_addr,
-                            validator_addr,
-                            &controller_addr,
-                        )?;
+                    let calculated_addr = NominatorWrapperImpl::calculate_address(
+                        -1,
+                        &owner_addr,
+                        validator_addr,
+                        &controller_addr,
+                    )?;
                     if calculated_addr != addr {
                         anyhow::bail!(
                             "calculated pool address does not match the defined address: defined={}, calculated={}",

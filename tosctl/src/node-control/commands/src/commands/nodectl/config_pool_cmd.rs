@@ -480,8 +480,7 @@ mod tests {
 
     /// A validator controller to derive with. These tests judge which branch is taken and
     /// what it reports, not which account a pool ends up at.
-    const CONTROLLER: &str =
-        "-1:1a6b2f0e4d8c7b5a39e2c1f04b8d6a7e5c3910284f6b7d1e8a2c4f60b3d597e1";
+    const CONTROLLER: &str = "-1:1a6b2f0e4d8c7b5a39e2c1f04b8d6a7e5c3910284f6b7d1e8a2c4f60b3d597e1";
 
     fn minimal_config() -> AppConfig {
         AppConfig {
@@ -519,7 +518,8 @@ mod tests {
             .unwrap()
             .to_string_custom(ADDR_FORMAT_BOUNCE | ADDR_FORMAT_URL_SAFE)
             .unwrap();
-        let result = get_pool_display_result(CONTROLLER, "pool1", Some(&addr), None, &config, None).await;
+        let result =
+            get_pool_display_result(CONTROLLER, "pool1", Some(&addr), None, &config, None).await;
         assert_eq!(result, Ok(expected));
     }
 
@@ -534,7 +534,8 @@ mod tests {
     async fn test_display_result_owner_no_binding() {
         let config = minimal_config();
         let owner = OWNER.to_string();
-        let result = get_pool_display_result(CONTROLLER, "pool1", None, Some(&owner), &config, None).await;
+        let result =
+            get_pool_display_result(CONTROLLER, "pool1", None, Some(&owner), &config, None).await;
         assert_eq!(result, Err("no binding found".to_string()));
     }
 
@@ -551,7 +552,8 @@ mod tests {
             },
         );
         let owner = OWNER.to_string();
-        let result = get_pool_display_result(CONTROLLER, "pool1", None, Some(&owner), &config, None).await;
+        let result =
+            get_pool_display_result(CONTROLLER, "pool1", None, Some(&owner), &config, None).await;
         assert_eq!(result, Err("wallet not configured".to_string()));
     }
 
@@ -665,7 +667,8 @@ mod tests {
             },
         );
         let owner = OWNER.to_string();
-        let result = get_pool_display_result(CONTROLLER, "pool1", None, Some(&owner), &config, None).await;
+        let result =
+            get_pool_display_result(CONTROLLER, "pool1", None, Some(&owner), &config, None).await;
         assert_eq!(result, Err("vault unavailable".to_string()));
     }
 }
