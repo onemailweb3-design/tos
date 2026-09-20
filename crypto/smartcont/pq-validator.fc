@@ -345,6 +345,9 @@ cell pq::complaint_vote_preimage(int validator_set_id, int validator_id, int idx
 
 const int pq::error::key_owned = 68;
 const int pq::error::index_disagrees = 69;
+;; A member's stake_owner is fixed by its first stake. The elector refuses a change
+;; politely before it gets here; this is what makes the record unable to hold one.
+const int pq::error::owner_changed = 70;
 
 ;; stake:Tomis registered_at:uint32 max_factor:uint32 algorithm_id:uint16 key_id:uint256
 ;;   public_key:^Cell adnl_addr:uint256
@@ -426,7 +429,12 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
   ;; record that has no authority over it.
   (slice existing, int registered) = members.udict_get?(256, validator_id);
   if (registered) {
-    (_, _, _, _, int held_key_id, _, _, _, _) = pq::unpack_member(existing);
+    (_, _, _, _, int held_key_id, _, _, int held_owner, _) = pq::unpack_member(existing);
+    ;; The owner is part of the record's identity, not one of its terms. A key may be
+    ;; rotated and a factor or address restated; the account the money belongs to may not.
+    ;; The elector refuses this with a reason before calling here, so reaching this line is
+    ;; a contract that skipped that check, and the book refuses to be the place it lands.
+    throw_unless(pq::error::owner_changed, held_owner == stake_owner);
     if (held_key_id != key_id) {
       (slice held_by, int indexed) = key_owner.udict_get?(256, held_key_id);
       throw_unless(pq::error::index_disagrees, indexed);

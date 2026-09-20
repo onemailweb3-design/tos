@@ -61,10 +61,45 @@ MUTANTS = [
     (
         "controller-kind",
         "validator-controller-v1.fc",
-        "throw_unless(ctl::error::bad_kind, (kind == ctl::kind::send) | (kind == ctl::kind::rotate_root));",
-        "throw_unless(ctl::error::bad_kind, true);",
+        "  throw_unless(ctl::error::bad_kind, (kind == ctl::kind::send) | (kind == ctl::kind::rotate_root)\n"
+        "                                     | (kind == ctl::kind::bind_consensus));",
+        "  throw_unless(ctl::error::bad_kind, true);",
         "validator_controller_sandbox",
         "every_field_of_an_authorisation",
+    ),
+    # A stake owner is a masterchain account. The relay reads its sender's account id and
+    # the elector answers `-1:` that id, so a sender in another workchain would have its
+    # money owed to an account that is not its own.
+    (
+        "controller-owner-masterchain",
+        "validator-controller-v1.fc",
+        "  throw_unless(ctl::error::owner_not_masterchain, owner_wc == -1);",
+        "  throw_unless(ctl::error::owner_not_masterchain, true);",
+        "validator_controller_sandbox",
+        "outside_the_masterchain",
+    ),
+    # ---------------------------------------------------------------------------
+    # Whose money a stake is, once placed
+    #
+    # A member's stake_owner is set by its first stake and refused any change after. A
+    # consensus key that could rename it would be a hot key able to move a pool's capital,
+    # which is the boundary the whole custody design exists to keep.
+    # ---------------------------------------------------------------------------
+    (
+        "elector-owner-fixed",
+        "elector-code.fc",
+        "    if (held_owner != stake_owner) {\n      return return_stake(owner_addr, query_id, 15);\n    }",
+        "    if (false) {\n      return return_stake(owner_addr, query_id, 15);\n    }",
+        "elector_sandbox",
+        "a_members_stake_owner_is_fixed",
+    ),
+    (
+        "book-owner-fixed",
+        "pq-validator.fc",
+        "    throw_unless(pq::error::owner_changed, held_owner == stake_owner);",
+        "    throw_unless(pq::error::owner_changed, true);",
+        "pq_elector_state_sandbox",
+        "a_members_owner_cannot_be_changed",
     ),
     (
         "controller-stray-cosignature",

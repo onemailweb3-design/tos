@@ -232,6 +232,9 @@ fn declared_total_stake(chain: &Chain) -> u128 {
 
 /// `return_stake` reason 14: a request stated the zero account as its funding account.
 const REASON_OWNER_IS_NOBODY: u32 = 14;
+/// `return_stake` reason 15: a member's later stake named an account other than the one
+/// its first stake did.
+const REASON_OWNER_CHANGED: u32 = 15;
 
 /// `return_stake` reason 4: a key already staked from a different address.
 const REASON_ANOTHER_ADDRESS: u32 = 4;
@@ -1575,14 +1578,26 @@ fn deploy_single_nominator(
 }
 
 fn deploy_rooted_validator(chain: &mut Chain, index: u8) -> RootedValidator {
-    deploy_controller_with(chain, index, PqValidator::new(0x80 + index), PqValidator::new(0x90 + index), true)
+    deploy_controller_with(
+        chain,
+        index,
+        PqValidator::new(0x80 + index),
+        PqValidator::new(0x90 + index),
+        true,
+    )
 }
 
 /// A controller as an operator first has one: the root is in its initial data, and no
 /// consensus key is bound yet. Reaching the state above is a ceremony, and a test that
 /// starts after it has already happened proves nothing about the ceremony.
 fn deploy_unbound_validator(chain: &mut Chain, index: u8) -> RootedValidator {
-    deploy_controller_with(chain, index, PqValidator::new(0x80 + index), PqValidator::new(0x90 + index), false)
+    deploy_controller_with(
+        chain,
+        index,
+        PqValidator::new(0x80 + index),
+        PqValidator::new(0x90 + index),
+        false,
+    )
 }
 
 fn deploy_controller_with(
@@ -1606,8 +1621,7 @@ fn deploy_controller_with(
     data.checked_append_reference(stored_bytes(&root.public_key)).expect("root key");
     let birth_code = controller_code();
     let birth_data = data.into_cell().expect("controller data");
-    let state =
-        chain_block::StateInit::with_code_and_data(birth_code.clone(), birth_data.clone());
+    let state = chain_block::StateInit::with_code_and_data(birth_code.clone(), birth_data.clone());
     let address = MsgAddressInt::with_params(
         -1,
         state.write_to_new_cell().expect("state").into_cell().expect("state cell").hash(0),
@@ -3465,6 +3479,42 @@ fn seed_file_for(validator: &PqValidator) -> std::path::PathBuf {
     seed
 }
 
+/// A stake authorisation, produced by the node's own producer from its custodied seed.
+///
+/// The test names the terms and the tool builds the preimage and signs it, as the node's
+/// creator does. Nothing about a validator set is passed in, because the node signs its
+/// first stake before it is in one.
+fn run_stake_tool(
+    consensus: &PqValidator,
+    global_id: i32,
+    election: u32,
+    max_factor: u32,
+    validator_id: &chain_block::UInt256,
+    owner: &chain_block::UInt256,
+) -> Vec<u8> {
+    let out = std::process::Command::new(vote_tool())
+        .args([
+            "stake".to_string(),
+            seed_file_for(consensus).to_str().expect("path").to_string(),
+            global_id.to_string(),
+            hex::encode(validator_id.as_slice()),
+            election.to_string(),
+            max_factor.to_string(),
+            hex::encode(consensus.adnl),
+            hex::encode(owner.as_slice()),
+        ])
+        .output()
+        .expect("the stake producer runs");
+    assert!(
+        out.status.success(),
+        "the node could not authorise a stake: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let signature = hex::decode(String::from_utf8_lossy(&out.stdout).trim()).expect("hex");
+    assert_eq!(signature.len(), 2420, "the node produced a signature of the wrong length");
+    signature
+}
+
 fn run_vote_tool(arguments: &[String]) -> chain_block::Cell {
     let out = std::process::Command::new(vote_tool())
         .args(arguments)
@@ -4805,6 +4855,25 @@ fn pq_member_key_id_at(chain: &Chain, address: &MsgAddressInt) -> Option<chain_b
     Some(chain_block::UInt256::from_slice(&record.get_next_bits(256).expect("key id")))
 }
 
+/// Whose money a member's stake is, according to its own record.
+fn pq_member_owner_at(chain: &Chain, address: &MsgAddressInt) -> Option<chain_block::UInt256> {
+    let (members, _) = pq_book(chain);
+    let mut record = members.get(address.address().clone()).expect("lookup")?;
+    let bytes = record.get_next_int(4).expect("stake length") as usize;
+    if bytes > 0 {
+        record.get_next_bits(bytes * 8).expect("stake");
+    }
+    record.get_next_u32().expect("registered at");
+    record.get_next_u32().expect("max factor");
+    record.get_next_u16().expect("algorithm");
+    record.get_next_bits(256).expect("key id");
+    record.checked_drain_reference().expect("the public key");
+    record.get_next_bits(256).expect("adnl");
+    let rest = record.checked_drain_reference().expect("owner and code");
+    let mut rest = chain_block::SliceData::load_cell(rest).expect("owner and code");
+    Some(chain_block::UInt256::from_slice(&rest.get_next_bits(256).expect("the owner")))
+}
+
 fn pq_key_holder(chain: &Chain, key_id: &chain_block::UInt256) -> Option<chain_block::UInt256> {
     let (_, key_owner) = pq_book(chain);
     let owner = key_owner
@@ -5240,6 +5309,194 @@ fn a_post_quantum_top_up_adds_only_the_money_it_brings_to_the_election_total() {
         declared_total_stake(&chain),
         pq_stake_of(&chain, &treasury),
         "the election counts more stake than its only member placed"
+    );
+}
+
+/// Whose money a member's stake is does not move once it is placed.
+///
+/// A pool's stake enters the election under the pool's account, and everything the
+/// election owes it -- principal, reward, surplus -- is keyed to that account. The one
+/// thing that could redirect it is a later request from the same validator naming another
+/// owner: signed by the consensus key, which is the hot one, the one a validator can
+/// lose. Were it taken, the stake already placed would follow the new name at unfreeze,
+/// and a leaked consensus key plus one qualifying top-up would be enough to move a pool's
+/// capital to an account of the holder's choosing. So the second owner is refused, with
+/// its own money, and the record is exactly what it was.
+#[test]
+fn a_members_stake_owner_is_fixed_by_its_first_stake() {
+    let (mut chain, _treasury, election) = open_election("owner-fixed", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let network = global_id(&chain);
+
+    // The validator, the key it stakes with, and two accounts that each say the money is
+    // theirs.
+    let validator =
+        chain.blockchain.treasury("owner-fixed-validator", 100_000 * TOS).expect("a validator");
+    let key = PqValidator::new(0x60);
+    let first_owner = chain.blockchain.treasury("owner-fixed-a", 100_000 * TOS).expect("owner a");
+    let second_owner = chain.blockchain.treasury("owner-fixed-b", 100_000 * TOS).expect("owner b");
+    let validator_id =
+        chain_block::UInt256::from_slice(&validator.address().address().get_bytestring(0));
+    let a = chain_block::UInt256::from_slice(&first_owner.address().address().get_bytestring(0));
+    let b = chain_block::UInt256::from_slice(&second_owner.address().address().get_bytestring(0));
+
+    // One stake, from this validator, stating this owner. Every signature is valid: what
+    // differs between the three is only the account each names.
+    fn stake_naming(
+        chain: &mut Chain,
+        validator: &tos_sandbox::Treasury,
+        validator_id: &chain_block::UInt256,
+        key: &PqValidator,
+        election: u32,
+        network: i32,
+        owner: &chain_block::UInt256,
+        query_id: u64,
+        value: u64,
+    ) -> tos_sandbox::SendResult {
+        let preimage = pq_stake_preimage_for(
+            network,
+            election,
+            0x10000,
+            validator_id,
+            owner,
+            1,
+            &key.key_id(),
+            &key.adnl,
+        );
+        let signature = key.sign(&preimage);
+        let witness = Some(controller_birth_witness(chain, validator));
+        let body = pq_stake_body_owned(
+            query_id,
+            key,
+            election,
+            0x10000,
+            &signature,
+            witness,
+            Some(owner.clone()),
+        );
+        chain
+            .blockchain
+            .send_message(validator.build_message(&chain.elector, value, true, Some(body)))
+            .expect("the stake is delivered")
+    }
+
+    let placed = stake_naming(
+        &mut chain,
+        &validator,
+        &validator_id,
+        &key,
+        election,
+        network,
+        &a,
+        1,
+        11_000 * TOS,
+    );
+    assert_eq!(reply(&placed), (STAKE_ACCEPTED, 0), "the first stake was refused");
+    assert_eq!(
+        pq_member_owner_at(&chain, validator.address()),
+        Some(a.clone()),
+        "the record names the wrong owner"
+    );
+
+    let topped = stake_naming(
+        &mut chain,
+        &validator,
+        &validator_id,
+        &key,
+        election,
+        network,
+        &a,
+        2,
+        12_000 * TOS,
+    );
+    assert_eq!(reply(&topped), (STAKE_ACCEPTED, 0), "a top-up from the same owner was refused");
+    let stake_before = pq_stake_of(&chain, &validator);
+    let total_before = declared_total_stake(&chain);
+    assert!(stake_before > (22_000 * TOS) as u128, "two stakes from one owner did not accumulate");
+
+    // The same validator, the same key, a signature that verifies -- and another owner.
+    let redirected = stake_naming(
+        &mut chain,
+        &validator,
+        &validator_id,
+        &key,
+        election,
+        network,
+        &b,
+        3,
+        11_000 * TOS,
+    );
+    let (went_to, tag, reason, value) = answered(&redirected);
+    assert_eq!(tag, STAKE_RETURNED, "a stake naming a second owner was taken");
+    assert_eq!(reason, REASON_OWNER_CHANGED, "refused, but for another reason");
+    assert_eq!(
+        went_to,
+        *second_owner.address(),
+        "the refusal went to someone other than the account it named"
+    );
+    assert!(value > (10_900 * TOS) as u128, "the refused stake did not bring its money back");
+
+    // And nothing moved.
+    assert_eq!(pq_member_owner_at(&chain, validator.address()), Some(a.clone()), "the owner changed");
+    assert_eq!(pq_stake_of(&chain, &validator), stake_before, "the stake changed");
+    assert_eq!(
+        pq_member_key_id_at(&chain, validator.address()),
+        Some(key.key_id()),
+        "the key changed"
+    );
+    assert_eq!(
+        pq_key_holder(&chain, &key.key_id()),
+        Some(validator_id.clone()),
+        "the reverse index changed"
+    );
+    assert_eq!(declared_total_stake(&chain), total_before, "the election total changed");
+
+    // Run the round out, and the money the election owes goes to the owner that placed it.
+    for index in 0..4u8 {
+        let other = chain
+            .blockchain
+            .treasury(&format!("owner-fixed-other-{index}"), 100_000 * TOS)
+            .expect("another validator");
+        let other_key = PqValidator::new(0x61 + index);
+        let result =
+            pq_stake(&mut chain, &other, &other_key, election, 10 + u64::from(index), 11_000 * TOS);
+        assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "another validator could not stake");
+    }
+    chain.blockchain.set_now(election - chain.elect_end_before);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain.blockchain.set_now(chain.blockchain.now() + 10 * 365 * 24 * 3600);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+
+    assert!(
+        owed(&chain, a.as_slice().try_into().expect("32 bytes")) > 0,
+        "the first owner is owed nothing"
+    );
+    assert_eq!(
+        owed(&chain, b.as_slice().try_into().expect("32 bytes")),
+        0,
+        "the second owner is owed money it never placed"
+    );
+    assert_eq!(
+        owed(&chain, validator_id.as_slice().try_into().expect("32 bytes")),
+        0,
+        "the validator is owed money that was never its own"
     );
 }
 
@@ -6024,7 +6281,12 @@ impl RootedValidator {
             .expect("an operator account");
         chain
             .blockchain
-            .send_message(operator.build_message(&self.address, 10 * TOS, true, Some(authorisation)))
+            .send_message(operator.build_message(
+                &self.address,
+                10 * TOS,
+                true,
+                Some(authorisation),
+            ))
             .expect("the authorisation is delivered")
     }
 
@@ -6035,8 +6297,12 @@ impl RootedValidator {
             .run_get_method(&self.address, "controller_state", vec![])
             .expect("the controller answers");
         assert_eq!(result.exit_code, 0, "controller_state failed");
-        let algorithm: u64 =
-            result.stack[2].as_integer().expect("an algorithm").to_string().parse().expect("a number");
+        let algorithm: u64 = result.stack[2]
+            .as_integer()
+            .expect("an algorithm")
+            .to_string()
+            .parse()
+            .expect("a number");
         let key_id = result.stack[3].as_integer().expect("a key identity").to_string();
         // The getter hands back an integer; the identity is its 32 bytes.
         let digits = key_id.trim_start_matches('-');
@@ -6088,11 +6354,19 @@ impl RootedValidator {
 
         let relayer = chain
             .blockchain
-            .treasury(&format!("tool-relayer-{}", hex::encode(&self.id().as_slice()[..4])), 40_000 * TOS)
+            .treasury(
+                &format!("tool-relayer-{}", hex::encode(&self.id().as_slice()[..4])),
+                40_000 * TOS,
+            )
             .expect("a relayer");
         chain
             .blockchain
-            .send_message(relayer.build_message(&self.address, 12_000 * TOS, true, Some(authorisation)))
+            .send_message(relayer.build_message(
+                &self.address,
+                12_000 * TOS,
+                true,
+                Some(authorisation),
+            ))
             .expect("the authorisation is delivered")
     }
 }
@@ -6132,7 +6406,11 @@ fn the_operator_tools_carry_a_validator_from_no_key_to_a_governed_change() {
     for validator in &validators {
         let (algorithm, key_id) = validator.bound_key(&chain);
         assert_eq!(algorithm, 0, "a controller was deployed already bound");
-        assert_eq!(key_id, chain_block::UInt256::default(), "a controller knows a key it was never told");
+        assert_eq!(
+            key_id,
+            chain_block::UInt256::default(),
+            "a controller knows a key it was never told"
+        );
     }
 
     // A controller with no key bound cannot stake: the elector would take it, but the
@@ -6155,16 +6433,20 @@ fn the_operator_tools_carry_a_validator_from_no_key_to_a_governed_change() {
     }
 
     // --- each controller places a stake, authorised through the operator's command ---
+    //
+    // The stake itself is signed by the node's own producer, from the seed that was just
+    // bound, for a validator that is in no set yet. That is the onboarding case, and it
+    // is the one a lookup requiring membership would have refused.
     for (index, validator) in validators.iter().enumerate() {
-        let preimage = pq_stake_preimage(
-            global_id(&chain),
+        let network = global_id(&chain);
+        let signature = run_stake_tool(
+            &validator.consensus,
+            network,
             election,
             0x10000,
             &validator.id(),
-            &validator.consensus.key_id(),
-            &validator.consensus.adnl,
+            &validator.id(),
         );
-        let signature = validator.consensus.sign(&preimage);
         // From the deployment record, through the tool -- not from the live account,
         // whose data the bind above has already changed.
         let (code, data) = validator.birth.clone().expect("the deployment record");
@@ -6256,7 +6538,8 @@ fn the_operator_tools_carry_a_validator_from_no_key_to_a_governed_change() {
 
     // --- and complains about a validator of the closed election ---------------------
     let accused = validator_id_at(&chain, index_of_pq(&chain, &validators[3].consensus));
-    let complainant = chain.blockchain.treasury("n39-complainant", 10_000 * TOS).expect("an account");
+    let complainant =
+        chain.blockchain.treasury("n39-complainant", 10_000 * TOS).expect("an account");
     let filed = chain
         .blockchain
         .send_message(complainant.build_message(

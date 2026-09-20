@@ -26,6 +26,7 @@ const ERROR_KEY_OWNED: i32 = 68;
 const ERROR_ZERO_VALIDATOR_ID: i32 = 65;
 /// The member record and the reverse index disagree about who holds a key.
 const ERROR_INDEX_DISAGREES: i32 = 69;
+const ERROR_OWNER_CHANGED: i32 = 70;
 
 /// What the same state cost when the storage shape was approved, from
 /// `build/crypto/pq/n3-state-measure`: members plus the reverse index, in cells.
@@ -58,6 +59,11 @@ fn probe_code() -> Cell {
   ;; admitted a member are the elector's business.
   return pq::register_member(members, key_owner, validator_id, 11000000000000, 1789434000, 0x10000,
                              algorithm_id, public_key, adnl, validator_id, 0xc0de);
+}
+(cell, cell) probe_register_owned(cell members, cell key_owner, int validator_id, int algorithm_id,
+                                  cell public_key, int adnl, int stake_owner) method_id {
+  return pq::register_member(members, key_owner, validator_id, 11000000000000, 1789434000, 0x10000,
+                             algorithm_id, public_key, adnl, stake_owner, 0xc0de);
 }
 int probe_key_holder(cell key_owner, int key_id) method_id {
   return pq::key_holder(key_owner, key_id);
@@ -185,6 +191,40 @@ fn register(
     Ok(Book { members, key_owner })
 }
 
+/// Register with a stated owner, returning the updated book or the error code.
+#[allow(clippy::result_large_err)]
+fn register_owned(
+    chain: &Blockchain,
+    probe: &MsgAddressInt,
+    book: &Book,
+    validator: u8,
+    key_seed: u8,
+    adnl: u8,
+    owner: u8,
+) -> Result<Book, i32> {
+    let result = chain
+        .run_get_method(
+            probe,
+            "probe_register_owned",
+            vec![
+                book.members.clone(),
+                book.key_owner.clone(),
+                StackItem::integer(identity(validator)),
+                StackItem::int(1),
+                StackItem::Cell(stored_key(key_seed)),
+                StackItem::integer(identity(adnl)),
+                StackItem::integer(identity(owner)),
+            ],
+        )
+        .expect("the probe answers");
+    if result.exit_code != 0 {
+        return Err(result.exit_code);
+    }
+    let key_owner = result.stack.last().expect("the reverse index").clone();
+    let members = result.stack[result.stack.len() - 2].clone();
+    Ok(Book { members, key_owner })
+}
+
 fn holder(chain: &Blockchain, probe: &MsgAddressInt, book: &Book, key_seed: u8) -> String {
     let result = chain
         .run_get_method(
@@ -233,6 +273,43 @@ fn a_registration_records_the_member_and_claims_the_key() {
         key_id_of(0x11).to_string(),
         "the member record does not hold the key that was registered"
     );
+}
+
+/// The book will not hold a member whose owner has changed.
+///
+/// The elector refuses that politely, with a reason, before it gets here. This is the
+/// layer beneath: a contract that skipped the check would find the record refusing to be
+/// the place the change lands. A rotation of the key, and a top-up under the same owner,
+/// are both still the same member and are both taken.
+#[test]
+fn a_members_owner_cannot_be_changed_once_it_is_set() {
+    let mut chain = chain_at_16();
+    let probe = deploy(&mut chain);
+
+    let book = register_owned(&chain, &probe, &Book::empty(), 0xa1, 0x11, 0xc1, 0xd1)
+        .expect("a registration naming an owner");
+
+    // Same member, same owner: a top-up, and a rotation to a new key.
+    let book = register_owned(&chain, &probe, &book, 0xa1, 0x11, 0xc1, 0xd1)
+        .expect("a top-up under the same owner");
+    let book = register_owned(&chain, &probe, &book, 0xa1, 0x12, 0xc1, 0xd1)
+        .expect("a rotation under the same owner");
+    assert_eq!(holder(&chain, &probe, &book, 0x12), identity(0xa1).to_string());
+
+    // Same member, another owner: refused, whatever else the request says.
+    assert_eq!(
+        register_owned(&chain, &probe, &book, 0xa1, 0x12, 0xc1, 0xd2).err(),
+        Some(ERROR_OWNER_CHANGED),
+        "the book let a member's owner change"
+    );
+    assert_eq!(
+        register_owned(&chain, &probe, &book, 0xa1, 0x13, 0xc1, 0xd2).err(),
+        Some(ERROR_OWNER_CHANGED),
+        "the book let a member's owner change under cover of a rotation"
+    );
+    // And the refused attempts changed nothing: the key the member holds is still the one
+    // the last accepted request installed.
+    assert_eq!(member_key_id(&chain, &probe, &book, 0xa1), key_id_of(0x12).to_string());
 }
 
 #[test]

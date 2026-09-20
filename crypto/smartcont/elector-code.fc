@@ -342,8 +342,18 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   int controller_code = 0;
   int placed_before = 0;
   if (registered) {
-    (int placed, _, _, _, _, _, _, _, int held_code) = pq::unpack_member(existing);
+    (int placed, _, _, _, _, _, _, int held_owner, int held_code) = pq::unpack_member(existing);
     placed_before = placed;
+    ;; Whose money a member's stake is was settled by the first stake and does not move
+    ;; for the rest of the election. A later request from the same validator naming a
+    ;; different owner is refused with the money it brought, and changes nothing: were it
+    ;; taken, the stake already placed would follow the new name at unfreeze, and a
+    ;; consensus key -- the hot key, the one a validator can lose -- would be able to
+    ;; redirect a pool's capital to an account of its holder's choosing for the price of
+    ;; one qualifying top-up.
+    if (held_owner != stake_owner) {
+      return return_stake(owner_addr, query_id, 15);
+    }
     ifnot (pq::controller_admitted?(admitted_codes, held_code)) {
       return return_stake(owner_addr, query_id, 12);
     }
