@@ -101,6 +101,34 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   CPUs and choosing a price with a stated margin still has to happen before
   activation, in both VMs at once.
 
+**Note commitments and the commitment tree**
+
+- `crypto/smartcont/shielded/` — sections 4 and 5 of the profile in FunC: the
+  five commitment and nullifier constructions, and the 7-ary depth-12 tree with
+  the canonical frontier store from 13.1. The domain constants and the
+  empty-subtree ladder are generated, not written by hand: the profile forbids a
+  hand-written domain table, and a contract recomputing the ladder would pay
+  twelve permutations per append for a value that never changes.
+
+  Two checks carry the weight. The frontier is incremental, so the suite also
+  rebuilds the whole tree from every leaf and requires the two to agree at each
+  of fifty appends across two group boundaries — a different computation, not
+  the same one written twice. And the ladder is recomputed from the permutation
+  and required to match the generated table.
+
+  Canonical state must not store an explicit zero. A commitment is never zero,
+  so that rule had no path to reach it until the suite appends a zero leaf: the
+  slot must be absent rather than stored, the root must stay the empty root, and
+  a later non-zero append must bring the slot back.
+
+  Eight mutations (`test/shielded-pool/mutations.py`), each killed by the test
+  it was aimed at.
+
+  **What it does not establish**: that these are the formulas the circuit will
+  enforce. The FunC and the reference beside it were both written from section
+  4, so a misreading of the profile would appear in both. The cross-check that
+  settles it is the circuit, which does not exist yet.
+
 **Nothing else.** No pool contract, no circuit, no wallet.
 
 ## What gates this branch
