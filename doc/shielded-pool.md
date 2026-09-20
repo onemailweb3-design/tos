@@ -12,6 +12,8 @@ open decisions and the review record live in the `memo` repository under
 | `privacy/TOS_VS_EIP8182_PRIVACY.md` | What this design hides compared with the reference design, per party. |
 | `privacy/TOS_SHIELDED_POOL_EIP8182_PORT.md` | Measurements and hard limits on this chain. |
 | `privacy/TOS_POSEIDON2_OPCODE_WORK_ORDER.md` | The one instruction the pool needs to be worth shipping. |
+| `privacy/TOS_SHIELDED_POOL_V1_OPEN_RULINGS.md` | **The rulings.** Questions the profile did not answer, and the answers given on 2026-09-20. A1 and A2 are carried out on this branch; the next review checks conformance, not the choice. |
+| `privacy/TOS_SHIELDED_POOL_V1_OPEN_RULINGS_2.md` | The second register: what measuring the contract turned up afterwards, and the two confirmations the first register left open. |
 | `privacy/REVIEW_PROMPT.md` | The standing invitation to find what is wrong. |
 
 When this branch and those documents disagree, the documents win and the branch
@@ -144,7 +146,7 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   remove the recomputation and has not been done.
 
   `tosctl/src/node-control/contracts/tests/shielded_imt_sandbox.rs` runs all of
-  it in a VM at global version 17: eleven tests, closing section 19 gate 10.
+  it in a VM at global version 17: thirteen tests, closing section 19 gate 10.
   Two sequential nullifiers both insert, with the second witness taken against
   the root after the first; a bad successor tuple, a non-empty append slot, and
   duplicate or reordered witnesses each fail with a named exit code. A zero
@@ -157,17 +159,25 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   and rebuilds every level. A path that happens to fold to a plausible root
   cannot pass unnoticed.
 
-  Thirty-two mutations (`test/shielded-pool/mutations-imt.py`), each killed by
+  Thirty-four mutations (`test/shielded-pool/mutations-imt.py`), each killed by
   the test it was aimed at.
 
-  **What it does not establish**: two guards the profile states cannot be
-  killed and are annotated as restatements in the source — the second half of
-  step 4's capacity bound, which the first half implies, and the non-zero
-  allocated leaf hash, which is a property of the permutation rather than of
-  any input. Section 7.2's "reject special cells" is delegated to `begin_parse`,
-  which throws before the contract's own checks run; no test of ours constructs
-  a special cell, so that path rests on VM behaviour. And no pool contract
-  calls any of this.
+  Two guards here could not be killed and were ruled on rather than left
+  annotated (register C1 and C2). The redundant half of step 4's capacity bound
+  is **deleted**: the first half implies it, and a guard no test can reach is a
+  guard nobody maintains. The non-zero allocated leaf hash is **kept and
+  extracted** into `imt_require_allocated_leaf_hash`, which a mutation now hits
+  directly — it is a property of the permutation rather than of any input, so
+  it is an invariant worth stating once where it can be tested, not a check
+  scattered through a parser.
+
+  Section 7.2's "reject special cells" is delegated to `begin_parse`, which
+  throws before the contract's own checks run. Rather than write a second
+  exotic-cell detector in FunC, the suite now constructs **real** exotic cells:
+  a pruned branch and a merkle proof, each placed at the witness root and at
+  the head, middle and end of both paths, fourteen cases in all, each required
+  to fail **before** this module's own field parsing — the criterion being an
+  exit code that does not fall in this module's range.
 
 **The intent digest and ML-DSA-44 authorization**
 
@@ -203,12 +213,63 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   Twenty-three mutations (`test/shielded-pool/mutations-auth.py`), each killed
   by the test it was aimed at.
 
-  **What it does not establish**: any contract behaviour, and no gas figure.
-  One toolchain gap surfaced and was left alone: the mnemonic
-  `PQCHECKSIG_MLDSA44` is defined in `crypto/fift/lib/PQ.fif`, which the
-  sandbox assembler does not include, so `auth.fc` emits the opcode `0xF93100`
-  directly with a comment naming it. Making the mnemonic reachable is a
-  separate change.
+  **What it does not establish**: nothing about how much a signature costs in a
+  transaction, which the pool contract's measurement below supplies.
+
+  One toolchain gap surfaced here and has since been closed: the mnemonic
+  `PQCHECKSIG_MLDSA44` lived in `crypto/fift/lib/PQ.fif`, which the sandbox
+  assembler does not include, so `auth.fc` had to emit `0xF93100` directly. It
+  now lives in `Asm.fif` beside the two Poseidon2 mnemonics and `auth.fc` names
+  it.
+
+**Anchors, the execution domain, and the persistent state**
+
+- `crypto/smartcont/shielded/anchors.fc` — section 6: the two anchor rings and
+  the rule that an anchor is accepted only on an exact match of kind, id and
+  root, never on a root that merely looks plausible. `domain.fc` — section 8:
+  the execution domain bound to this chain's `GLOBALID` and this account, and
+  the recipient hash, which is defined only for a workchain-zero standard
+  address and refuses anything else rather than hashing it anyway.
+  `state.fc` — section 13: the state root, the configuration and the verifying
+  key chain, each with its frozen shape and each refusing anything that is not
+  that shape.
+
+  Twenty-three anchor mutations and twenty state mutations, each killed by the
+  test it was aimed at.
+
+  One defect here was found by the branch's own mutation discipline rather than
+  by reading. Section 13.2 initialises `last_anchor_epoch` to `0xffffffff`, and
+  the first implementation wrote the epoch checkpoint under `epoch >
+  last_anchor_epoch` — which is never true against that sentinel, so no
+  checkpoint would have been written until the year 6053. The sentinel is "not
+  yet recorded", not a very late epoch. It is tested explicitly and a mutation
+  restores the old comparison and requires the test to go red. The reading is
+  registered as A4 and still wants a one-line confirmation.
+
+  Another came from a rule that was written but not marked. `config_parse` and
+  `authorize_intent` were called for their checks with their results unused,
+  and FunC, seeing no `impure`, removed the calls entirely — signature
+  verification included. Both are `impure` now, and the mutation
+  `config-parse-purity` exists so the next function that only validates does
+  not repeat it.
+
+**The transact message and on-chain Groth16**
+
+- `crypto/smartcont/shielded/transact.fc` — section 12.2's wire shapes, section
+  13.3's frozen cell layouts and section 10's eighteen public inputs in the
+  order the verifying key's IC points are allocated in. A field element that
+  arrives on the wire must already be canonical: it is refused, not reduced.
+
+- `crypto/smartcont/shielded/groth16.fc` — the verifying key read as a byte
+  chain and the pairing check itself, `e(-A,B) · e(alpha,beta) · e(vk_x,gamma)
+  · e(C,delta) = 1`, over the 18-input multiexponentiation. The contract slices
+  the canonical bytes out of state and hands them straight to `BLS_G1_ADD`,
+  `BLS_G1_MULTIEXP` and `BLS_PAIRING`; ruling A1 requires that there be no
+  second endian or flag conversion on chain, and there is none.
+
+  The development proof from the circuit verifies inside the VM at **204,493
+  gas**, and its four mutations do not. Twenty-two transact mutations and
+  twelve Groth16 mutations, each killed by the test it was aimed at.
 
 **The circuit**
 
@@ -262,17 +323,97 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   own `warning` field. Two places where the profile is not self-sufficient were
   reported rather than decided:
 
-  - section 10.1 fixes the compressed point lengths (48 and 96) but names no
-    byte order, and the two candidate conventions differ in bytes at the same
-    length. The verifying-key digest recorded here is therefore
-    convention-dependent, and the encoding used is recorded in the fixture
-    rather than assumed. **This needs a ruling before any VK hash is frozen.**
-  - the profile gives no width for `withdrawal_fee`. An unbounded fee wraps the
-    field and can balance a theft, so it is bounded here like every other
-    amount and flagged in the source. The contract separately requires the fee
-    to equal config, which is the real mitigation.
+  Two places where the profile was not self-sufficient were reported rather
+  than decided, and **both have since been ruled** (register A1 and A2):
 
-**Nothing else.** No pool contract, no wallet.
+  - section 10.1 fixed the compressed point lengths (48 and 96) but named no
+    byte order, and the two candidate conventions differ in bytes at the same
+    length. **Ruled**: V1 wire bytes are the blst/IETF compressed encoding,
+    defined as what this chain's own BLS primitives accept and produce. The
+    encoder now builds the IETF layout and hands it to blst, and every point is
+    required to survive `deserialize` then `compress` unchanged before it can
+    reach a fixture or a digest. Worth stating because it looks like a
+    migration and is not: this changed no byte. The fixture regenerates
+    identical, verifying key and all, so the 1248-byte stream and its SHA-256
+    `5b760517...` stand.
+  - the profile gave no width for `withdrawal_fee`. An unbounded fee wraps the
+    field and can balance a theft. **Ruled**: the circuit enforces
+    `0 <= fee < 2^120`, a withdrawal requires a non-zero fee and a transfer
+    requires a zero one, all three in `circuit.rs` behind their own relation
+    switches with removal tests.
+
+**The pool contract**
+
+- `crypto/smartcont/tos-shielded-pool-v1.fc` — sections 16.1, 16.2 and 16.4:
+  deposit, transact and reserve top-up, with exit codes 200-229 and disjoint
+  ranges below it so a code from the library can be told apart from a code from
+  the handler.
+
+  Two rules shape the whole contract. It never calls `ACCEPT`, so an inbound
+  message pays for its own execution or does not execute; and the depositor
+  never supplies the final note commitment, so it cannot deposit one and buy a
+  note worth a hundred. Both are tested by removing them and watching a named
+  test go red.
+
+  `shielded_pool_sandbox.rs` covers deposit and top-up in eight tests;
+  `shielded_pool_transact_sandbox.rs` covers transact in five. Between them,
+  twenty-six mutations (`test/shielded-pool/mutations-pool.py`), each killed by
+  the test it was aimed at.
+
+  A transact is written in the profile's order and the suite requires each step
+  to fail with its own code **in its own place**: funding before anything else
+  even when everything else is also wrong, then the unbuilt withdrawal path,
+  then the validity window, the anchor, the two nullifier insertions against
+  the running tree rather than the tree the message started with, the two
+  authorizations, and the proof. A failure at any of them leaves every
+  get-method reading exactly what it read before.
+
+  Both suites build the contract from one source list
+  (`tests/shielded_pool_library/`). They used to keep their own and drifted:
+  the deposit suite went on compiling a pool without the transact libraries and
+  was testing a contract that no longer existed.
+
+**What a transact costs**
+
+- Measured on this executor, not estimated. A message that fails at step N has
+  paid for steps 1 through N, so the cost of each step is the difference
+  between two failures:
+
+  | cumulative gas | step |
+  |---:|---|
+  | 10,437 | parse and the validity window |
+  | 63,818 | + the anchor |
+  | 497,031 | + one whole nullifier insertion, the second rejected |
+  | 846,470 | + both insertions and the first authorization |
+  | **1,117,121** | + the second authorization and the proof |
+
+  **The proof is not what costs.** The two nullifier insertions account for
+  about 716,000 of that, roughly 239 Poseidon2 hashes, against 204,493 for the
+  whole Groth16 verification measured on its own.
+
+  The network's default per-transaction limit is **1,000,000**, so this path
+  does not run to completion on an ordinary account, and the profile's
+  `TRANSACT_GAS_CEILING` of 2,000,000 can never take effect: `SETGASLIMIT`
+  cannot raise a transaction above the network's own limit. The measurement was
+  taken with the sandbox's limit raised to 10,000,000, which is a measuring
+  instrument and not a claim. Both facts are asserted by tests rather than left
+  in a comment. The decision this forces is registered as D1 in
+  `privacy/TOS_SHIELDED_POOL_V1_OPEN_RULINGS_2.md`; the short version is that
+  the Poseidon2 gas price those insertions are billed at is still a placeholder,
+  so pricing it against measured cost decides whether V1 fits.
+
+**The whole mutation set**, run end to end on 2026-09-20 at this branch's tip:
+185 mutations across nine batteries — 8 notes and tree, 34 IMT, 23
+authorization, 23 anchors, 20 state, 22 transact wire, 12 Groth16, 26 pool
+contract, 17 Poseidon2 across both VMs — and every one of them was killed by
+the test or assertion it was aimed at. The log is in
+`privacy/measurements/transact-in-tvm-20260920/all-mutations.out`.
+
+**Still not built**: section 15's withdrawal payout and its bounce recovery
+(step 16 of 16.2 refuses with code 206 today), section 16.3, the wallet, and
+the zerostate generator. There is no production prover, so **no proof that
+verifies has ever been produced** — every transact in the suite stops at the
+pairing, and the cost of a *successful* transact is therefore still unmeasured.
 
 ## What gates this branch
 
@@ -280,14 +421,21 @@ The safety gates in the specification's section 12 are ordered by whether
 failing them loses money. The first seven (P0-0 through P0-6) cover how funds
 enter, where they actually reside in the account balance, who pays for
 computation, who is authorised to spend, and that a spend cannot half-commit.
-None of them is closed. What the work on this branch establishes is that the
-rules P0-0, P0-1 and P0-2 state are enforceable in this VM and that the
-assertions for them discriminate — not that a pool contract obeys them,
-because there is no pool contract yet. The same distinction applies to the
-implementation profile's own acceptance gates: 6, 8 and 10 have their
-enforceability shown in the VM, and 3 has its negative tests running in the
-circuit, but a gate is closed by a contract obeying it, not by a probe proving
-it could. Production code on this branch waits for the gates.
+There is now a pool contract, so the distinction that used to matter here — a
+probe showing a rule is enforceable versus a contract obeying it — has moved.
+What the contract does obey, with a named test and a mutation behind each: the
+principal it admits is the principal the note is built for, no path calls
+`ACCEPT`, the funding inequality is checked before any work, backing is
+asserted against the end state, and a failure at any step of a transact leaves
+the state untouched.
+
+What is still open is not enforcement but completeness and freezing. A
+withdrawal cannot be paid out yet, no proof that verifies has ever been
+produced, and the numbers that would let a state be frozen — the production
+Poseidon2 gas price, the production verifying key, the canonical anchor-ring
+shape — are all still open questions in the register. A gate is closed by a
+contract obeying a rule *and* by the constants that rule depends on being the
+ones that will ship.
 
 Two things do not wait, because their windows close earlier than their
 urgency suggests:
