@@ -44,6 +44,9 @@ describe("Poseidon2 t=8", () => {
       // the table and the arguments from the vector is what proves h7 puts
       // them where the vector has them.
       const label = vector.label.split("/")[0];
+      if (label === undefined) {
+        throw new Error(`a hash vector with no label: ${vector.label}`);
+      }
       expect(vector.input[0], `${vector.label}: the domain lane`).toBe(DOMAINS[label]);
       expect(h7(label, vector.input.slice(1)), `h7 ${vector.label}`).toEqual(vector.output);
     }

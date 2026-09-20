@@ -36,6 +36,27 @@ export function mul(a: Fr, b: Fr): Fr {
   return (a * b) % MODULUS;
 }
 
+/**
+ * A required element. The repository compiles with `noUncheckedIndexedAccess`,
+ * so every index read is `T | undefined`; the tables here are fixed-shape and
+ * generated, and this says so once instead of casting it away at each use.
+ */
+function at(row: readonly Fr[], index: number): Fr {
+  const value = row[index];
+  if (value === undefined) {
+    throw new Error(`a Poseidon2 table is missing element ${index}`);
+  }
+  return value;
+}
+
+function row(table: readonly (readonly Fr[])[], index: number): readonly Fr[] {
+  const values = table[index];
+  if (values === undefined) {
+    throw new Error(`a Poseidon2 table is missing row ${index}`);
+  }
+  return values;
+}
+
 /** x^5, the s-box. */
 function sbox(x: Fr): Fr {
   const squared = mul(x, x);
@@ -43,19 +64,23 @@ function sbox(x: Fr): Fr {
 }
 
 /** The 4x4 block the external matrix is built from. */
-function matmulM4(x: Fr[], at: number): void {
-  const t0 = add(x[at], x[at + 1]);
-  const t1 = add(x[at + 2], x[at + 3]);
-  const t2 = add(add(x[at + 1], x[at + 1]), t1);
-  const t3 = add(add(x[at + 3], x[at + 3]), t0);
+function matmulM4(x: Fr[], base: number): void {
+  const x0 = at(x, base);
+  const x1 = at(x, base + 1);
+  const x2 = at(x, base + 2);
+  const x3 = at(x, base + 3);
+  const t0 = add(x0, x1);
+  const t1 = add(x2, x3);
+  const t2 = add(add(x1, x1), t1);
+  const t3 = add(add(x3, x3), t0);
   const fourT1 = add(add(t1, t1), add(t1, t1));
   const t4 = add(fourT1, t3);
   const fourT0 = add(add(t0, t0), add(t0, t0));
   const t5 = add(fourT0, t2);
-  x[at] = add(t3, t5);
-  x[at + 1] = t5;
-  x[at + 2] = add(t2, t4);
-  x[at + 3] = t4;
+  x[base] = add(t3, t5);
+  x[base + 1] = t5;
+  x[base + 2] = add(t2, t4);
+  x[base + 3] = t4;
 }
 
 function matmulExternal(s: Fr[]): void {
@@ -63,20 +88,20 @@ function matmulExternal(s: Fr[]): void {
   matmulM4(s, 4);
   const stored = [0n, 0n, 0n, 0n];
   for (let lane = 0; lane < 4; lane += 1) {
-    stored[lane] = add(s[lane], s[4 + lane]);
+    stored[lane] = add(at(s, lane), at(s, 4 + lane));
   }
   for (let lane = 0; lane < STATE_WIDTH; lane += 1) {
-    s[lane] = add(s[lane], stored[lane % 4]);
+    s[lane] = add(at(s, lane), at(stored, lane % 4));
   }
 }
 
 function matmulInternal(s: Fr[]): void {
-  let sum = s[0];
+  let sum = at(s, 0);
   for (let lane = 1; lane < STATE_WIDTH; lane += 1) {
-    sum = add(sum, s[lane]);
+    sum = add(sum, at(s, lane));
   }
   for (let lane = 0; lane < STATE_WIDTH; lane += 1) {
-    s[lane] = add(mul(s[lane], MAT_DIAG8[lane]), sum);
+    s[lane] = add(mul(at(s, lane), at(MAT_DIAG8, lane)), sum);
   }
 }
 
@@ -90,18 +115,20 @@ export function permute(state: readonly Fr[]): Fr[] {
   matmulExternal(s);
   const partialEnd = ROUNDS_F_BEGINNING + ROUNDS_P;
   for (let round = 0; round < ROUNDS_F_BEGINNING; round += 1) {
+    const constants = row(RC8, round);
     for (let lane = 0; lane < STATE_WIDTH; lane += 1) {
-      s[lane] = sbox(add(s[lane], RC8[round][lane]));
+      s[lane] = sbox(add(at(s, lane), at(constants, lane)));
     }
     matmulExternal(s);
   }
   for (let round = ROUNDS_F_BEGINNING; round < partialEnd; round += 1) {
-    s[0] = sbox(add(s[0], RC8[round][0]));
+    s[0] = sbox(add(at(s, 0), at(row(RC8, round), 0)));
     matmulInternal(s);
   }
   for (let round = partialEnd; round < ROUNDS_TOTAL; round += 1) {
+    const constants = row(RC8, round);
     for (let lane = 0; lane < STATE_WIDTH; lane += 1) {
-      s[lane] = sbox(add(s[lane], RC8[round][lane]));
+      s[lane] = sbox(add(at(s, lane), at(constants, lane)));
     }
     matmulExternal(s);
   }
@@ -120,7 +147,7 @@ export function h7(label: string, args: readonly Fr[]): Fr {
   if (domain === undefined) {
     throw new Error(`no domain constant named ${label}`);
   }
-  return permute([domain, ...args])[0];
+  return at(permute([domain, ...args]), 0);
 }
 
 /**
