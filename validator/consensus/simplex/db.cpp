@@ -43,9 +43,10 @@ using db_candidateResolver_notarCertRef = tl_object_ptr<db_candidateResolver_not
 namespace {
 
 // What a stored record claims to be, readable even when the rest of it -- or the key it is
-// filed under -- cannot be parsed. The leading constructor tag is the last thing to go, and
-// it is enough to tell a record of this node's own vote, which must never be silently
-// dropped, from a cached certificate, which can be obtained again.
+// filed under -- cannot be parsed, as long as the record is still enumerated at all. The
+// leading constructor tag is the last thing to go, and it is enough to tell a record of
+// this node's own vote, which must never be silently dropped, from a cached certificate,
+// which can be obtained again.
 bool claims_to_be_our_vote(td::Slice serialized) {
   td::uint32 tag = 0;
   if (serialized.size() < sizeof(tag)) {
@@ -191,6 +192,23 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
     std::vector<OurVote> our_votes;
     std::vector<CertificateRef<Vote>> certs;
 
+    // What this enumeration can and cannot see, stated because the checks below are only
+    // as complete as it is.
+    //
+    // Every record whose key still carries this constructor prefix is returned, and each
+    // one is then classified: a damaged key, a damaged value, or a key that does not bind
+    // its value all stop the session when the record is one of this node's own votes. The
+    // shape outside reach is a record whose four-byte prefix itself is damaged. It is not
+    // in the range, so nothing here is asked about it, and a vote that vanishes that way
+    // leaves no trace to fail on -- it is indistinguishable from a vote never cast.
+    //
+    // Two things bound that. The store computes a checksum per block, so damage to a key
+    // that was written correctly surfaces as a read error rather than as different bytes;
+    // and the reader turns a read error into an abort instead of a shorter result, so the
+    // records this loop sees are all the records there are. What remains is damage
+    // introduced above the storage layer -- a bug writing the wrong key -- which no check
+    // inside this function can detect. Closing it needs an independent record of what the
+    // journal should contain, and that is a design decision, not a local fix.
     auto votes = bus.db->get_by_prefix(tl::db_key_vote::ID);
 
     for (auto& [key_str, value_str] : votes) {
