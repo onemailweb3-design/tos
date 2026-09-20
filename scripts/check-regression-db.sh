@@ -37,7 +37,14 @@ done
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 cp "$answers" "$scratch/answers.ans"
-cp -r "$root/test/regression-tests.cache" "$scratch/answers.cache"
+# The cache beside the record holds the full output behind each hash, which is what turns a
+# disagreement from two hex strings into something readable. It is a local artifact, not a
+# tracked one, so a fresh checkout has none and a copy that assumes otherwise fails the
+# whole check before a single test has run. Copy it when it is there; the test framework
+# creates an empty one when it is not.
+if [ -d "$root/test/regression-tests.cache" ]; then
+  cp -r "$root/test/regression-tests.cache" "$scratch/answers.cache"
+fi
 
 for binary in $binaries; do
   if ! "$build/$binary" --regression "$scratch/answers.ans" >"$scratch/$binary.log" 2>&1; then
