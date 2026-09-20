@@ -3394,13 +3394,27 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
   }
   auto config = new_consensus_config.value();
 
+  // The consensus path is post-quantum only and verifies every peer with the key the set
+  // records, so each member must carry a usable one. Decide that here, before a group
+  // exists: if the bus discovered it asynchronously in start_up and stopped itself, this
+  // manager would be left holding a group it had already marked started, which it would
+  // neither run nor ever recreate.
+  for (const auto &el : validator_set->export_vector()) {
+    if (auto usable = block::validate_pq_consensus_descriptor(el); usable.is_error()) {
+      LOG(ERROR) << "refusing to create validator group for " << shard.to_str() << ": validator "
+                 << el.validator_id.value.to_hex() << ": " << usable.move_as_error()
+                 << "; validation for this shard is disabled until the set is post-quantum";
+      return {};
+    }
+  }
+
   // The consensus signer for this node, resolved once from custody: the exact post-quantum
-  // key the set records for us, or nothing. If we are the post-quantum validator but do not
-  // custody that exact key, we must not start an active group with a key we cannot sign
-  // with -- refuse and stay a full node, never fall back to the network keyring.
+  // key the set records for us, or nothing. If we do not custody that exact key, we must not
+  // start an active group with a key we cannot sign with -- refuse and stay a full node,
+  // never fall back to the network keyring.
   const tos::ValidatorId local_vid{validator_id.bits256_value()};
   auto pq_signer = pq_custody_.get_matching_store(local_vid, *descr);
-  if (descr->is_pq() && pq_signer == nullptr) {
+  if (pq_signer == nullptr) {
     LOG(ERROR) << "refusing to create validator group for " << shard.to_str()
                << ": this node is post-quantum validator " << local_vid.value.to_hex()
                << " but does not custody the exact consensus key the set records for it; validation for this shard is "

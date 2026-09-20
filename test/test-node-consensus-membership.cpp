@@ -32,6 +32,7 @@
 #include <utility>
 #include <vector>
 
+#include "block/validator-session-members.h"
 #include "tos/tos-types.h"
 #include "validator/node-consensus-status.h"
 
@@ -191,6 +192,24 @@ int main() {
     validator::PqConsensusCustody empty_custody;
     check("matching_store_refuses_when_nothing_is_custodied",
           empty_custody.get_matching_store(pq_id, matched) == nullptr);
+
+    // validate_pq_consensus_descriptor: the one question the manager (before creating a
+    // group) and the consensus bus (before starting one) both ask, so they cannot disagree
+    // on what a usable consensus key is. It must accept only a well-formed PQ descriptor.
+    check("usable_descriptor_is_accepted", block::validate_pq_consensus_descriptor(matched).is_ok());
+    check("classical_descriptor_is_refused", block::validate_pq_consensus_descriptor(classical).is_error());
+    check("unadmitted_algorithm_is_refused", block::validate_pq_consensus_descriptor(wrong_algo).is_error());
+
+    // A public key of the wrong length cannot be the suite's key.
+    ValidatorDescr short_pk{pq_id, 1, held_key, held_pk.substr(0, held_pk.size() - 1), 1, bits_with_first_byte(0xc0)};
+    check("short_public_key_is_refused", block::validate_pq_consensus_descriptor(short_pk).is_error());
+
+    // A key id that does not derive from the public key it travels with: here the held
+    // key's id is paired with a different (but well-formed) public key.
+    ValidatorDescr mismatched_id{
+        pq_id, 1, held_key, other_store->consensus_key().public_key, 1, bits_with_first_byte(0xc0)};
+    check("key_id_not_deriving_from_public_key_is_refused",
+          block::validate_pq_consensus_descriptor(mismatched_id).is_error());
   }
 
   if (failures == 0) {

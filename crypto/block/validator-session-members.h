@@ -51,6 +51,18 @@ std::vector<tos::tl_object_ptr<tos::tos_api::engine_validator_GroupMember>> vali
 // rule from being restated at each call site and drifting.
 td::Bits256 validator_adnl_identity(const tos::ValidatorDescr& descr);
 
+// Whether a descriptor carries a usable post-quantum consensus key.
+//
+// The post-quantum consensus path verifies with the key the set records, so a descriptor
+// it cannot verify with must be refused before anything is built on it: a classical
+// descriptor (whose consensus key is Ed25519), an unadmitted algorithm, a public key of
+// the wrong length, or a key id that does not derive from that public key. Answering this
+// in one place keeps the manager, which refuses to create a validator group, and the
+// consensus bus, which refuses to start one, from drifting apart on what "usable" means.
+//
+// Returns OK, or an error naming which of those it failed.
+td::Status validate_pq_consensus_descriptor(const tos::ValidatorDescr& descr);
+
 class ValidatorSet;
 
 // Whether a collate request may be served.

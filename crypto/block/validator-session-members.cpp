@@ -14,10 +14,12 @@
     You should have received a copy of the GNU Lesser General Public License
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include <cstring>
 #include <keys/keys.hpp>
 
 #include "block/validator-session-members.h"
 #include "block/validator-set.h"
+#include "pq/pq-consensus.h"
 
 namespace block {
 
@@ -36,6 +38,27 @@ std::vector<tos::tl_object_ptr<tos::tos_api::engine_validator_GroupMember>> vali
     }
   }
   return members;
+}
+
+td::Status validate_pq_consensus_descriptor(const tos::ValidatorDescr& descr) {
+  if (!descr.is_pq()) {
+    return td::Status::Error("validator descriptor is classical; the post-quantum consensus path does not accept it");
+  }
+  const auto algorithm_id = static_cast<tos::pq::PQAlgorithmId>(descr.algorithm_id);
+  if (!tos::pq::is_admitted(algorithm_id)) {
+    return td::Status::Error(PSTRING() << "validator descriptor names an unadmitted consensus algorithm "
+                                       << descr.algorithm_id);
+  }
+  if (descr.pq_public_key.size() != tos::pq::mldsa44_public_key_bytes) {
+    return td::Status::Error(PSTRING() << "validator descriptor's consensus public key is "
+                                       << descr.pq_public_key.size() << " bytes, expected "
+                                       << tos::pq::mldsa44_public_key_bytes);
+  }
+  auto derived = tos::pq::derive_key_id(algorithm_id, descr.pq_public_key);
+  if (!derived || std::memcmp(derived->data(), descr.key_id.value.data(), 32) != 0) {
+    return td::Status::Error("validator descriptor's consensus key id does not derive from its public key");
+  }
+  return td::Status::OK();
 }
 
 td::Bits256 validator_adnl_identity(const tos::ValidatorDescr& descr) {

@@ -365,27 +365,17 @@ class BridgeImpl final : public IValidatorGroup {
     size_t idx = 0;
     ValidatorWeight total_weight = 0;
     for (const auto& el : params_.validator_set->export_vector()) {
-      // The Simplex bus is post-quantum only. A classical descriptor's consensus key is
-      // Ed25519, which N4 does not verify, so refuse to start rather than Ed25519-verify,
-      // fall back, or abort -- the node stays a full node until the set is post-quantum.
-      if (!el.is_pq()) {
-        LOG(ERROR) << "consensus: refusing to start a Simplex group -- a validator descriptor is classical, and the "
-                      "post-quantum consensus path does not accept it";
+      // The Simplex bus is post-quantum only, and verifies with the key the set records.
+      // The manager validates the whole set before creating this group, so reaching a
+      // descriptor it cannot verify with is an invariant break rather than an expected
+      // input -- refuse to start rather than verify with a malformed key, and stay a full
+      // node. Both sides ask the same question through one helper so they cannot drift.
+      if (auto usable = block::validate_pq_consensus_descriptor(el); usable.is_error()) {
+        LOG(ERROR) << "consensus: refusing to start a Simplex group -- " << usable.move_as_error();
         refused = true;
         break;
       }
-      // Validate the consensus key the set records: an admitted algorithm, the exact
-      // public-key length, and a key id that derives from that public key. A descriptor
-      // that fails this is refused, not signed against with a malformed key.
       const auto algorithm_id = static_cast<tos::pq::PQAlgorithmId>(el.algorithm_id);
-      auto derived_key_id = tos::pq::derive_key_id(algorithm_id, el.pq_public_key);
-      if (!tos::pq::is_admitted(algorithm_id) || el.pq_public_key.size() != tos::pq::mldsa44_public_key_bytes ||
-          !derived_key_id || std::memcmp(derived_key_id->data(), el.key_id.value.data(), 32) != 0) {
-        LOG(ERROR) << "consensus: refusing to start a Simplex group -- a validator descriptor's post-quantum consensus "
-                      "key is malformed or its key id does not derive from its public key";
-        refused = true;
-        break;
-      }
 
       // The transport/overlay identity, from the descriptor's explicit ADNL address, never
       // from the consensus key.
