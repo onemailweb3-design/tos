@@ -11,6 +11,26 @@ target_link_libraries(test-consensus PRIVATE
     validator
 )
 
+# N4.2/N4.3 — the live sign->verify round through PeerValidator::check_signature.
+add_executable(test-n4-consensus-verify test-n4-consensus-verify.cpp)
+set_target_properties(test-n4-consensus-verify PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(test-n4-consensus-verify PRIVATE
+    validator
+    tos_validator
+    adnl
+    overlay
+    dht
+    tl_api
+    tl-utils
+    tos_crypto
+    tos_pq_consensus_signer
+    tos_pq_consensus
+    tos_mldsa44
+    tdactor
+    tdutils
+)
+add_test(NAME n4-consensus-verify COMMAND test-n4-consensus-verify)
+
 add_executable(test-validator-manager-resource-policy test-validator-manager-resource-policy.cpp)
 target_link_libraries(test-validator-manager-resource-policy PRIVATE
     adnl
