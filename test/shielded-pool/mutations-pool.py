@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 POOL = ROOT / 'crypto/smartcont/tos-shielded-pool-v1.fc'
 CONTRACTS = ROOT / 'tosctl/src/node-control/contracts'
 SUITE = 'shielded_pool_sandbox'
+TRANSACT_SUITE = 'shielded_pool_transact_sandbox'
 
 LEDGER_TEST = 'a_deposit_is_the_note_the_contract_computed_at_the_index_it_assigned'
 NOTE_TEST = 'the_depositor_cannot_choose_its_note'
@@ -33,6 +34,10 @@ FUNDING_TEST = 'a_deposit_must_fund_its_principal_and_its_execution'
 SHAPE_TEST = 'only_a_configured_denomination_and_the_frozen_body_shape_are_accepted'
 TOPUP_TEST = 'a_plain_top_up_and_a_bounce_change_no_shielded_state'
 RESERVE_TEST = 'a_reserve_top_up_adds_balance_and_nothing_else'
+ORDER_TEST = 'each_step_fails_with_its_own_code_and_in_its_own_place'
+ATOMIC_TEST = 'a_failure_at_any_step_changes_nothing'
+COST_TEST = 'a_transact_costs_more_than_the_default_network_gas_limit_allows'
+PROOF_TEST = 'a_proof_that_does_not_verify_stops_the_transaction'
 
 
 @dataclass
@@ -43,6 +48,9 @@ class Case:
     before: str
     after: str
     expect: str
+    # The deposit path and the transact path have suites of their own; a
+    # mutation is only evidence against the suite that can see it.
+    suite: str = SUITE
 
 
 CASES = [
@@ -86,9 +94,13 @@ CASES = [
     Case('note-payload', 'the payload does not reach the note', POOL,
          '  int note_body = note_body_commitment(owner_commitment, deposit_amount, data_hash);',
          '  int note_body = note_body_commitment(owner_commitment, deposit_amount, 0);', NOTE_TEST),
+    # Both handlers assign a leaf index the same way, so this anchor carries
+    # the deposit path's own comment with it.
     Case('leaf-index', 'the leaf is committed at the wrong index', POOL,
-         '  int leaf_index = commitment_next_index;',
-         '  int leaf_index = commitment_next_index + 1;', LEDGER_TEST),
+         """;; 9. the leaf index is the contract's, not the sender's.
+  int leaf_index = commitment_next_index;""",
+         """;; 9. the leaf index is the contract's, not the sender's.
+  int leaf_index = commitment_next_index + 1;""", LEDGER_TEST),
     Case('leaf-counter', 'the counter does not advance with the tree', POOL,
          '  set_data(state_build(commitment_root, leaf_index + 1,',
          '  set_data(state_build(commitment_root, leaf_index,', LEDGER_TEST),
@@ -113,20 +125,45 @@ CASES = [
          '  if (op == op_reserve_topup()) {\n    handle_deposit(msg_value, in_msg_body);',
          RESERVE_TEST),
 
+    # Section 16.2: the transact handler's order and its rules.
+    Case('transact-funding', 'a transact need not pay for its own compute', POOL,
+         '  throw_unless(203, msg_value >= get_compute_fee(0, transact_gas_ceiling()));',
+         '  throw_unless(203, msg_value >= 0);', ORDER_TEST, TRANSACT_SUITE),
+    Case('transact-withdrawal', 'the unimplemented withdrawal path is entered', POOL,
+         '  throw_unless(206, public_amount_out == 0);\n', '', ORDER_TEST, TRANSACT_SUITE),
+    Case('transact-validity', 'the intent has no window', POOL,
+         '  check_intent_validity(valid_until, now());\n', '', ORDER_TEST, TRANSACT_SUITE),
+    Case('transact-anchor', 'any anchor is accepted', POOL,
+         '  anchor_require_valid(anchors, anchor_kind, anchor_id, anchor_root,\n                       commitment_root, now());\n',
+         '', ORDER_TEST, TRANSACT_SUITE),
+    Case('transact-authorize', 'the signatures are never checked', POOL,
+         '  (int key_hash_0, int key_hash_1) =\n    authorize_intent(public_key_0, signature_0, public_key_1, signature_1, intent_digest);\n',
+         '', ORDER_TEST, TRANSACT_SUITE),
+    Case('transact-nullifier-sequence', 'the second witness is judged against the first tree', POOL,
+         '  (temp_nullifier_root, temp_nullifier_next) =\n    imt_insert(temp_nullifier_root, temp_nullifier_next, nullifier_1, witness_1);',
+         '  (temp_nullifier_root, temp_nullifier_next) =\n    imt_insert(nullifier_root, nullifier_next_index, nullifier_1, witness_1);',
+         ORDER_TEST, TRANSACT_SUITE),
+    Case('transact-proof', 'the proof is never verified', POOL,
+         '  groth16_require_valid(vk, proof_a, proof_b, proof_c, inputs);\n', '',
+         PROOF_TEST, TRANSACT_SUITE),
+    Case('transact-gas-ceiling', 'the ceiling is below what the path needs', POOL,
+         'int transact_gas_ceiling() asm "2000000 PUSHINT";',
+         'int transact_gas_ceiling() asm "5000 PUSHINT";', ORDER_TEST, TRANSACT_SUITE),
+
     # A message with no operation must not be mistaken for one.
     Case('empty-body', 'a body too short to hold an operation is parsed anyway', POOL,
          '  if (in_msg_body.slice_bits() < 32) {\n    return ();\n  }\n', '', TOPUP_TEST),
 ]
 
 
-def run_suite() -> subprocess.CompletedProcess:
+def run_suite(suite: str = SUITE) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env['PATH'] = str(Path.home() / '.cargo/bin') + os.pathsep + env.get('PATH', '')
     env['CARGO_TERM_COLOR'] = 'never'
     # TOS_ROOT only locates the built func/fift toolchain and stdlib.fc; the
     # library under test is found from the crate manifest, inside this tree.
     env.setdefault('TOS_ROOT', str(Path.home() / 'tos-privacy'))
-    return subprocess.run(['cargo', 'test', '--test', SUITE, '--', '--test-threads=1'],
+    return subprocess.run(['cargo', 'test', '--test', suite, '--', '--test-threads=1'],
                           cwd=CONTRACTS, capture_output=True, text=True, timeout=3600, env=env)
 
 
@@ -142,10 +179,12 @@ def main() -> int:
     if options.only and len(cases) != len(options.only):
         raise SystemExit(f'unknown case name in {options.only}')
 
-    baseline = run_suite()
-    if baseline.returncode:
-        raise SystemExit('the suite is not green before any mutation:\n'
-                         + baseline.stdout + baseline.stderr)
+    baseline_suites = sorted({c.suite for c in cases})
+    for suite in baseline_suites:
+        baseline = run_suite(suite)
+        if baseline.returncode:
+            raise SystemExit(f'{suite} is not green before any mutation:\n'
+                             + baseline.stdout + baseline.stderr)
     print('baseline green', flush=True)
 
     survivors = []
@@ -156,7 +195,7 @@ def main() -> int:
             raise SystemExit(f'{case.name}: anchor appears {count} times, expected once')
         try:
             case.path.write_text(original.replace(case.before, case.after))
-            result = run_suite()
+            result = run_suite(case.suite)
             failures = failed_tests(result.stdout + result.stderr)
             if result.returncode == 0:
                 survivors.append(f'{case.name}: the suite stayed green')
@@ -173,9 +212,11 @@ def main() -> int:
         finally:
             case.path.write_text(original)
 
-    restored = run_suite()
-    if restored.returncode:
-        raise SystemExit('the suite did not come back green:\n' + restored.stdout + restored.stderr)
+    for suite in baseline_suites:
+        again = run_suite(suite)
+        if again.returncode:
+            raise SystemExit(f'{suite} did not come back green:\n'
+                             + again.stdout + again.stderr)
     print('green again', flush=True)
 
     if survivors:

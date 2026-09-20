@@ -31,7 +31,8 @@ use chain_block::{
     BuilderData, Cell, IBitstring, MsgAddressInt, Serializable, StateInit, TrComputePhase,
 };
 use tos_sandbox::{Blockchain, MessageBuilder, SendResult, compile_func_with_stdlib};
-use tos_vm::stack::StackItem;
+
+mod shielded_pool_library;
 
 const TOS: u64 = 1_000_000_000;
 const ACTIVE_VERSION: u32 = 17;
@@ -45,6 +46,9 @@ const EPOCH_NONE: u32 = 0xffff_ffff;
 const OP_DEPOSIT: u32 = 0x5348_5001;
 const OP_TRANSACT: u32 = 0x5348_5002;
 const OP_RESERVE_TOPUP: u32 = 0x5348_5003;
+/// Not one of the three. The contract has to refuse an operation it does
+/// not have before it parses anything that follows it.
+const OP_UNKNOWN: u32 = 0x5348_50ff;
 
 const DEPOSIT_GAS_CEILING: i64 = 500_000;
 const RESERVE_FLOOR: u64 = 5 * TOS;
@@ -288,19 +292,8 @@ impl Pool {
             .expect("blockchain at version 17");
         bc.set_workchain(0);
         let payer = bc.treasury("depositor", 100_000 * TOS).expect("treasury");
-        let library = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../crypto/smartcont");
-        let code = compile_func_with_stdlib(&[
-            std::path::PathBuf::from(format!("{library}/shielded/domains.fc")),
-            std::path::PathBuf::from(format!("{library}/shielded/empty-roots.fc")),
-            std::path::PathBuf::from(format!("{library}/shielded/notes.fc")),
-            std::path::PathBuf::from(format!("{library}/shielded/tree.fc")),
-            std::path::PathBuf::from(format!("{library}/shielded/auth.fc")),
-            std::path::PathBuf::from(format!("{library}/shielded/payload.fc")),
-            std::path::PathBuf::from(format!("{library}/shielded/anchors.fc")),
-            std::path::PathBuf::from(format!("{library}/shielded/state.fc")),
-            std::path::PathBuf::from(format!("{library}/tos-shielded-pool-v1.fc")),
-        ])
-        .expect("compile the pool (needs build/crypto/func)");
+        let code = compile_func_with_stdlib(&shielded_pool_library::pool_sources())
+            .expect("compile the pool (needs build/crypto/func)");
         let si = StateInit::with_code_and_data(code, genesis_state());
         let hash = si.write_to_new_cell().unwrap().into_cell().unwrap().hash(0);
         let addr = MsgAddressInt::with_params(0, hash).unwrap();
@@ -563,9 +556,16 @@ fn only_a_configured_denomination_and_the_frozen_body_shape_are_accepted() {
     no_ref.append_raw(&owner, 256).unwrap();
     pool.send(TOS + COMPUTE_FEE, no_ref.into_cell().unwrap()).expect_exit_code(200);
 
-    // An operation this contract does not have.
+    // An operation this contract does not have. It has to be one of none of
+    // them: OP_TRANSACT used to stand in here, and once transact was built
+    // this case stopped testing the dispatch and started testing that
+    // handler's body shape instead.
+    assert!(
+        ![OP_DEPOSIT, OP_TRANSACT, OP_RESERVE_TOPUP].contains(&OP_UNKNOWN),
+        "the unknown operation is one the contract has"
+    );
     let mut other = BuilderData::new();
-    other.append_u32(OP_TRANSACT).unwrap();
+    other.append_u32(OP_UNKNOWN).unwrap();
     pool.send(TOS + COMPUTE_FEE, other.into_cell().unwrap()).expect_exit_code(201);
 
     assert_eq!(pool.get("commitment_next_index"), "0", "a refused message appended a leaf");

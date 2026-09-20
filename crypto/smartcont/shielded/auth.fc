@@ -103,7 +103,7 @@ int mldsa44_public_key_tail_bytes() inline {
 ;; 4.1. pq_auth_key_hash is computed from the actual canonical 1312-byte public
 ;; key byte chain, never from a pre-hashed input:
 ;;   uint256_be(SHA256("TOS-SHIELDED-MLDSA44-PK-v1" || pk_bytes)) mod r
-int pq_auth_key_hash(cell public_key) {
+int pq_auth_key_hash(cell public_key) impure {
   int full = pq_chain_chunk_bytes();
   (slice c0, cell rest) = pq_chain_chunk(public_key, full, 1);
   (slice c1, rest) = pq_chain_chunk(rest, full, 1);
@@ -143,8 +143,12 @@ int verify_intent_signature(cell public_key, cell signature, int digest) impure 
 ;; every transaction, and the two hashes go on to positions 9 and 10 of the
 ;; public input vector of section 10. Hashing the key also proves its byte chain
 ;; is the canonical 1312-byte one before the verifier is asked to read it.
+;; impure, and not as decoration: this function's whole job is to throw. A
+;; caller that only wants the two key hashes would otherwise leave its results
+;; unused, and FunC may drop a call to a pure function whose results nobody
+;; reads -- taking both signature checks with it.
 (int, int) authorize_intent(cell public_key_0, cell signature_0,
-                            cell public_key_1, cell signature_1, int digest) {
+                            cell public_key_1, cell signature_1, int digest) impure {
   int key_hash_0 = pq_auth_key_hash(public_key_0);
   int key_hash_1 = pq_auth_key_hash(public_key_1);
   throw_unless(137, verify_intent_signature(public_key_0, signature_0, digest));

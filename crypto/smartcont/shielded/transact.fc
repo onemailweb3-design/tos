@@ -174,26 +174,17 @@ int recovery_hash_for(int public_amount_out, int recovery_owner_commitment,
 
 ;; --- section 10: the eighteen, in the frozen order --------------------------
 
-tuple transact_public_inputs(slice body) impure {
-  (int query_id, int anchor_kind, int anchor_id, int valid_until,
-   int public_amount_out, int withdrawal_fee, slice recipient, int intent_digest,
-   cell proof_bundle, cell output_bundle, cell auth_bundle, cell witness_bundle) =
-    transact_parse(body);
-
-  ;; Section 13.3: every shape first, before anything expensive. A message
-  ;; that is not the frozen shape should cost a parse, not eleven SHA-256 runs
-  ;; over three kilobytes.
-  (int anchor_root, int nullifier_0, int nullifier_1, cell note_bodies, cell groth16_proof) =
-    proof_bundle_parse(proof_bundle);
-  (int note_body_0, int note_body_1, int note_body_2) = note_bodies_parse(note_bodies);
-  (_, _) = groth16_proof_parse(groth16_proof);
-  (int recovery_owner_commitment, cell data_0, cell data_1, cell data_2, cell recovery_data) =
-    output_bundle_parse(output_bundle);
-  (cell public_key_0, _, cell public_key_1, _) = auth_bundle_parse(auth_bundle);
-  ;; The witnesses are not public inputs, but their shape is part of the
-  ;; message and is checked here so that nothing downstream has to assume it.
-  (_, _) = witness_bundle_parse(witness_bundle);
-
+;; Section 10's eighteen, built from pieces already parsed. Split out from the
+;; parse so that a handler can check funding and install its gas ceiling before
+;; paying for eleven SHA-256 runs over three kilobytes of payload.
+tuple public_inputs_of(int anchor_root, int nullifier_0, int nullifier_1,
+                       int note_body_0, int note_body_1, int note_body_2,
+                       cell data_0, cell data_1, cell data_2,
+                       cell public_key_0, cell public_key_1,
+                       int public_amount_out, int withdrawal_fee,
+                       slice recipient, int valid_until,
+                       int recovery_owner_commitment, cell recovery_data,
+                       int intent_digest) impure {
   tuple inputs = empty_tuple();
   inputs = inputs.tpush(anchor_root);                       ;;  0
   inputs = inputs.tpush(nullifier_0);                       ;;  1
@@ -215,4 +206,34 @@ tuple transact_public_inputs(slice body) impure {
                                           recovery_data));  ;; 16
   inputs = inputs.tpush(intent_digest);                     ;; 17
   return inputs;
+}
+
+tuple transact_public_inputs(slice body) impure {
+  (int query_id, int anchor_kind, int anchor_id, int valid_until,
+   int public_amount_out, int withdrawal_fee, slice recipient, int intent_digest,
+   cell proof_bundle, cell output_bundle, cell auth_bundle, cell witness_bundle) =
+    transact_parse(body);
+
+  ;; Section 13.3: every shape first, before anything expensive. A message
+  ;; that is not the frozen shape should cost a parse, not eleven SHA-256 runs
+  ;; over three kilobytes.
+  (int anchor_root, int nullifier_0, int nullifier_1, cell note_bodies, cell groth16_proof) =
+    proof_bundle_parse(proof_bundle);
+  (int note_body_0, int note_body_1, int note_body_2) = note_bodies_parse(note_bodies);
+  (_, _) = groth16_proof_parse(groth16_proof);
+  (int recovery_owner_commitment, cell data_0, cell data_1, cell data_2, cell recovery_data) =
+    output_bundle_parse(output_bundle);
+  (cell public_key_0, _, cell public_key_1, _) = auth_bundle_parse(auth_bundle);
+  ;; The witnesses are not public inputs, but their shape is part of the
+  ;; message and is checked here so that nothing downstream has to assume it.
+  (_, _) = witness_bundle_parse(witness_bundle);
+
+  return public_inputs_of(anchor_root, nullifier_0, nullifier_1,
+                          note_body_0, note_body_1, note_body_2,
+                          data_0, data_1, data_2,
+                          public_key_0, public_key_1,
+                          public_amount_out, withdrawal_fee,
+                          recipient, valid_until,
+                          recovery_owner_commitment, recovery_data,
+                          intent_digest);
 }

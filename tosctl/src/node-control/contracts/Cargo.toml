@@ -24,6 +24,9 @@ errno = "0.3"
 [dev-dependencies]
 tokio = "1.48.0"
 tos_sandbox = { path = '../../sandbox' }
+# Test-only: raising the network gas limit to measure a path the default
+# configuration cannot run to completion.
+tos_executor = { path = '../../executor' }
 tos_vm = { path = '../../vm' }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 tempfile = "3"
