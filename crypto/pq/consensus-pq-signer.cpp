@@ -15,8 +15,25 @@ struct ValidatorPQKeyStore::Secret {
   }
 };
 
-ValidatorPQKeyStore::ValidatorPQKeyStore(ValidatorPQKeyStore&&) noexcept = default;
-ValidatorPQKeyStore& ValidatorPQKeyStore::operator=(ValidatorPQKeyStore&&) noexcept = default;
+// The signature counter is an atomic and so not movable; it is carried across by value.
+// A moved-from store keeps its own count, which is correct: the tally belongs to the key
+// material that is moving, not to the shell left behind.
+ValidatorPQKeyStore::ValidatorPQKeyStore(ValidatorPQKeyStore&& other) noexcept
+    : key_(std::move(other.key_))
+    , secret_(std::move(other.secret_))
+    , consensus_signatures_produced_(other.consensus_signatures_produced_.load(std::memory_order_relaxed)) {
+}
+
+ValidatorPQKeyStore& ValidatorPQKeyStore::operator=(ValidatorPQKeyStore&& other) noexcept {
+  if (this != &other) {
+    key_ = std::move(other.key_);
+    secret_ = std::move(other.secret_);
+    consensus_signatures_produced_.store(other.consensus_signatures_produced_.load(std::memory_order_relaxed),
+                                         std::memory_order_relaxed);
+  }
+  return *this;
+}
+
 ValidatorPQKeyStore::~ValidatorPQKeyStore() = default;
 
 std::optional<ValidatorPQKeyStore> ValidatorPQKeyStore::from_seed(std::string_view seed) noexcept {
@@ -40,7 +57,11 @@ std::optional<ValidatorPQKeyStore> ValidatorPQKeyStore::generate() noexcept {
 }
 
 std::optional<ConsensusPQSignature> ValidatorPQKeyStore::sign_consensus(std::string_view message) const noexcept {
-  return detail::sign_under(key_, secret_ ? secret_->sk.data() : nullptr, simplex_sign_context, message);
+  auto signature = detail::sign_under(key_, secret_ ? secret_->sk.data() : nullptr, simplex_sign_context, message);
+  if (signature.has_value()) {
+    consensus_signatures_produced_.fetch_add(1, std::memory_order_relaxed);
+  }
+  return signature;
 }
 
 std::optional<ConsensusPQSignature> ValidatorPQKeyStore::sign_config_vote(std::string_view message) const noexcept {

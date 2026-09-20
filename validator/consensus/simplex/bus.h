@@ -12,10 +12,53 @@
 
 namespace tos::validator::consensus::simplex {
 
+// One of this node's own votes, as the journal held it at startup. An empty signature
+// means only the intent was durable: the vote decision was committed but no signature
+// ever became observable, so the node may sign it once more. A present signature is the
+// exact evidence this node already emitted, and is replayed rather than reproduced.
+struct BootstrapVote {
+  Vote vote;
+  td::int64 seqno = 0;
+  td::BufferSlice signature;
+};
+
 struct BroadcastVote {
   using ReturnType = td::Unit;
 
   Vote vote;
+
+  std::string contents_to_string() const;
+};
+
+// The two halves of this node's own vote journal. They are awaited requests rather than
+// notifications on purpose: the order below is the correctness property, and incidental
+// actor fan-out cannot be relied on to place a durable write ahead of a local apply or a
+// network send.
+//
+//   commit the intent -> sign -> commit the exact signed bytes -> apply -> broadcast
+//
+// The intent commits the vote decision, which is what stops the node choosing a different
+// vote for the same slot across a crash. The signed record commits the bytes themselves.
+// Until that second write returns, nothing may apply the vote locally, put it in a
+// certificate or send it, because ML-DSA-44 signing is randomized: a signature produced
+// again after a restart is equally valid and a different object, and a peer may already
+// hold the first one inside a certificate.
+struct PersistOwnVoteIntent {
+  // The journal sequence number this vote was committed under. The signed record replaces
+  // the intent under the same key and must carry the same number.
+  using ReturnType = td::int64;
+
+  Vote vote;
+
+  std::string contents_to_string() const;
+};
+
+struct PersistOwnSignedVote {
+  using ReturnType = td::Unit;
+
+  Vote vote;
+  td::int64 seqno;
+  td::BufferSlice signature;
 
   std::string contents_to_string() const;
 };
@@ -92,8 +135,8 @@ struct QueryResolverTrackedStateCount {
 
 enum class SkippedSlotResolution { ResolveCandidate, UseAvailableBase };
 
-td::Result<SkippedSlotResolution> select_skipped_slot_resolution(
-    const CandidateId& requested, bool is_skipped, std::optional<CandidateId> notarized);
+td::Result<SkippedSlotResolution> select_skipped_slot_resolution(const CandidateId& requested, bool is_skipped,
+                                                                 std::optional<CandidateId> notarized);
 
 struct StoreCandidate {
   using ReturnType = td::Unit;
@@ -148,14 +191,22 @@ struct QueryValidatorGroupInfo {
 class Bus : public consensus::Bus {
  public:
   using Parent = consensus::Bus;
-  using Events = td::TypeList<BroadcastVote, NotarizationObserved, FinalizationObserved, LeaderWindowObserved,
-                              WaitForParent, ResolveCandidate, StoreCandidate, ResolveState, SaveCertificate,
-                              QueryValidatorGroupInfo, QuerySlotSkipped, QueryResolverTrackedStateCount>;
+  using Events = td::TypeList<BroadcastVote, PersistOwnVoteIntent, PersistOwnSignedVote, NotarizationObserved,
+                              FinalizationObserved, LeaderWindowObserved, WaitForParent, ResolveCandidate,
+                              StoreCandidate, ResolveState, SaveCertificate, QueryValidatorGroupInfo, QuerySlotSkipped,
+                              QueryResolverTrackedStateCount>;
 
   Bus() = default;
 
   std::vector<CertificateRef<Vote>> bootstrap_certificates;
-  std::vector<Vote> bootstrap_votes;
+  std::vector<BootstrapVote> bootstrap_votes;
+
+  // Set when the journal held a record this node cannot honestly replay: a signed vote
+  // whose stored bytes do not verify under the consensus key the set records for us. The
+  // node must not manufacture a replacement signature for a vote it may already have
+  // emitted, so the group starts quiescent rather than voting. Empty when the journal was
+  // consistent.
+  std::string vote_journal_failure;
 
   td::uint32 first_nonannounced_window = 0;
 };

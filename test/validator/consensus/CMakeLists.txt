@@ -174,6 +174,14 @@ set_tests_properties(
     PROPERTIES ENVIRONMENT
         "TOS_SIMPLEX_STATE_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_FINALIZED_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_CANDIDATE_RETENTION_SLOTS=8"
 )
+# N4.4 — the two-phase own-vote journal: signed records replay byte for byte, an
+# intent-only record is signed once, and a record this node cannot verify as its own
+# stops the group instead of producing a second signature.
+add_test(
+    NAME test-consensus-simplex2-vote-journal
+    COMMAND test-consensus --duration 30 --n-nodes 1 --target-rate-ms 50
+            --net-ping 0:0 --vote-journal-test
+)
 add_test(
     NAME test-consensus-simplex2-empty-chain-restart
     COMMAND test-consensus --duration 110 --n-nodes 1 --target-rate-ms 1

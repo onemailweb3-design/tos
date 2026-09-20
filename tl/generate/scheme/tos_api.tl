@@ -1243,7 +1243,12 @@ consensus.simplex.certificate vote:consensus.simplex.UnsignedVote signatures:con
 consensus.simplex.candidateAndCert candidate:bytes notar:bytes = consensus.simplex.CandidateAndCert;
 
 consensus.simplex.db.key.vote vote_hash:int256 = consensus.simplex.db.key.Vote;
-consensus.simplex.db.ourVote vote:consensus.simplex.UnsignedVote seqno:long = consensus.simplex.db.Vote;
+// This node's own vote, in its two durable states under one key. The intent commits the
+// vote decision before anything is signed; the signed record commits the exact signature
+// bytes before they are allowed to affect local state or leave the process, so a restart
+// replays what was emitted instead of signing again.
+consensus.simplex.db.ourVoteIntent vote:consensus.simplex.UnsignedVote seqno:long = consensus.simplex.db.Vote;
+consensus.simplex.db.ourSignedVote vote:consensus.simplex.UnsignedVote seqno:long signature:bytes = consensus.simplex.db.Vote;
 consensus.simplex.db.cert cert:consensus.simplex.Certificate = consensus.simplex.db.Vote;
 
 consensus.simplex.db.key.poolState = consensus.simplex.db.key.PoolState;

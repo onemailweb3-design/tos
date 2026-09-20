@@ -126,6 +126,7 @@ bool MALICIOUS_OBSERVER_ATTACK = false;
 bool RELAY_LOOP_TEST = false;
 bool QUERY_ABUSE_TEST = false;
 bool EMPTY_CHAIN_RESTART_TEST = false;
+bool VOTE_JOURNAL_TEST = false;
 std::atomic<bool> EMPTY_CHAIN_MANAGER_ANCHOR_UNAVAILABLE = false;
 std::atomic<size_t> EMPTY_CHAIN_MANAGER_ANCHOR_FAILURES = 0;
 double CATCH_UP_DOWNTIME = -1.0;
@@ -145,13 +146,13 @@ class TestOverlayNode;
 class TestOverlay : public td::actor::Actor {
  public:
   void register_node(size_t idx, size_t instance_idx, td::actor::ActorId<TestOverlayNode> node) {
-    Instance &inst = get_inst(idx, instance_idx);
+    Instance& inst = get_inst(idx, instance_idx);
     CHECK(inst.actor.empty());
     inst.actor = std::move(node);
   }
 
   void unregister_node(size_t idx, size_t instance_idx) {
-    Instance &inst = get_inst(idx, instance_idx);
+    Instance& inst = get_inst(idx, instance_idx);
     CHECK(!inst.actor.empty());
     inst.actor = {};
   }
@@ -183,7 +184,7 @@ class TestOverlay : public td::actor::Actor {
   std::set<size_t> adaptive_byzantine_nodes_;
   td::uint64 adaptive_byzantine_epoch_ = 0;
 
-  Instance &get_inst(size_t idx, size_t instance_idx) {
+  Instance& get_inst(size_t idx, size_t instance_idx) {
     if (nodes_.size() <= idx) {
       nodes_.resize(idx + 1);
     }
@@ -222,7 +223,7 @@ class TestOverlayNode : public td::actor::SpawnsWith<Bus>, public td::actor::Con
   TOS_RUNTIME_DEFINE_EVENT_HANDLER();
 
   void start_up() override {
-    instance_idx_ = dynamic_cast<const TestSimplexBus &>(*owning_bus()).instance_idx;
+    instance_idx_ = dynamic_cast<const TestSimplexBus&>(*owning_bus()).instance_idx;
     td::actor::send_closure(test_overlay, &TestOverlay::register_node, owning_bus()->local_id->idx.value(),
                             instance_idx_, actor_id(this));
   }
@@ -230,7 +231,7 @@ class TestOverlayNode : public td::actor::SpawnsWith<Bus>, public td::actor::Con
   void tear_down() override {
     td::actor::send_closure(test_overlay, &TestOverlay::unregister_node, owning_bus()->local_id->idx.value(),
                             instance_idx_);
-    for (auto &[_, query] : active_queries_) {
+    for (auto& [_, query] : active_queries_) {
       td::actor::send_closure(query, &Query::set_result, td::Status::Error(ErrorCode::cancelled, "cancelled"));
     }
   }
@@ -283,8 +284,8 @@ class TestOverlayNode : public td::actor::SpawnsWith<Bus>, public td::actor::Con
     auto query = td::actor::create_actor<Query>("q", std::move(promise), message->timeout).release();
     size_t idx = next_query_idx_++;
     active_queries_[idx] = query;
-    td::actor::send_closure(test_overlay, &TestOverlay::send_query, *bus->local_id, instance_idx_,
-                            destination, message->request.data.clone(),
+    td::actor::send_closure(test_overlay, &TestOverlay::send_query, *bus->local_id, instance_idx_, destination,
+                            message->request.data.clone(),
                             td::PromiseCreator::lambda([query](td::Result<td::BufferSlice> R) {
                               if (R.is_ok()) {
                                 td::actor::send_closure(query, &Query::set_result, ProtocolMessage{R.move_as_ok()});
@@ -353,7 +354,7 @@ td::actor::Task<> TestOverlay::send_message(PeerValidator src, size_t src_instan
     co_return td::Status::Error("adaptive Byzantine protocol-message omission");
   }
   co_await before_receive(src.idx.value(), src_instance_idx, dst_idx, false);
-  for (const auto &instance : nodes_[dst_idx]) {
+  for (const auto& instance : nodes_[dst_idx]) {
     if (instance.actor.empty() || instance.disabled) {
       continue;
     }
@@ -368,7 +369,7 @@ td::actor::Task<> TestOverlay::send_candidate(PeerValidator src, size_t src_inst
     co_return td::Status::Error("adaptive Byzantine candidate omission");
   }
   co_await before_receive(src.idx.value(), src_instance_idx, dst_idx, true);
-  for (const auto &instance : nodes_[dst_idx]) {
+  for (const auto& instance : nodes_[dst_idx]) {
     if (instance.actor.empty() || instance.disabled) {
       continue;
     }
@@ -386,7 +387,7 @@ td::actor::Task<td::BufferSlice> TestOverlay::send_query(PeerValidator src, size
     co_return td::Status::Error("no instances");
   }
   auto dst_instance_idx = (size_t)td::Random::fast(0, (int)nodes_[dst_idx].size() - 1);
-  const auto &instance = nodes_[dst_idx][dst_instance_idx];
+  const auto& instance = nodes_[dst_idx][dst_instance_idx];
   co_await before_receive(src.idx.value(), src_instance_idx, dst_idx, true);
   if (instance.actor.empty() || instance.disabled) {
     co_return td::Status::Error("instance is stopped/disabled");
@@ -529,7 +530,7 @@ class TestDbImpl : public consensus::Db {
 
   explicit TestDbImpl(std::shared_ptr<DbInner> db) : db_(std::move(db)) {
     std::scoped_lock lock(db_->mutex);
-    for (auto &[key, value] : db_->map) {
+    for (auto& [key, value] : db_->map) {
       snapshot_.emplace(key.clone(), value.clone());
     }
   }
@@ -544,9 +545,9 @@ class TestDbImpl : public consensus::Db {
   }
   std::vector<std::pair<td::BufferSlice, td::BufferSlice>> get_by_prefix(td::uint32 prefix) const override {
     std::vector<std::pair<td::BufferSlice, td::BufferSlice>> result;
-    td::BufferSlice begin{(const char *)&prefix, 4};
+    td::BufferSlice begin{(const char*)&prefix, 4};
     td::uint32 prefix2 = prefix + 1;
-    td::BufferSlice end{(const char *)&prefix2, 4};
+    td::BufferSlice end{(const char*)&prefix2, 4};
     for (auto it = snapshot_.lower_bound(begin); it != snapshot_.end() && it->first < end; ++it) {
       result.emplace_back(it->first.clone(), it->second.clone());
     }
@@ -606,14 +607,14 @@ class TestConsensus : public td::actor::Actor {
     } else {
       accepted_blocks_[seqno] = block;
     }
-    Instance &inst = nodes_[node_idx].instances[instance_idx];
+    Instance& inst = nodes_[node_idx].instances[instance_idx];
     inst.last_accepted_block = std::max(inst.last_accepted_block, seqno);
     if (last_accepted_block_.seqno() < seqno && signatures->is_final()) {
       last_accepted_block_ = block_id;
       last_accepted_block_leader_idx_ = creator_idx;
       if (!EMPTY_CHAIN_RESTART_TEST) {
-        for (Node &node : nodes_) {
-          for (Instance &inst : node.instances) {
+        for (Node& node : nodes_) {
+          for (Instance& inst : node.instances) {
             if (inst.status == Instance::Running) {
               inst.bus.publish<BlockFinalizedInMasterchain>(block_id);
             }
@@ -626,13 +627,13 @@ class TestConsensus : public td::actor::Actor {
 
   void on_candidate_relay(size_t node_idx, size_t instance_idx, BlockIdExt block_id) {
     auto key = std::make_tuple(node_idx, instance_idx, block_id);
-    auto &count = candidate_relay_counts_[key];
+    auto& count = candidate_relay_counts_[key];
     ++count;
     ++candidate_relay_total_;
     if (count > 1) {
       relay_loop_detected_ = true;
-      LOG(ERROR) << "Candidate relay emitted duplicate block " << block_id.to_str() << " from node #" << node_idx
-                 << "." << instance_idx;
+      LOG(ERROR) << "Candidate relay emitted duplicate block " << block_id.to_str() << " from node #" << node_idx << "."
+                 << instance_idx;
     }
   }
 
@@ -696,9 +697,9 @@ class TestConsensus : public td::actor::Actor {
 
     std::vector<ValidatorDescr> validator_descrs;
     for (size_t idx = 0; idx < nodes_.size(); ++idx) {
-      Node &node = nodes_[idx];
+      Node& node = nodes_[idx];
       const auto validator_id = tos::ValidatorId{node.node_id.bits256_value()};
-      const auto &consensus_key = node.pq_store->consensus_key();
+      const auto& consensus_key = node.pq_store->consensus_key();
       tos::ConsensusKeyId key_id;
       std::memcpy(key_id.value.data(), consensus_key.key_id.data(), 32);
       validator_descrs.push_back(ValidatorDescr(validator_id, /*algorithm_id=*/1, key_id, consensus_key.public_key,
@@ -716,7 +717,7 @@ class TestConsensus : public td::actor::Actor {
     test_overlay = td::actor::create_actor<TestOverlay>("test-overlay");
 
     for (size_t idx = 0; idx < N_NODES; ++idx) {
-      Node &node = nodes_[idx];
+      Node& node = nodes_[idx];
       size_t n_instances = idx < N_DOUBLE_NODES ? 2 : 1;
       for (size_t i = 0; i < n_instances; ++i) {
         Instance inst;
@@ -752,8 +753,11 @@ class TestConsensus : public td::actor::Actor {
     if (EMPTY_CHAIN_RESTART_TEST) {
       run_empty_chain_restart_test().start().detach();
     }
+    if (VOTE_JOURNAL_TEST) {
+      run_vote_journal_test().start().detach();
+    }
 
-    if (!EMPTY_CHAIN_RESTART_TEST) {
+    if (!EMPTY_CHAIN_RESTART_TEST && !VOTE_JOURNAL_TEST) {
       run_write_status().start().detach();
     }
 
@@ -765,6 +769,14 @@ class TestConsensus : public td::actor::Actor {
       if (!empty_chain_restart_completed_ && empty_chain_restart_error_.empty()) {
         empty_chain_restart_error_ = "timed out waiting for the empty-chain restart test";
       }
+    } else if (VOTE_JOURNAL_TEST) {
+      auto deadline = td::Timestamp::in(DURATION);
+      while (!vote_journal_completed_ && vote_journal_error_.empty() && !deadline.is_in_past()) {
+        co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+      }
+      if (!vote_journal_completed_ && vote_journal_error_.empty()) {
+        vote_journal_error_ = "timed out waiting for the vote journal test";
+      }
     } else {
       co_await td::actor::coro_sleep(td::Timestamp::in(DURATION));
     }
@@ -775,8 +787,8 @@ class TestConsensus : public td::actor::Actor {
   td::actor::Task<> run_write_status() {
     while (!finishing_) {
       std::string s;
-      for (auto &n : nodes_) {
-        for (auto &inst : n.instances) {
+      for (auto& n : nodes_) {
+        for (auto& inst : n.instances) {
           s += "-X"[inst.status == Instance::Running];
         }
       }
@@ -787,10 +799,10 @@ class TestConsensus : public td::actor::Actor {
   }
 
   void start_instance(size_t node_idx, size_t instance_idx) {
-    Node &node = nodes_[node_idx];
-    Instance &inst = node.instances[instance_idx];
+    Node& node = nodes_[node_idx];
+    Instance& inst = node.instances[instance_idx];
     CHECK(inst.status == Instance::Stopped);
-    auto &runtime = inst.runtime;
+    auto& runtime = inst.runtime;
     BlockAccepter::register_in(runtime);
     BlockProducer::register_in(runtime);
     BlockValidator::register_in(runtime);
@@ -817,7 +829,7 @@ class TestConsensus : public td::actor::Actor {
     bus->pq_signer = nodes_[node_idx].pq_store;
     bus->validator_opts = ValidatorManagerOptions::create(BlockIdExt{}, BlockIdExt{});
     bus->validator_set = validators_;
-    for (const auto &validator : validators_) {
+    for (const auto& validator : validators_) {
       bus->all_validators.push_back(validator.adnl_id);
     }
     bus->total_weight = total_weight_;
@@ -844,8 +856,8 @@ class TestConsensus : public td::actor::Actor {
   }
 
   td::actor::Task<> stop_instance(size_t node_idx, size_t instance_idx) {
-    Node &node = nodes_[node_idx];
-    Instance &inst = node.instances[instance_idx];
+    Node& node = nodes_[node_idx];
+    Instance& inst = node.instances[instance_idx];
     if (inst.status == Instance::Stopped) {
       co_return td::Unit{};
     }
@@ -864,7 +876,7 @@ class TestConsensus : public td::actor::Actor {
     inst.status = Instance::Stopped;
     inst.runtime = {};
     LOG(ERROR) << "Stopped node #" << node_idx << "." << instance_idx;
-    for (auto &promise : inst.extra_stop_waiters) {
+    for (auto& promise : inst.extra_stop_waiters) {
       promise.set_value(td::Unit{});
     }
     inst.extra_stop_waiters.clear();
@@ -994,11 +1006,10 @@ class TestConsensus : public td::actor::Actor {
     auto observer = adnl::AdnlNodeIdShort{observer_bits};
     td::BufferSlice fake_signature(64);
     std::memset(fake_signature.data(), 0x5a, fake_signature.size());
-    auto vote = create_serialize_tl_object<simplex::tl::vote>(
-        simplex::SkipVote{0}.to_tl(), std::move(fake_signature));
+    auto vote = create_serialize_tl_object<simplex::tl::vote>(simplex::SkipVote{0}.to_tl(), std::move(fake_signature));
     for (int repeat = 0; repeat < 2; ++repeat) {
-      for (auto &node : nodes_) {
-        for (auto &inst : node.instances) {
+      for (auto& node : nodes_) {
+        for (auto& inst : node.instances) {
           if (inst.status == Instance::Running) {
             inst.bus.publish<IncomingProtocolMessage>(std::nullopt, observer, vote.clone());
             ++malicious_observer_messages_;
@@ -1018,14 +1029,12 @@ class TestConsensus : public td::actor::Actor {
     td::Bits256 observer_bits;
     td::Random::secure_bytes(observer_bits.as_slice());
     auto observer = adnl::AdnlNodeIdShort{observer_bits};
-    auto &bus = nodes_[0].instances[0].bus;
+    auto& bus = nodes_[0].instances[0].bus;
     const auto limit = bus->config.noncritical_params.candidate_resolve_rate_limit;
     for (td::uint32 index = 0; index < limit + 3; ++index) {
       CandidateId id{.slot = 1000000 + index, .hash = td::Bits256{}};
-      auto data = create_serialize_tl_object<tos_api::consensus_simplex_requestCandidate>(
-          id.to_tl(), true, true);
-      auto request = std::make_shared<IncomingOverlayRequest>(
-          std::nullopt, observer, std::move(data));
+      auto data = create_serialize_tl_object<tos_api::consensus_simplex_requestCandidate>(id.to_tl(), true, true);
+      auto request = std::make_shared<IncomingOverlayRequest>(std::nullopt, observer, std::move(data));
       auto result = co_await bus.publish(std::move(request)).wrap();
       if (result.is_ok()) {
         ++query_abuse_accepted_;
@@ -1037,9 +1046,8 @@ class TestConsensus : public td::actor::Actor {
     // leave permanent per-id state behind. Count only entries at or above the
     // injected slot base so legitimate in-flight consensus state (low slots)
     // does not mask a regression: this must be zero.
-    query_abuse_tracked_states_ = co_await bus.publish(
-        std::make_shared<simplex::QueryResolverTrackedStateCount>(simplex::QueryResolverTrackedStateCount{
-            .min_slot = 1000000}));
+    query_abuse_tracked_states_ = co_await bus.publish(std::make_shared<simplex::QueryResolverTrackedStateCount>(
+        simplex::QueryResolverTrackedStateCount{.min_slot = 1000000}));
     query_abuse_completed_ = true;
     co_return td::Unit{};
   }
@@ -1119,6 +1127,289 @@ class TestConsensus : public td::actor::Actor {
     return result;
   }
 
+  // ===== N4.4: this node's own vote journal =====
+  //
+  // The property under test is not "the node persists its votes". It is that the first
+  // signature bytes allowed to become observable are already durable, and that from then on
+  // those exact bytes are what comes back. ML-DSA-44 signing is randomized, so a node that
+  // signs again after a restart produces a second valid signature for a vote a peer may
+  // already hold inside a certificate.
+  struct JournalledVote {
+    td::BufferSlice key;
+    td::BufferSlice value;
+    bool is_signed = false;
+    td::int64 seqno = 0;
+    td::BufferSlice signature;
+    tos_api::consensus_simplex_UnsignedVote* vote = nullptr;  // owned by `parsed`
+    tl_object_ptr<tos_api::consensus_simplex_db_Vote> parsed;
+  };
+
+  // Every record this node wrote about a vote of its own, in journal order. Certificates
+  // share the key prefix and are deliberately excluded: they are peers' signatures, not
+  // this node's commitment.
+  std::vector<JournalledVote> own_vote_journal(const Instance& instance) const {
+    std::vector<std::pair<td::BufferSlice, td::BufferSlice>> raw;
+    {
+      std::scoped_lock lock(instance.db_inner->mutex);
+      const td::uint32 prefix = tos_api::consensus_simplex_db_key_vote::ID;
+      for (const auto& [key, value] : instance.db_inner->map) {
+        if (key.size() >= sizeof(prefix) && std::memcmp(key.data(), &prefix, sizeof(prefix)) == 0) {
+          raw.emplace_back(key.clone(), value.clone());
+        }
+      }
+    }
+
+    std::vector<JournalledVote> result;
+    for (auto& [key, value] : raw) {
+      auto parsed_r = fetch_tl_object<tos_api::consensus_simplex_db_Vote>(value, true);
+      if (parsed_r.is_error()) {
+        continue;
+      }
+      JournalledVote entry;
+      entry.key = key.clone();
+      entry.value = value.clone();
+      entry.parsed = parsed_r.move_as_ok();
+      bool is_own_vote = false;
+      auto intent_fn = [&](tos_api::consensus_simplex_db_ourVoteIntent& record) {
+        is_own_vote = true;
+        entry.seqno = record.seqno_;
+        entry.vote = record.vote_.get();
+      };
+      auto signed_fn = [&](tos_api::consensus_simplex_db_ourSignedVote& record) {
+        is_own_vote = true;
+        entry.is_signed = true;
+        entry.seqno = record.seqno_;
+        entry.signature = record.signature_.clone();
+        entry.vote = record.vote_.get();
+      };
+      auto cert_fn = [&](tos_api::consensus_simplex_db_cert&) {};
+      tos_api::downcast_call(*entry.parsed, td::overloaded(intent_fn, signed_fn, cert_fn));
+      if (is_own_vote) {
+        result.push_back(std::move(entry));
+      }
+    }
+    std::sort(result.begin(), result.end(),
+              [](const JournalledVote& a, const JournalledVote& b) { return a.seqno < b.seqno; });
+    return result;
+  }
+
+  void overwrite_journal_record(const Instance& instance, td::Slice key, td::BufferSlice value) const {
+    std::scoped_lock lock(instance.db_inner->mutex);
+    auto it = instance.db_inner->map.find(td::BufferSlice{key});
+    CHECK(it != instance.db_inner->map.end());
+    it->second = std::move(value);
+  }
+
+  td::actor::Task<> run_vote_journal_test() {
+    auto& instance = nodes_[0].instances[0];
+    const auto& store = *nodes_[0].pq_store;
+
+    auto fail = [&](std::string message) { vote_journal_error_ = std::move(message); };
+
+    // --- Phase 1: what the node journalled about its own votes is signed and verifiable ---
+    //
+    // Stopping the node is itself a crash point, so a vote whose intent was committed when
+    // the stop arrived is legitimately left as an intent; that is the state the journal
+    // exists to express, and phase 3 shows how it recovers. What must hold here is that
+    // every record the node did finish carries a signature it can prove is its own.
+    constexpr size_t REQUIRED_VOTES = 4;
+    auto signed_count = [&] {
+      auto journal = own_vote_journal(instance);
+      return std::count_if(journal.begin(), journal.end(), [](const JournalledVote& v) { return v.is_signed; });
+    };
+    auto deadline = td::Timestamp::in(DURATION * 0.4);
+    while (static_cast<size_t>(signed_count()) < REQUIRED_VOTES && !deadline.is_in_past()) {
+      co_await td::actor::coro_sleep(td::Timestamp::in(0.01));
+    }
+    co_await stop_instance(0, 0);
+
+    auto before = own_vote_journal(instance);
+    std::vector<const JournalledVote*> before_signed;
+    size_t before_intents = 0;
+    for (const auto& entry : before) {
+      if (!entry.is_signed) {
+        ++before_intents;
+        continue;
+      }
+      if (entry.signature.size() != tos::pq::mldsa44_signature_bytes) {
+        fail(PSTRING() << "a journalled signature is " << entry.signature.size() << " bytes");
+        co_return td::Unit{};
+      }
+      if (!validators_[0].check_signature(SESSION_ID, serialize_tl_object(entry.vote, true), entry.signature)) {
+        fail("a journalled signature does not verify under this node's consensus key");
+        co_return td::Unit{};
+      }
+      before_signed.push_back(&entry);
+    }
+    if (before_signed.size() < REQUIRED_VOTES) {
+      fail(PSTRING() << "the node journalled only " << before_signed.size() << " signed votes of its own, out of "
+                     << before.size() << " records");
+      co_return td::Unit{};
+    }
+
+    // --- Phase 2: a restart replays the stored bytes and signs nothing again ---
+    auto signatures_before = store.consensus_signatures_produced();
+    start_instance(0, 0);
+    auto replay_deadline = td::Timestamp::in(DURATION * 0.2);
+    while (own_vote_journal(instance).size() <= before.size() && !replay_deadline.is_in_past()) {
+      co_await td::actor::coro_sleep(td::Timestamp::in(0.01));
+    }
+    co_await stop_instance(0, 0);
+
+    auto after = own_vote_journal(instance);
+    std::map<td::Slice, const JournalledVote*> after_by_key;
+    for (const auto& entry : after) {
+      after_by_key.emplace(entry.key.as_slice(), &entry);
+    }
+    for (const auto* entry : before_signed) {
+      auto it = after_by_key.find(entry->key.as_slice());
+      if (it == after_by_key.end()) {
+        fail(PSTRING() << "a journalled vote disappeared across the restart, seqno " << entry->seqno);
+        co_return td::Unit{};
+      }
+      // Byte identity of the whole record, which covers the signature inside it.
+      if (it->second->value.as_slice() != entry->value.as_slice()) {
+        fail(PSTRING() << "a journalled vote was rewritten across the restart, seqno " << entry->seqno);
+        co_return td::Unit{};
+      }
+    }
+    // Replaying an already-signed vote must not reach the signer at all. The restart may
+    // sign only the votes it newly journalled, plus the intents left behind by the stop.
+    auto new_votes = after.size() - before.size();
+    auto signatures_made = store.consensus_signatures_produced() - signatures_before;
+    if (signatures_made > new_votes + before_intents) {
+      fail(PSTRING() << "the restart produced " << signatures_made << " signatures for " << new_votes
+                     << " new votes and " << before_intents
+                     << " recovered intents; replay re-signed votes it already held");
+      co_return td::Unit{};
+    }
+
+    // --- Phase 3: a crash between the intent and the signature is re-signed exactly once ---
+    // The crash window is reproduced by putting the journal back into the state it would
+    // have been left in: the decision committed, the signature not. Nothing could have
+    // observed that vote, so signing it again introduces no second object.
+    const JournalledVote* newest_signed = nullptr;
+    size_t after_intents = 0;
+    for (const auto& entry : after) {
+      if (entry.is_signed) {
+        newest_signed = &entry;
+      } else {
+        ++after_intents;
+      }
+    }
+    if (newest_signed == nullptr) {
+      fail("no signed vote survived the restart to downgrade");
+      co_return td::Unit{};
+    }
+    auto downgraded_key = newest_signed->key.clone();
+    auto downgraded_seqno = newest_signed->seqno;
+    auto original_record = newest_signed->value.clone();
+    auto original_signature = newest_signed->signature.clone();
+    overwrite_journal_record(instance, downgraded_key.as_slice(),
+                             create_serialize_tl_object<tos_api::consensus_simplex_db_ourVoteIntent>(
+                                 take_unsigned_vote(original_record), downgraded_seqno));
+
+    signatures_before = store.consensus_signatures_produced();
+    auto journalled_before = own_vote_journal(instance).size();
+    start_instance(0, 0);
+    auto resign_deadline = td::Timestamp::in(DURATION * 0.2);
+    while (!resign_deadline.is_in_past()) {
+      auto current = own_vote_journal(instance);
+      auto it = std::find_if(current.begin(), current.end(),
+                             [&](const JournalledVote& v) { return v.key.as_slice() == downgraded_key.as_slice(); });
+      if (it != current.end() && it->is_signed) {
+        break;
+      }
+      co_await td::actor::coro_sleep(td::Timestamp::in(0.01));
+    }
+    co_await stop_instance(0, 0);
+
+    auto resigned = own_vote_journal(instance);
+    auto resigned_it = std::find_if(resigned.begin(), resigned.end(), [&](const JournalledVote& v) {
+      return v.key.as_slice() == downgraded_key.as_slice();
+    });
+    if (resigned_it == resigned.end() || !resigned_it->is_signed) {
+      fail("an intent-only vote was not signed and committed on restart");
+      co_return td::Unit{};
+    }
+    if (!validators_[0].check_signature(SESSION_ID, serialize_tl_object(resigned_it->vote, true),
+                                        resigned_it->signature)) {
+      fail("the re-signed vote does not verify under this node's consensus key");
+      co_return td::Unit{};
+    }
+    // Randomized signing: the replacement must be a different object, which is exactly why
+    // this may only happen for a signature that never escaped.
+    if (resigned_it->signature.as_slice() == original_signature.as_slice()) {
+      fail("the re-signed vote reproduced the original signature byte for byte");
+      co_return td::Unit{};
+    }
+    auto resign_new_votes = resigned.size() - journalled_before;
+    auto resign_signatures = store.consensus_signatures_produced() - signatures_before;
+    // One signature for the downgraded vote, plus at most one per newly journalled vote and
+    // per intent the previous stop had left behind. Anything more means replay signed votes
+    // it already held.
+    if (resign_signatures < 1 || resign_signatures > resign_new_votes + after_intents + 1) {
+      fail(PSTRING() << "recovering one intent-only vote produced " << resign_signatures << " signatures for "
+                     << resign_new_votes << " new votes and " << after_intents << " carried-over intents");
+      co_return td::Unit{};
+    }
+
+    // --- Phase 4: a signature this node cannot verify as its own stops the group ---
+    // The node must not paper over it by signing again: it cannot know what it already
+    // told the network, and a fresh signature would be a second object for that vote.
+    const JournalledVote* to_corrupt = nullptr;
+    for (const auto& entry : resigned) {
+      if (entry.is_signed) {
+        to_corrupt = &entry;
+      }
+    }
+    if (to_corrupt == nullptr) {
+      fail("no signed vote survived to corrupt");
+      co_return td::Unit{};
+    }
+    auto corrupted = to_corrupt->value.clone();
+    auto corrupt_key = to_corrupt->key.clone();
+    auto corrupt_signature = to_corrupt->signature.clone();
+    corrupt_signature.as_slice()[0] = static_cast<char>(corrupt_signature.as_slice()[0] ^ 0x01);
+    overwrite_journal_record(instance, corrupt_key.as_slice(),
+                             create_serialize_tl_object<tos_api::consensus_simplex_db_ourSignedVote>(
+                                 take_unsigned_vote(corrupted), to_corrupt->seqno, std::move(corrupt_signature)));
+
+    signatures_before = store.consensus_signatures_produced();
+    journalled_before = own_vote_journal(instance).size();
+    start_instance(0, 0);
+    co_await td::actor::coro_sleep(td::Timestamp::in(std::min(DURATION * 0.2, 1.0)));
+    co_await stop_instance(0, 0);
+
+    auto quiescent = own_vote_journal(instance);
+    if (quiescent.size() != journalled_before) {
+      fail(PSTRING() << "the group kept voting with an unusable journal: " << journalled_before << " -> "
+                     << quiescent.size() << " records");
+      co_return td::Unit{};
+    }
+    if (store.consensus_signatures_produced() != signatures_before) {
+      fail("the group signed a vote with an unusable journal");
+      co_return td::Unit{};
+    }
+
+    LOG(WARNING) << "Vote journal: " << before.size() << " signed records replayed byte-for-byte, one intent-only "
+                 << "vote re-signed once, and an unverifiable record stopped the group";
+    vote_journal_completed_ = true;
+    co_return td::Unit{};
+  }
+
+  // Move the unsigned vote out of a serialized journal record, whichever state it is in.
+  static tl_object_ptr<tos_api::consensus_simplex_UnsignedVote> take_unsigned_vote(td::Slice record) {
+    auto parsed = fetch_tl_object<tos_api::consensus_simplex_db_Vote>(record, true).move_as_ok();
+    tl_object_ptr<tos_api::consensus_simplex_UnsignedVote> vote;
+    tos_api::downcast_call(
+        *parsed, td::overloaded([&](tos_api::consensus_simplex_db_ourVoteIntent& r) { vote = std::move(r.vote_); },
+                                [&](tos_api::consensus_simplex_db_ourSignedVote& r) { vote = std::move(r.vote_); },
+                                [&](tos_api::consensus_simplex_db_cert&) {}));
+    CHECK(vote);
+    return vote;
+  }
+
   td::actor::Task<> run_empty_chain_restart_test() {
     // Keep the manager's masterchain-finalized watermark at genesis.  After
     // the first few real blocks, BlockProducer will therefore finalize only
@@ -1133,14 +1424,13 @@ class TestConsensus : public td::actor::Actor {
     }
     auto before_restart = candidate_record_count(instance);
     if (before_restart < EMPTY_CHAIN_LENGTH) {
-      empty_chain_restart_error_ =
-          PSTRING() << "built only " << before_restart << " candidates before the restart";
+      empty_chain_restart_error_ = PSTRING() << "built only " << before_restart << " candidates before the restart";
       co_return td::Unit{};
     }
     auto empty_chain_length = trailing_empty_candidate_count(instance);
     if (empty_chain_length <= 4096) {
-      empty_chain_restart_error_ =
-          PSTRING() << "built only " << empty_chain_length << " consecutive empty candidates before the restart";
+      empty_chain_restart_error_ = PSTRING() << "built only " << empty_chain_length
+                                             << " consecutive empty candidates before the restart";
       co_return td::Unit{};
     }
 
@@ -1155,15 +1445,13 @@ class TestConsensus : public td::actor::Actor {
 
     const size_t RECOVERY_CANDIDATES = SLOTS_PER_LEADER_WINDOW * 2;
     auto recovery_deadline = td::Timestamp::in(DURATION * 0.25);
-    while (candidate_record_count(instance) < stopped_count + RECOVERY_CANDIDATES &&
-           !recovery_deadline.is_in_past()) {
+    while (candidate_record_count(instance) < stopped_count + RECOVERY_CANDIDATES && !recovery_deadline.is_in_past()) {
       co_await td::actor::coro_sleep(td::Timestamp::in(0.01));
     }
     auto after_restart = candidate_record_count(instance);
     if (after_restart < stopped_count + RECOVERY_CANDIDATES) {
-      empty_chain_restart_error_ =
-          PSTRING() << "candidate production did not resume after resolving " << stopped_count
-                    << " persisted candidates; count after restart=" << after_restart;
+      empty_chain_restart_error_ = PSTRING() << "candidate production did not resume after resolving " << stopped_count
+                                             << " persisted candidates; count after restart=" << after_restart;
       co_return td::Unit{};
     }
 
@@ -1198,9 +1486,8 @@ class TestConsensus : public td::actor::Actor {
     auto final_anchor_failures = EMPTY_CHAIN_MANAGER_ANCHOR_FAILURES.load();
     if (final_anchor_failures != settled_anchor_failures) {
       empty_chain_restart_error_ =
-          PSTRING() << "manager anchor failures increased after startup requests settled: "
-                    << settled_anchor_failures << " -> " << final_anchor_failures
-                    << "; completed-ancestor cache was not reused";
+          PSTRING() << "manager anchor failures increased after startup requests settled: " << settled_anchor_failures
+                    << " -> " << final_anchor_failures << "; completed-ancestor cache was not reused";
       co_return td::Unit{};
     }
     LOG(WARNING) << "Long empty-chain restart recovered after " << empty_chain_length
@@ -1223,15 +1510,14 @@ class TestConsensus : public td::actor::Actor {
     LOG(WARNING) << "TEST RESULTS:";
     for (size_t idx = 0; idx < N_NODES; ++idx) {
       for (size_t inst_idx = 0; inst_idx < nodes_[idx].instances.size(); ++inst_idx) {
-        Instance &inst = nodes_[idx].instances[inst_idx];
+        Instance& inst = nodes_[idx].instances[inst_idx];
         LOG(WARNING) << "Node #" << idx << " instance #" << inst_idx << " : synced up to block "
                      << inst.last_accepted_block;
       }
     }
     if (last_accepted_block_.seqno() < MIN_FINALIZED_BLOCKS) {
-      co_return td::Status::Error(
-          PSTRING() << "finalized only " << last_accepted_block_.seqno() << " blocks, expected at least "
-                    << MIN_FINALIZED_BLOCKS);
+      co_return td::Status::Error(PSTRING() << "finalized only " << last_accepted_block_.seqno()
+                                            << " blocks, expected at least " << MIN_FINALIZED_BLOCKS);
     }
     if (MALICIOUS_OBSERVER_ATTACK && malicious_observer_messages_ == 0) {
       co_return td::Status::Error("malicious observer attack was not injected");
@@ -1249,28 +1535,27 @@ class TestConsensus : public td::actor::Actor {
         (!query_abuse_completed_ ||
          query_abuse_accepted_ != NewConsensusConfig{}.noncritical_params.candidate_resolve_rate_limit ||
          query_abuse_rejected_ != 3)) {
-      co_return td::Status::Error(
-          PSTRING() << "candidate query rate limit was not enforced: accepted=" << query_abuse_accepted_
-                    << " rejected=" << query_abuse_rejected_);
+      co_return td::Status::Error(PSTRING() << "candidate query rate limit was not enforced: accepted="
+                                            << query_abuse_accepted_ << " rejected=" << query_abuse_rejected_);
     }
     if (QUERY_ABUSE_TEST && query_abuse_tracked_states_ != 0) {
-      co_return td::Status::Error(
-          PSTRING() << "candidate requests for untracked ids grew the resolver state map: tracked_states="
-                    << query_abuse_tracked_states_);
+      co_return td::Status::Error(PSTRING()
+                                  << "candidate requests for untracked ids grew the resolver state map: tracked_states="
+                                  << query_abuse_tracked_states_);
     }
     if (CATCH_UP_DOWNTIME >= 0.0) {
       if (!catch_up_error_.empty()) {
         co_return td::Status::Error(catch_up_error_);
       }
       if (!catch_up_restarted_ || !catch_up_completed_) {
-        co_return td::Status::Error(
-            PSTRING() << "catch-up node did not reach restart target " << catch_up_target_
-                      << " (restarted=" << catch_up_restarted_ << ", completed=" << catch_up_completed_ << ")");
+        co_return td::Status::Error(PSTRING() << "catch-up node did not reach restart target " << catch_up_target_
+                                              << " (restarted=" << catch_up_restarted_
+                                              << ", completed=" << catch_up_completed_ << ")");
       }
       const auto caught_up_height = nodes_[catch_up_node_idx_].instances[0].last_accepted_block;
       if (caught_up_height + 2 < last_accepted_block_.seqno()) {
         co_return td::Status::Error(PSTRING() << "catch-up node ended at " << caught_up_height
-                                             << " while network finalized " << last_accepted_block_.seqno());
+                                              << " while network finalized " << last_accepted_block_.seqno());
       }
       size_t latest_get_count = 0;
       size_t latest_found_count = 0;
@@ -1293,6 +1578,14 @@ class TestConsensus : public td::actor::Actor {
       }
       if (!empty_chain_restart_completed_) {
         co_return td::Status::Error("long empty-chain restart did not complete");
+      }
+    }
+    if (VOTE_JOURNAL_TEST) {
+      if (!vote_journal_error_.empty()) {
+        co_return td::Status::Error(vote_journal_error_);
+      }
+      if (!vote_journal_completed_) {
+        co_return td::Status::Error("the vote journal test did not complete");
       }
     }
     co_return td::Unit{};
@@ -1350,6 +1643,8 @@ class TestConsensus : public td::actor::Actor {
   bool query_abuse_completed_ = false;
   bool empty_chain_restart_completed_ = false;
   std::string empty_chain_restart_error_;
+  bool vote_journal_completed_ = false;
+  std::string vote_journal_error_;
   bool finishing_ = false;
 };
 
@@ -1363,8 +1658,8 @@ td::actor::Task<> TestManagerFacade::accept_block(BlockIdExt id, td::Ref<BlockDa
                << " signatures), creator_idx=" << creator_idx;
   CHECK(id == data->block_id());
   if (signatures->is_final()) {
-    auto encoded = create_serialize_tl_object<tos_api::tosNode_blockFinalityBroadcast>(
-        create_tl_block_id(id), signatures->tl());
+    auto encoded =
+        create_serialize_tl_object<tos_api::tosNode_blockFinalityBroadcast>(create_tl_block_id(id), signatures->tl());
     auto decoded = fetch_tl_object<tos_api::tosNode_Broadcast>(std::move(encoded), true).move_as_ok();
     CHECK(decoded->get_id() == tos_api::tosNode_blockFinalityBroadcast::ID);
     auto finality = move_tl_object_as<tos_api::tosNode_blockFinalityBroadcast>(decoded);
@@ -1381,8 +1676,7 @@ td::actor::Task<> TestManagerFacade::accept_block(BlockIdExt id, td::Ref<BlockDa
 
     auto tampered_signature_tl = signatures->tl();
     CHECK(tampered_signature_tl->get_id() == tos_api::tosNode_signatureSet_simplex::ID);
-    auto *tampered_signature =
-        static_cast<tos_api::tosNode_signatureSet_simplex *>(tampered_signature_tl.get());
+    auto* tampered_signature = static_cast<tos_api::tosNode_signatureSet_simplex*>(tampered_signature_tl.get());
     CHECK(!tampered_signature->signatures_.empty());
     CHECK(!tampered_signature->signatures_.front()->signature_.empty());
     auto original_signature = tampered_signature->signatures_.front()->signature_.as_slice();
@@ -1395,8 +1689,7 @@ td::actor::Task<> TestManagerFacade::accept_block(BlockIdExt id, td::Ref<BlockDa
     CHECK(tampered_signature_set->check_signatures(validator_set_, id).is_error());
 
     auto wrong_validator_set_tl = signatures->tl();
-    auto *wrong_validator_set =
-        static_cast<tos_api::tosNode_signatureSet_simplex *>(wrong_validator_set_tl.get());
+    auto* wrong_validator_set = static_cast<tos_api::tosNode_signatureSet_simplex*>(wrong_validator_set_tl.get());
     wrong_validator_set->validator_set_hash_ ^= 0x01;
     auto wrong_validator_set_signatures = block::BlockSignatureSet::fetch(wrong_validator_set_tl);
     CHECK(wrong_validator_set_signatures.not_null());
@@ -1430,7 +1723,7 @@ void TestManagerFacade::send_block_candidate_broadcast(BlockIdExt id, td::Buffer
 }
 
 td::BufferSlice make_large_candidate_boc(td::uint32 leaf_count, td::uint32 salt, bool multi_root,
-                                         td::Bits256 &root_hash) {
+                                         td::Bits256& root_hash) {
   std::vector<td::Ref<vm::Cell>> level;
   level.reserve(leaf_count);
   for (td::uint32 i = 0; i < leaf_count; ++i) {
@@ -1471,19 +1764,17 @@ void test_configured_maximum_candidate() {
 
   size_t decompressed_size = 0;
   auto compressed = validatorsession::compress_candidate_data(block_data, collated_data, decompressed_size,
-                                                               "configured-maximum-test", block_root_hash)
+                                                              "configured-maximum-test", block_root_hash)
                         .move_as_ok();
   CHECK(decompressed_size <= static_cast<size_t>(max_envelope_size));
 
   auto src = from_hex("3333333333333333333333333333333333333333333333333333333333333333");
   auto envelope = create_serialize_tl_object<tos_api::validatorSession_compressedCandidate>(
       0, src, 10, block_root_hash, static_cast<int>(decompressed_size), compressed.clone());
-  auto decoded =
-      validatorsession::deserialize_candidate(envelope, true, max_envelope_size).move_as_ok();
+  auto decoded = validatorsession::deserialize_candidate(envelope, true, max_envelope_size).move_as_ok();
   CHECK(decoded->data_.as_slice() == block_data.as_slice());
   CHECK(decoded->collated_data_.as_slice() == collated_data.as_slice());
-  CHECK(validatorsession::deserialize_candidate(envelope, true, static_cast<int>(decompressed_size) - 1)
-            .is_error());
+  CHECK(validatorsession::deserialize_candidate(envelope, true, static_cast<int>(decompressed_size) - 1).is_error());
 }
 
 void test_candidate_relay_eviction() {
@@ -1611,10 +1902,10 @@ void test_state_resolver_inflight_admission() {
 }
 
 void test_skipped_slot_resolution_policy() {
-  CandidateId requested{.slot = 411, .hash = from_hex(
-                                            "1111111111111111111111111111111111111111111111111111111111111111")};
-  CandidateId conflicting{.slot = 411, .hash = from_hex(
-                                              "2222222222222222222222222222222222222222222222222222222222222222")};
+  CandidateId requested{.slot = 411,
+                        .hash = from_hex("1111111111111111111111111111111111111111111111111111111111111111")};
+  CandidateId conflicting{.slot = 411,
+                          .hash = from_hex("2222222222222222222222222222222222222222222222222222222222222222")};
 
   CHECK(simplex::select_skipped_slot_resolution(requested, false, std::nullopt).move_as_ok() ==
         simplex::SkippedSlotResolution::ResolveCandidate);
@@ -1746,7 +2037,7 @@ void test_simplex_db_finalized_slot_dedup() {
 
 }  // namespace
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   {
     auto authorized = from_hex("1111111111111111111111111111111111111111111111111111111111111111");
     auto unauthorized = from_hex("2222222222222222222222222222222222222222222222222222222222222222");
@@ -1756,7 +2047,8 @@ int main(int argc, char *argv[]) {
     CHECK(rules.check_rules(PublicKeyHash{authorized}, 2048, true, true) == overlay::BroadcastCheckResult::Forbidden);
     CHECK(rules.check_rules(PublicKeyHash{unauthorized}, 512, true, true) == overlay::BroadcastCheckResult::Forbidden);
     CHECK(rules.check_rules(PublicKeyHash{unauthorized}, 512, true, false) == overlay::BroadcastCheckResult::NeedCheck);
-    CHECK(rules.check_rules(PublicKeyHash{unauthorized}, 2048, false, false) == overlay::BroadcastCheckResult::Forbidden);
+    CHECK(rules.check_rules(PublicKeyHash{unauthorized}, 2048, false, false) ==
+          overlay::BroadcastCheckResult::Forbidden);
   }
 
   CHECK(should_replace_pending_finality(false, false, false));
@@ -2011,12 +2303,11 @@ int main(int argc, char *argv[]) {
     auto src = from_hex("1111111111111111111111111111111111111111111111111111111111111111");
     auto root_hash = td::Bits256{block_root->get_hash().bits()};
 
-    auto candidate = create_tl_object<tos_api::validatorSession_candidate>(
-        src, 7, root_hash, block_data.clone(), collated_data.clone());
+    auto candidate = create_tl_object<tos_api::validatorSession_candidate>(src, 7, root_hash, block_data.clone(),
+                                                                           collated_data.clone());
 
     auto raw = validatorsession::serialize_candidate(candidate, false).move_as_ok();
-    auto raw_decoded =
-        validatorsession::deserialize_candidate(raw, false, static_cast<int>(raw.size())).move_as_ok();
+    auto raw_decoded = validatorsession::deserialize_candidate(raw, false, static_cast<int>(raw.size())).move_as_ok();
     CHECK(raw_decoded->src_ == src);
     CHECK(raw_decoded->round_ == 7);
     CHECK(raw_decoded->root_hash_ == root_hash);
@@ -2025,16 +2316,14 @@ int main(int argc, char *argv[]) {
     CHECK(validatorsession::deserialize_candidate(raw, true, static_cast<int>(raw.size())).is_error());
 
     size_t decompressed_size = 0;
-    auto compressed = validatorsession::compress_candidate_data(block_data, collated_data, decompressed_size,
-                                                                 "test", root_hash)
-                          .move_as_ok();
+    auto compressed =
+        validatorsession::compress_candidate_data(block_data, collated_data, decompressed_size, "test", root_hash)
+            .move_as_ok();
     CHECK(decompressed_size <= static_cast<size_t>(std::numeric_limits<int>::max()));
     auto compressed_envelope = create_serialize_tl_object<tos_api::validatorSession_compressedCandidate>(
         0, src, 7, root_hash, static_cast<int>(decompressed_size), compressed.clone());
-    const int legacy_limit =
-        static_cast<int>(std::max(decompressed_size, static_cast<size_t>(compressed.size())));
-    auto legacy_decoded =
-        validatorsession::deserialize_candidate(compressed_envelope, true, legacy_limit).move_as_ok();
+    const int legacy_limit = static_cast<int>(std::max(decompressed_size, static_cast<size_t>(compressed.size())));
+    auto legacy_decoded = validatorsession::deserialize_candidate(compressed_envelope, true, legacy_limit).move_as_ok();
     CHECK(legacy_decoded->data_.as_slice() == block_data.as_slice());
     CHECK(legacy_decoded->collated_data_.as_slice() == collated_data.as_slice());
     CHECK(validatorsession::deserialize_candidate(compressed_envelope, true, static_cast<int>(decompressed_size) - 1)
@@ -2078,12 +2367,10 @@ int main(int argc, char *argv[]) {
         vm::boc_compress({block_root, collated_root}, vm::CompressionAlgorithm::ImprovedStructureLZ4).move_as_ok();
     auto improved_envelope = create_serialize_tl_object<tos_api::validatorSession_compressedCandidateV2>(
         0, src, 7, root_hash, improved.clone());
-    auto improved_decoded =
-        validatorsession::deserialize_candidate(improved_envelope, true, 1 << 20).move_as_ok();
+    auto improved_decoded = validatorsession::deserialize_candidate(improved_envelope, true, 1 << 20).move_as_ok();
     CHECK(improved_decoded->data_.as_slice() == block_data.as_slice());
     CHECK(improved_decoded->collated_data_.as_slice() == collated_data.as_slice());
-    CHECK(validatorsession::deserialize_candidate(improved_envelope, true,
-                                                  static_cast<int>(improved.size()) - 1)
+    CHECK(validatorsession::deserialize_candidate(improved_envelope, true, static_cast<int>(improved.size()) - 1)
               .is_error());
 
     auto corrupt_improved = improved.clone();
@@ -2092,12 +2379,10 @@ int main(int argc, char *argv[]) {
         0, src, 7, root_hash, std::move(corrupt_improved));
     CHECK(validatorsession::deserialize_candidate(corrupt_improved_envelope, true, 1 << 20).is_error());
 
-    auto baseline =
-        vm::boc_compress({block_root, collated_root}, vm::CompressionAlgorithm::BaselineLZ4).move_as_ok();
+    auto baseline = vm::boc_compress({block_root, collated_root}, vm::CompressionAlgorithm::BaselineLZ4).move_as_ok();
     auto baseline_envelope = create_serialize_tl_object<tos_api::validatorSession_compressedCandidateV2>(
         0, src, 7, root_hash, std::move(baseline));
-    auto baseline_decoded =
-        validatorsession::deserialize_candidate(baseline_envelope, true, 1 << 20).move_as_ok();
+    auto baseline_decoded = validatorsession::deserialize_candidate(baseline_envelope, true, 1 << 20).move_as_ok();
     CHECK(baseline_decoded->data_.as_slice() == block_data.as_slice());
     CHECK(baseline_decoded->collated_data_.as_slice() == collated_data.as_slice());
 
@@ -2108,13 +2393,11 @@ int main(int argc, char *argv[]) {
 
     td::BufferSlice unknown_algorithm(1);
     unknown_algorithm.data()[0] = static_cast<char>(0x7f);
-    auto unknown_algorithm_envelope =
-        create_serialize_tl_object<tos_api::validatorSession_compressedCandidateV2>(
-            0, src, 7, root_hash, std::move(unknown_algorithm));
+    auto unknown_algorithm_envelope = create_serialize_tl_object<tos_api::validatorSession_compressedCandidateV2>(
+        0, src, 7, root_hash, std::move(unknown_algorithm));
     CHECK(validatorsession::deserialize_candidate(unknown_algorithm_envelope, true, 1 << 20).is_error());
 
-    auto stateful = vm::boc_compress({block_root}, vm::CompressionAlgorithm::ImprovedStructureLZ4WithState,
-                                     block_root)
+    auto stateful = vm::boc_compress({block_root}, vm::CompressionAlgorithm::ImprovedStructureLZ4WithState, block_root)
                         .move_as_ok();
     auto stateful_envelope = create_serialize_tl_object<tos_api::validatorSession_compressedCandidateV2>(
         0, src, 7, root_hash, std::move(stateful));
@@ -2153,7 +2436,7 @@ int main(int argc, char *argv[]) {
     auto root_hash = td::Bits256{level.front()->get_hash().bits()};
     size_t decompressed_size = 0;
     auto compressed = validatorsession::compress_candidate_data(large_block_data, collated_data, decompressed_size,
-                                                                 "compression-ratio-test", root_hash)
+                                                                "compression-ratio-test", root_hash)
                           .move_as_ok();
     CHECK(decompressed_size > 400U * 1024U);
     CHECK(compressed.size() * 8U < decompressed_size);
@@ -2162,13 +2445,11 @@ int main(int argc, char *argv[]) {
     auto src = from_hex("2222222222222222222222222222222222222222222222222222222222222222");
     auto envelope = create_serialize_tl_object<tos_api::validatorSession_compressedCandidate>(
         0, src, 9, root_hash, static_cast<int>(decompressed_size), compressed.clone());
-    const int exact_limit =
-        static_cast<int>(std::max(decompressed_size, static_cast<size_t>(compressed.size())));
+    const int exact_limit = static_cast<int>(std::max(decompressed_size, static_cast<size_t>(compressed.size())));
     auto decoded = validatorsession::deserialize_candidate(envelope, true, exact_limit).move_as_ok();
     CHECK(decoded->data_.as_slice() == large_block_data.as_slice());
     CHECK(decoded->collated_data_.as_slice() == collated_data.as_slice());
-    CHECK(validatorsession::deserialize_candidate(envelope, true, static_cast<int>(decompressed_size) - 1)
-              .is_error());
+    CHECK(validatorsession::deserialize_candidate(envelope, true, static_cast<int>(decompressed_size) - 1).is_error());
 
     auto oversized_declaration = create_serialize_tl_object<tos_api::validatorSession_compressedCandidate>(
         0, src, 9, root_hash, exact_limit + 1, compressed.clone());
@@ -2323,17 +2604,16 @@ int main(int argc, char *argv[]) {
   p.add_option('\0', "malicious-observer-attack",
                "inject repeated protocol votes from a member with no validator identity",
                [&]() { MALICIOUS_OBSERVER_ATTACK = true; });
-  p.add_option('\0', "relay-loop-test",
-               "duplicate candidate arrival events and require candidate-relay deduplication",
+  p.add_option('\0', "relay-loop-test", "duplicate candidate arrival events and require candidate-relay deduplication",
                [&]() { RELAY_LOOP_TEST = true; });
-  p.add_option('\0', "query-abuse-test",
-               "flood candidate queries from one observer and require rate limiting",
+  p.add_option('\0', "query-abuse-test", "flood candidate queries from one observer and require rate limiting",
                [&]() { QUERY_ABUSE_TEST = true; });
   p.add_option('\0', "empty-chain-restart-test",
                "restart after more than 4096 consecutive empty candidates and require recovery",
                [&]() { EMPTY_CHAIN_RESTART_TEST = true; });
-  p.add_option('\0', "candidate-relay-eviction-test",
-               "fill the candidate-relay LRU and verify oldest-entry eviction",
+  p.add_option('\0', "vote-journal-test", "restart across the two-phase own-vote journal and require exact-byte replay",
+               [&]() { VOTE_JOURNAL_TEST = true; });
+  p.add_option('\0', "candidate-relay-eviction-test", "fill the candidate-relay LRU and verify oldest-entry eviction",
                [&]() { run_candidate_relay_eviction_test = true; });
   p.add_option('\0', "state-resolver-cache-unit-test",
                "verify completed-entry LRU ordering, bounds and failure removal",
@@ -2357,8 +2637,7 @@ int main(int argc, char *argv[]) {
                "verify bounded manager operation admission and exact-key idempotence",
                [&]() { run_validator_manager_resource_policy_unit_test = true; });
   p.add_checked_option('\0', "catch-up-downtime",
-                       "stop one validator for this many seconds, then require it to catch up",
-                       [&](td::Slice arg) {
+                       "stop one validator for this many seconds, then require it to catch up", [&](td::Slice arg) {
                          CATCH_UP_DOWNTIME = td::to_double(arg);
                          if (CATCH_UP_DOWNTIME < 0.0) {
                            return td::Status::Error(PSTRING() << "invalid catch-up downtime " << arg);
@@ -2431,6 +2710,7 @@ int main(int argc, char *argv[]) {
   CHECK(ADAPTIVE_BYZANTINE_N < N_NODES);
   CHECK(CATCH_UP_DOWNTIME < 0.0 || N_NODES >= 4);
   CHECK(!EMPTY_CHAIN_RESTART_TEST || N_NODES == 1);
+  CHECK(!VOTE_JOURNAL_TEST || N_NODES == 1);
   if (EMPTY_CHAIN_RESTART_TEST) {
     // Thousands of per-candidate WARNING lines dominate this stress test's
     // runtime and do not add coverage.

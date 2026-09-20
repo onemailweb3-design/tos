@@ -47,7 +47,8 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
     first_block_timeout_ = params_.first_block_timeout;
     state_.emplace(State({}));
 
-    for (const auto& vote : bus.bootstrap_votes) {
+    for (const auto& stored : bus.bootstrap_votes) {
+      const auto& vote = stored.vote;
       auto slot = state_->slot_at(vote.referenced_slot());
       if (!slot.has_value()) {
         continue;

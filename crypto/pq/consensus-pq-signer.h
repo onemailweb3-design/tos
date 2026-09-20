@@ -4,6 +4,7 @@
 // signatures under the consensus finality context only. Deliberately separate from
 // wallet signing and from the ADNL keyring / validator temp keys (which stay Ed25519).
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -33,6 +34,14 @@ class ValidatorPQKeyStore {
   // nullopt on backend failure; the returned signature is always signature_bytes long.
   std::optional<ConsensusPQSignature> sign_consensus(std::string_view message) const noexcept;
 
+  // How many consensus signatures this store has produced. Signing is randomized, so a
+  // signature this node cannot reproduce is one it must have kept; the count is how an
+  // operator, or a restart test, sees whether a recovery path signed anything at all.
+  // A correct journal replay of already-signed votes leaves it unchanged.
+  std::uint64_t consensus_signatures_produced() const noexcept {
+    return consensus_signatures_produced_.load(std::memory_order_relaxed);
+  }
+
   // Sign a validator's vote on a configuration proposal, under
   // validator_config_vote_context. The message is the preimage the configuration
   // contract rebuilds and verifies; this signs it, and decides nothing about it.
@@ -47,6 +56,7 @@ class ValidatorPQKeyStore {
   struct Secret;
   ConsensusPQKey key_{};
   std::unique_ptr<Secret> secret_;  // wiped on destruction
+  mutable std::atomic<std::uint64_t> consensus_signatures_produced_{0};
 };
 
 }  // namespace tos::pq

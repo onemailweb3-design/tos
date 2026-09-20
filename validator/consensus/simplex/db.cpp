@@ -14,8 +14,11 @@ namespace tl {
 using db_key_vote = tos_api::consensus_simplex_db_key_vote;
 using db_key_voteRef = tl_object_ptr<db_key_vote>;
 
-using db_ourVote = tos_api::consensus_simplex_db_ourVote;
-using db_ourVoteRef = tl_object_ptr<db_ourVote>;
+using db_ourVoteIntent = tos_api::consensus_simplex_db_ourVoteIntent;
+using db_ourVoteIntentRef = tl_object_ptr<db_ourVoteIntent>;
+
+using db_ourSignedVote = tos_api::consensus_simplex_db_ourSignedVote;
+using db_ourSignedVoteRef = tl_object_ptr<db_ourSignedVote>;
 
 using db_cert = tos_api::consensus_simplex_db_cert;
 using db_certRef = tl_object_ptr<db_cert>;
@@ -66,13 +69,19 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
 
   void alarm() override {
     LOG(WARNING) << "MEMORY_DIAGNOSTICS simplex-db saved_vote_hashes=" << saved_vote_hashes_.size()
-                 << " active_slots=" << saved_vote_hashes_.slot_count()
-                 << " evictions=" << saved_vote_hash_evictions_;
+                 << " active_slots=" << saved_vote_hashes_.slot_count() << " evictions=" << saved_vote_hash_evictions_;
     alarm_timestamp() = td::Timestamp::in(60.0);
   }
 
+  // Commit the decision to cast this vote, before anything is signed. Returns the journal
+  // sequence number the record was written under; the signed record replaces it under the
+  // same key and carries the same number.
+  //
+  // A failed write is consensus-significant and is reported, not swallowed: the caller must
+  // not sign a vote whose decision is not durable. This is deliberately unlike the other
+  // writes below, where losing a record costs nothing a restart cannot rebuild.
   template <>
-  td::actor::Task<> process(BusHandle, std::shared_ptr<BroadcastVote> event) {
+  td::actor::Task<td::int64> process(BusHandle, std::shared_ptr<PersistOwnVoteIntent> event) {
     auto referenced_slot = event->vote.referenced_slot();
     auto vote = event->vote.to_tl();
     auto hash = sha256_bits256(serialize_tl_object(vote, true));
@@ -81,16 +90,34 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
       co_return td::Status::Error(cancelled, "Vote was already casted");
     }
 
+    const auto seqno = next_seqno_++;
     auto key = create_serialize_tl_object<tl::db_key_vote>(hash);
-    auto value = create_serialize_tl_object<tl::db_ourVote>(std::move(vote), next_seqno_++);
+    auto value = create_serialize_tl_object<tl::db_ourVoteIntent>(std::move(vote), seqno);
 
-    auto result = co_await owning_bus()->db->set(std::move(key), std::move(value)).wrap();
-    // We explicitly do not handle write failures here. Handling them will require an already very
-    // complicated code in Pool to become even more complicated. If `set` returns `cancelled`, this
-    // means that the whole consensus bus is shutting down because the group was rotated and thus
-    // write persistence doesn't matter.
-    CHECK(result.is_ok() || result.error().code() == cancelled);
-    co_return result;
+    auto written = co_await owning_bus()->db->set(std::move(key), std::move(value)).wrap();
+    if (written.is_error()) {
+      co_return written.move_as_error();
+    }
+    co_return seqno;
+  }
+
+  // Commit the exact signature bytes, replacing the intent under the same key in one write.
+  // Until this returns the vote may not be applied locally, put into a certificate or sent,
+  // so a signature lost to a crash here was never observable and may be produced again.
+  template <>
+  td::actor::Task<> process(BusHandle, std::shared_ptr<PersistOwnSignedVote> event) {
+    auto vote = event->vote.to_tl();
+    auto hash = sha256_bits256(serialize_tl_object(vote, true));
+
+    auto key = create_serialize_tl_object<tl::db_key_vote>(hash);
+    auto value =
+        create_serialize_tl_object<tl::db_ourSignedVote>(std::move(vote), event->seqno, std::move(event->signature));
+
+    auto written = co_await owning_bus()->db->set(std::move(key), std::move(value)).wrap();
+    if (written.is_error()) {
+      co_return written.move_as_error();
+    }
+    co_return td::Unit{};
   }
 
   template <>
@@ -141,6 +168,7 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
     struct OurVote {
       td::int64 seqno;
       Vote vote;
+      td::BufferSlice signature;  // empty: the intent was durable, the signature was not
 
       std::strong_ordering operator<=>(const OurVote& other) const {
         return seqno <=> other.seqno;
@@ -169,8 +197,7 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
       // (candidate-resolver DB resume).
       auto key_r = fetch_tl_object<tl::db_key_vote>(key_str, true);
       if (key_r.is_error()) {
-        LOG(WARNING) << "Simplex db init_votes: malformed vote key: "
-                     << key_r.error().message();
+        LOG(WARNING) << "Simplex db init_votes: malformed vote key: " << key_r.error().message();
         continue;
       }
       auto key = key_r.move_as_ok();
@@ -179,15 +206,20 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
       if (value_r.is_error()) {
         LOG(WARNING) << "Simplex db init_votes: malformed vote value "
                         "for key vote_hash 0x"
-                     << key->vote_hash_.to_hex() << ": "
-                     << value_r.error().message();
+                     << key->vote_hash_.to_hex() << ": " << value_r.error().message();
         continue;
       }
       auto value = value_r.move_as_ok();
 
       bool hash_ok = false;
       Bits256 actual_hash;
-      auto our_vote_fn = [&](tl::db_ourVote& vote) {
+      auto intent_fn = [&](tl::db_ourVoteIntent& vote) {
+        if (vote.vote_) {
+          actual_hash = sha256_bits256(serialize_tl_object(vote.vote_, true));
+          hash_ok = (actual_hash == key->vote_hash_);
+        }
+      };
+      auto signed_fn = [&](tl::db_ourSignedVote& vote) {
         if (vote.vote_) {
           actual_hash = sha256_bits256(serialize_tl_object(vote.vote_, true));
           hash_ok = (actual_hash == key->vote_hash_);
@@ -199,29 +231,46 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
           hash_ok = (actual_hash == key->vote_hash_);
         }
       };
-      tos_api::downcast_call(*value, td::overloaded(our_vote_fn, cert_fn));
+      tos_api::downcast_call(*value, td::overloaded(intent_fn, signed_fn, cert_fn));
       if (!hash_ok) {
         LOG(WARNING) << "Simplex db init_votes: hash binding error for "
                         "key vote_hash 0x"
-                     << key->vote_hash_.to_hex()
-                     << " (value parses but inner hash is 0x"
-                     << actual_hash.to_hex() << "); skipping";
+                     << key->vote_hash_.to_hex() << " (value parses but inner hash is 0x" << actual_hash.to_hex()
+                     << "); skipping";
         continue;
       }
 
       bool value_valid = true;
-      auto append_our_vote = [&](tl::db_ourVote& vote) {
-        auto parsed_vote = Vote::from_tl(*vote.vote_);
+      auto remember_own_vote = [&](Vote parsed_vote, td::int64 seqno, td::BufferSlice signature) {
         if (!saved_vote_hashes_.insert(parsed_vote.referenced_slot(), key->vote_hash_)) {
           ++saved_vote_hash_evictions_;
         }
-        our_votes.push_back(OurVote{vote.seqno_, std::move(parsed_vote)});
+        our_votes.push_back(OurVote{seqno, std::move(parsed_vote), std::move(signature)});
+      };
+      auto append_intent = [&](tl::db_ourVoteIntent& vote) {
+        remember_own_vote(Vote::from_tl(*vote.vote_), vote.seqno_, td::BufferSlice());
+      };
+      auto append_signed = [&](tl::db_ourSignedVote& vote) {
+        auto parsed_vote = Vote::from_tl(*vote.vote_);
+        // These bytes may already be inside a certificate a peer holds, so they are the
+        // only signature this node may present for this vote. If they do not verify under
+        // the consensus key the set records for us, the node must not paper over it by
+        // signing again: refuse to participate in this session and say why.
+        if (!bus.is_validator() ||
+            !bus.local_id->check_signature(bus.session_id, serialize_tl_object(vote.vote_, true), vote.signature_)) {
+          bus.vote_journal_failure = PSTRING() << "the journalled signature for " << parsed_vote
+                                               << " does not verify under this node's consensus key";
+          LOG(ERROR) << "Simplex db init_votes: " << bus.vote_journal_failure;
+          value_valid = false;
+          return;
+        }
+        remember_own_vote(std::move(parsed_vote), vote.seqno_, std::move(vote.signature_));
       };
       auto append_cert = [&](tl::db_cert& vote) {
         auto cert_result = Certificate<Vote>::from_tl(std::move(*vote.cert_), bus);
         if (cert_result.is_error()) {
-          LOG(WARNING) << "Simplex db init_votes: invalid certificate for key vote_hash 0x"
-                       << key->vote_hash_.to_hex() << ": " << cert_result.error();
+          LOG(WARNING) << "Simplex db init_votes: invalid certificate for key vote_hash 0x" << key->vote_hash_.to_hex()
+                       << ": " << cert_result.error();
           value_valid = false;
           return;
         }
@@ -235,7 +284,7 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
         }
         certs.push_back(std::move(cert));
       };
-      tos_api::downcast_call(*value, td::overloaded(append_our_vote, append_cert));
+      tos_api::downcast_call(*value, td::overloaded(append_intent, append_signed, append_cert));
       if (!value_valid) {
         continue;
       }
@@ -246,7 +295,10 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
     }
 
     bus.bootstrap_certificates = std::move(certs);
-    bus.bootstrap_votes = td::transform(our_votes, [](const OurVote& v) { return v.vote; });
+    bus.bootstrap_votes.reserve(our_votes.size());
+    for (auto& v : our_votes) {
+      bus.bootstrap_votes.push_back(BootstrapVote{std::move(v.vote), v.seqno, std::move(v.signature)});
+    }
   }
 
   const td::BufferSlice pool_state_key = create_serialize_tl_object<tl::db_key_poolState>();
