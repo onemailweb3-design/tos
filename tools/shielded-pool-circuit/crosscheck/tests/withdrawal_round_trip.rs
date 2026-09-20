@@ -111,6 +111,11 @@ struct Outcome {
     bounced_from: Option<String>,
     destination: String,
     transactions: usize,
+    /// What the transact itself cost, payout included.
+    gas: i64,
+    /// What the recovery cost, which is a transaction of its own.
+    recovery_gas: i64,
+    recovery_exit: i32,
     holds: u128,
     reserve: u128,
 }
@@ -280,8 +285,10 @@ fn withdraw_to(name: &str, source: &str) -> Outcome {
 
     // The transact itself succeeded.
     let description = result.read_primary_description();
-    let exit = match description.compute_ph {
-        chain_block::TrComputePhase::Vm(vm) => vm.exit_code,
+    let (exit, gas) = match description.compute_ph {
+        chain_block::TrComputePhase::Vm(vm) => {
+            (vm.exit_code, vm.gas_used.to_string().parse::<i64>().expect("gas used"))
+        }
         chain_block::TrComputePhase::Skipped(s) => panic!("compute skipped: {:?}", s.reason),
     };
     assert_eq!(exit, 0, "the withdrawal was refused with exit {exit}");
@@ -296,11 +303,20 @@ fn withdraw_to(name: &str, source: &str) -> Outcome {
     let transactions = result.transaction_count();
     let mut refused_at = None;
     let mut bounced_from = None;
+    let mut recovery_gas = 0i64;
+    let mut recovery_exit = 0i32;
     for (addr, tx) in &result.transactions {
         if let Ok(Some(msg)) = tx.read_in_msg() {
             if let CommonMsgInfo::IntMsgInfo(info) = msg.header() {
                 if info.bounced {
                     bounced_from = info.src_ref().map(std::string::ToString::to_string);
+                    if let Ok(chain_block::TransactionDescr::Ordinary(d)) = tx.read_description() {
+                        if let chain_block::TrComputePhase::Vm(vm) = &d.compute_ph {
+                            recovery_gas =
+                                vm.gas_used.to_string().parse::<i64>().unwrap_or_default();
+                            recovery_exit = vm.exit_code;
+                        }
+                    }
                 }
             }
         }
@@ -325,6 +341,9 @@ fn withdraw_to(name: &str, source: &str) -> Outcome {
         bounced_from,
         destination: destination.to_string(),
         transactions,
+        gas,
+        recovery_gas,
+        recovery_exit,
         holds: balance.balance().map(|value| value.coins.as_u128()).expect("a balance"),
         reserve: pool.get("reserve_floor").expect("reserve floor").parse().expect("a number"),
     }
@@ -358,8 +377,24 @@ fn a_withdrawal_that_is_refused_comes_back_as_a_note() {
     let paid_out = u128::from(DENOMINATION) + u128::from(WITHDRAWAL_FEE);
     let recovered = outcome.pool_liability_after + paid_out - outcome.pool_liability_before;
     eprintln!(
-        "withdrew {DENOMINATION} and paid {WITHDRAWAL_FEE} in fees; \
-         the bounce returned {recovered}"
+        "a successful withdrawal: {} gas; withdrew {DENOMINATION} and paid {WITHDRAWAL_FEE} \
+         in fees; the bounce returned {recovered}",
+        outcome.gas
+    );
+
+    /// Section 14.1. The recovery runs under this, bought by an ACCEPT that
+    /// the withdrawal fee already paid for.
+    const BOUNCE_GAS_CEILING: i64 = 500_000;
+    assert_eq!(outcome.recovery_exit, 0, "the recovery itself failed");
+    eprintln!(
+        "the recovery: {} gas, {}% of the {BOUNCE_GAS_CEILING} bounce ceiling",
+        outcome.recovery_gas,
+        outcome.recovery_gas * 100 / BOUNCE_GAS_CEILING
+    );
+    assert!(
+        outcome.recovery_gas < BOUNCE_GAS_CEILING,
+        "the recovery uses {} gas and does not fit its own ceiling",
+        outcome.recovery_gas
     );
     assert!(recovered > 0, "nothing was recovered");
 
@@ -393,6 +428,7 @@ fn a_withdrawal_that_is_taken_leaves_nothing_to_recover() {
         outcome.transactions, 2,
         "a payout that was taken should leave the message in and the payout out, nothing more"
     );
+    eprintln!("a withdrawal that was taken: {} gas", outcome.gas);
     assert_eq!(outcome.nullifier_next_index, "3", "two nullifiers should have been spent");
     // Two deposits and three outputs, and no recovery note.
     assert_eq!(
