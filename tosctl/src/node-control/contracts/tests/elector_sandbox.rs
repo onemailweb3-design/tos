@@ -4443,6 +4443,48 @@ fn a_relayed_stake_is_answered_to_its_owner_and_not_to_the_relay() {
     );
 }
 
+/// A stake refused before the sender's code is checked still goes back to the account it
+/// names, and this is on purpose.
+///
+/// The owner is honoured from the moment it is read, which is before the sender's code is
+/// checked against ConfigParam 47. So anyone may send a stake that will be refused, name
+/// another account, and have the money arrive there. That is giving money away and not
+/// taking any, and it costs the sender the whole amount and the fees.
+///
+/// The alternative is worse. Honouring the owner only after admission would send a
+/// refused relay's money back to the controller that carried it, where a pool has no way
+/// to reach it -- which is the state this whole change removed. So the property is kept,
+/// and kept deliberately: this test exists so that it is a decision rather than an
+/// accident somebody later reads as a bug.
+#[test]
+fn a_stake_refused_before_admission_still_goes_back_to_the_account_it_names() {
+    let (mut chain, treasury, election) = open_election("refused-early", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let named = chain_block::UInt256::from_slice(&[0x9f; 32]);
+    let named_address =
+        MsgAddressInt::with_standart(None, -1, named.as_slice().into()).expect("an address");
+
+    // Refused for its election, which is decided long before the sender's code is.
+    let result = pq_stake_relayed(
+        &mut chain,
+        &treasury,
+        &PqValidator::new(91),
+        election - 1,
+        1,
+        11_000 * TOS,
+        &named,
+        &named,
+    );
+    let (to, tag, reason, carried) = answered(&result);
+    assert_eq!(tag, STAKE_RETURNED, "a stake for another election was taken");
+    assert_eq!(reason, REASON_WRONG_ELECTION, "refused for the wrong reason");
+    assert_eq!(to, named_address, "the money went somewhere other than the account named");
+    assert!(carried > u128::from(10_000 * TOS), "the refusal did not carry the money");
+
+    // And nothing was registered, by either account.
+    assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered a member");
+}
+
 /// A controller may stake money that is not its own, and the money goes back to whoever
 /// put it up.
 ///
