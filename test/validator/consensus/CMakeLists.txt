@@ -174,13 +174,17 @@ set_tests_properties(
     PROPERTIES ENVIRONMENT
         "TOS_SIMPLEX_STATE_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_FINALIZED_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_CANDIDATE_RETENTION_SLOTS=8"
 )
-# N4.5 — the post-quantum round end to end, and the boundary it stops at. One slot
-# finalized by every node, every signature in its certificate verified independently, a
-# restart that rebuilds that certificate from persisted records with signatures matching
-# their signers' journals, and then nothing: no accepted block and no finalized-block
-# marker. One certificate is the whole of it: candidates keep being produced, but no
-# later slot is finalized, because resolving the state a later step needs goes through the
-# finalization that the seam has latched.
+# N4.5 — the post-quantum round end to end, and the boundary it stops at. A slot finalized
+# by every node, every signature in its certificate verified independently, a restart that
+# rebuilds that certificate from persisted records with signatures matching their signers'
+# journals, that slot latched at the carrier boundary, and then nothing: no accepted block
+# and no finalized-block marker on any node.
+#
+# How far the round gets is deliberately not part of the claim. Measured: four nodes agree
+# one slot, a hundred agree three or four, and exactly one slot reaches the carrier boundary
+# at either size. Agreeing a certificate and being latched at the seam are not the same
+# event, and the relationship between them is an open question recorded in the plan
+# document rather than asserted here.
 add_test(
     NAME test-consensus-simplex2-pq-finality-e2e-single
     COMMAND test-consensus --duration 40 --n-nodes 1 --target-rate-ms 100

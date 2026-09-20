@@ -1278,14 +1278,22 @@ class TestConsensus : public td::actor::Actor {
   td::actor::Task<> run_pq_finality_e2e_test() {
     auto fail = [&](std::string message) { pq_finality_error_ = std::move(message); };
 
-    // --- Whatever adversity this scenario configures happens first ---
+    // --- Whatever adversity this scenario configures happens before anything is judged ---
     //
-    // The round this gate checks has to be the round that ran under the adversity. Waiting
-    // for the injection afterwards would accept one that began after the agreement it is
-    // supposed to have tested -- and the gate reaches its verdict in well under a second,
-    // sooner than a gremlin's first period, so that is the normal case rather than a rare
-    // one. Each condition below is true only once the effect is in place: the node down,
-    // the network cut, the attack message delivered.
+    // What this does and does not establish is worth being exact about, because the
+    // obvious reading is wrong. This build finalizes exactly one slot, at startup, and the
+    // seam stops everything after it; there is no second round. So an injection that
+    // begins even a fraction of a second later cannot be a condition the agreed round ran
+    // under, and no choice of timings changes that -- measured, at every rate and gremlin
+    // period tried. Only an adversity present from the first message, such as packet loss,
+    // is one the round ran under.
+    //
+    // What waiting here does establish is that the injection really happened, and that
+    // everything asserted afterwards -- no second certificate, no accepted block, no
+    // finalized marker, the boundary still latched -- is asserted about a node that has
+    // taken the attack. An attack cannot push a node past the seam; that is the N4
+    // property. Each condition below is true only once the effect is in place: the node
+    // down, the network cut, the attack message delivered.
     struct Adversity {
       bool configured;
       std::function<bool()> happened;
@@ -1318,12 +1326,12 @@ class TestConsensus : public td::actor::Actor {
 
     // --- Every node reaches an agreed, verified finality certificate ---
     //
-    // One certificate, not a stream of them. Candidate production does not stop -- the
-    // producer advances its own chain state from candidate data and keeps collating -- but
-    // no further slot is finalized: resolving the state a later step needs goes through
-    // the finalization of the agreed slot, and that finalization is latched at the seam,
-    // so it hands back the refusal instead of a state. That is the intended shape of this
-    // build, so the gate asks for the round N4 owns and stops where N4 stops.
+    // A slot that every node agreed on, and then nothing past the seam. The gate does not
+    // claim how far the round gets: candidate production continues, several slots may
+    // reach an agreed certificate, and exactly one reaches the carrier boundary -- measured
+    // at four and at a hundred nodes. What it does claim is that the slot every node
+    // agreed on is latched at that boundary, and that no block was accepted and no
+    // finalized marker written on any node.
     // A slot every node finalized -- the intersection, not the smallest count. Nodes that
     // each finalized a different slot have not agreed on anything, and counting per node
     // would not notice.
@@ -1403,6 +1411,10 @@ class TestConsensus : public td::actor::Actor {
     // do not churn; the closing line says which of the two this run was.
     const bool node_churn_active = GREMLIN_PERIOD.first >= 0.0 || NET_GREMLIN_PERIOD.first >= 0.0;
     size_t checked_against_journals = 0;
+    // Where the log stood before any node was taken down by this gate. A resolver keeps its
+    // latches in memory, so a slot a node observed before its restart has no live latch
+    // afterwards, and asking about one would fail for a reason that is not a leak.
+    size_t observations_before_restart = 0;
     if (!node_churn_active) {
       // Any companion scenario that drives node 0 has already finished: the adversity
       // block at the top of this gate waited for it, which is also what stops node 0 being
@@ -1414,7 +1426,7 @@ class TestConsensus : public td::actor::Actor {
         fail("the node to restart had journalled no signed votes");
         co_return td::Unit{};
       }
-      auto observations_before_restart = read_finality_log().size();
+      observations_before_restart = read_finality_log().size();
       co_await stop_instance(0, 0);
       start_instance(0, 0);
 
@@ -1507,7 +1519,10 @@ class TestConsensus : public td::actor::Actor {
     // Asked about the slot every node agreed on, not about any slot: a count alone would
     // be satisfied by some unrelated slot latching, which proves nothing about the
     // certificate this gate just checked.
-    auto boundary_deadline = td::Timestamp::in(DURATION * 0.2);
+    // Generous on purpose: every node has to latch the agreed slot, and at a hundred nodes
+    // under a loaded machine that took 66 seconds against a 60-second budget once. A gate
+    // that fails on scheduling noise teaches people to re-run it.
+    auto boundary_deadline = td::Timestamp::in(DURATION * 0.4);
     while (true) {
       bool every_node_reached_it = true;
       for (size_t node_idx = 0; node_idx < N_NODES && every_node_reached_it; ++node_idx) {
@@ -1552,6 +1567,46 @@ class TestConsensus : public td::actor::Actor {
     // the harness's own verification before arriving here. It is kept because N5 is what
     // makes acceptance possible, and this is the line that should start being able to fail
     // then -- for the right reason.
+    // Not just the slot every node agreed on: every slot that reached an agreed certificate
+    // anywhere must be latched at the boundary somewhere. How many that is depends on the
+    // set size -- one at four nodes, four at a hundred, measured -- and asserting only the
+    // common slot would leave the others unaccounted for, which is exactly the question
+    // "where did the other certificates go" that this answers. A certificate that reached
+    // agreement and then quietly went nowhere is the shape a leak past the seam would have.
+    std::set<td::uint32> observed_slots;
+    {
+      auto log = read_finality_log();
+      for (size_t i = observations_before_restart; i < log.size(); ++i) {
+        observed_slots.insert(log[i].id.slot);
+      }
+    }
+    for (auto slot : observed_slots) {
+      bool latched_somewhere = false;
+      auto slot_deadline = td::Timestamp::in(DURATION * 0.2);
+      while (!latched_somewhere && !slot_deadline.is_in_past()) {
+        for (size_t node_idx = 0; node_idx < N_NODES && !latched_somewhere; ++node_idx) {
+          for (auto& instance : nodes_[node_idx].instances) {
+            if (instance.status != Instance::Running) {
+              continue;
+            }
+            auto boundary = co_await instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(slot));
+            if (boundary.slot_is_blocked) {
+              latched_somewhere = true;
+              break;
+            }
+          }
+        }
+        if (!latched_somewhere) {
+          co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+        }
+      }
+      if (!latched_somewhere) {
+        fail(PSTRING() << "slot " << slot << " reached an agreed certificate but no node has it latched at the "
+                       << "N4/N5 boundary; that certificate went somewhere this gate cannot see");
+        co_return td::Unit{};
+      }
+    }
+
     if (accepted_block_count_ != 0) {
       fail(PSTRING() << "the network accepted " << accepted_block_count_
                      << " blocks; an N4-only build has no carrier to accept one with");
@@ -1562,7 +1617,8 @@ class TestConsensus : public td::actor::Actor {
       co_return td::Unit{};
     }
 
-    LOG(WARNING) << "PQ finality: " << N_NODES << " nodes agreed on the certificate for slot " << *common_slot
+    LOG(WARNING) << "PQ finality: " << observed_slots.size() << " slot(s) reached an agreed certificate somewhere; "
+                 << N_NODES << " nodes agreed on the certificate for slot " << *common_slot
                  << " and verified every signature in it; "
                  << (node_churn_active ? "the restart phase was skipped because this scenario churns nodes itself"
                                        : PSTRING() << "a restart rebuilt that certificate from persisted records and "
