@@ -689,7 +689,7 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
   // Uniqueness is decided here, where a bad set can simply be refused. Doing it only
   // when a ValidatorSet object is built would make a malformed set abort the process
   // instead of being rejected as the untrusted input it is.
-  std::set<td::Bits256> seen_validator_ids, seen_key_ids;
+  std::set<td::Bits256> seen_validator_ids, seen_key_ids, seen_adnl_addrs;
   td::Status error;
 
   auto validator_set_check_fn = [&](Ref<vm::CellSlice> descr_cs, td::ConstBitPtr key, int n) -> bool {
@@ -798,6 +798,18 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
     // to its key, this also refuses two members carrying the same public key.
     if (!seen_key_ids.insert(key_id.value).second) {
       error = td::Status::Error(PSLICE() << "validator #" << i << " repeats a consensus key identity");
+      return false;
+    }
+    // An ADNL identity names one member's transport, and every peer-to-peer decision made
+    // above it -- which overlay node to reach, which certificate authorises a sender --
+    // resolves through it. Two members sharing one cannot both be addressed, and a peer
+    // that authenticates on that transport is speaking for whichever of them the routing
+    // happened to pick, which is a different member from the one the consensus signature
+    // names. A classical descriptor may legitimately carry no explicit address, so only a
+    // present one is required to be unique; a post-quantum descriptor is refused above
+    // unless it has one.
+    if (!adnl_addr.is_zero() && !seen_adnl_addrs.insert(adnl_addr).second) {
+      error = td::Status::Error(PSLICE() << "validator #" << i << " repeats an ADNL identity");
       return false;
     }
     // The accumulation below also refuses a zero weight, so this does not change what

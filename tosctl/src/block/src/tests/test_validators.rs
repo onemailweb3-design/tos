@@ -512,7 +512,7 @@ fn validator_set_verdicts_match_cpp() {
         assert_eq!(accepted, verdict == "accept", "verdict for {name}");
         checked += 1;
     }
-    assert!(checked >= 13, "expected the full case set, saw {checked}");
+    assert!(checked >= 14, "expected the full case set, saw {checked}");
 }
 
 // The Rust check of the shared frozen-constants file lives in the VM crate, the only

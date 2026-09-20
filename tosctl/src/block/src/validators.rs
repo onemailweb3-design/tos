@@ -169,6 +169,7 @@ pub const MAX_TOTAL_VALIDATOR_WEIGHT: u64 = u64::MAX / 3;
 pub fn validate_validator_list(list: &[ValidatorDescr]) -> Result<u64> {
     let mut seen_validator_ids = std::collections::HashSet::new();
     let mut seen_key_ids = std::collections::HashSet::new();
+    let mut seen_adnl_addrs = std::collections::HashSet::new();
     let mut total: u64 = 0;
     for descr in list {
         descr.validate_consensus()?;
@@ -182,6 +183,17 @@ pub fn validate_validator_list(list: &[ValidatorDescr]) -> Result<u64> {
         // identity is bound to the key that derives it.
         if !seen_key_ids.insert(descr.consensus_key_id()?) {
             fail!("validator set repeats a consensus key identity")
+        }
+        // An ADNL identity names one member's transport, and every peer-to-peer decision
+        // above it resolves through it. Two members sharing one cannot both be addressed,
+        // and a peer authenticated on that transport is speaking for whichever of them the
+        // routing happened to pick -- a different member from the one a consensus signature
+        // names. Only a present address is required to be unique: a classical descriptor may
+        // carry none, while a post-quantum one is refused unless it has one.
+        if let Some(adnl_addr) = descr.adnl_addr.as_ref() {
+            if adnl_addr != &UInt256::default() && !seen_adnl_addrs.insert(adnl_addr.clone()) {
+                fail!("validator set repeats an ADNL identity")
+            }
         }
         total = match total.checked_add(descr.weight) {
             Some(v) => v,

@@ -103,6 +103,9 @@ int main() {
   emit("duplicate-key-id", "reject", validator_set({good_a(), descriptor(vid_b, 1, kid_a, key_a, 7, adnl_b)}, 12));
   emit("duplicate-public-key", "reject",
        validator_set({good_a(), descriptor(vid_b, 1, key_id_of(key_a), key_a, 7, adnl_b)}, 12));
+  // Everything else about the second member is distinct, so a shared transport identity is
+  // the only thing left that can refuse this set.
+  emit("duplicate-adnl", "reject", validator_set({good_a(), descriptor(vid_b, 1, kid_b, key_b, 7, adnl_a)}, 12));
   emit("key-id-mismatch", "reject", validator_set({descriptor(vid_a, 1, kid_b, key_a, 5, adnl_a)}, 5));
   // The key identity matches what this algorithm would derive, so nothing but the
   // algorithm rule itself can refuse it.

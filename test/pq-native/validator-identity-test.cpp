@@ -318,7 +318,7 @@ int main() {
       assert(accepted == (verdict == "accept"));
       seen++;
     }
-    assert(seen >= 13);
+    assert(seen >= 14);
   }
 
   {  // Several 32-byte values meet on one validator, and substituting one for another is
