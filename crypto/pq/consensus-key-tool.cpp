@@ -54,7 +54,9 @@ int refuse(tos::pq::ConsensusKeyFileError error, std::string_view path) {
 // answer.
 bool read_seed_hex(std::string& seed) {
   constexpr std::size_t digits = 2 * tos::pq::consensus_seed_bytes;
-  auto is_space = [](int c) { return c == '\n' || c == '\r' || c == ' ' || c == '\t'; };
+  // Every ASCII space, not a chosen few: a seed pasted from a file that ends in a form
+  // feed is the same seed, and refusing it would be a rule about the operator's editor.
+  auto is_space = [](int c) { return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r'; };
 
   std::string text;
   bool ended = false;  // whitespace after the digits: nothing may follow it

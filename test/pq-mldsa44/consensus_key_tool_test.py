@@ -150,24 +150,48 @@ def check(tool: Path, work: Path) -> None:
         if refused.returncode == 0:
             raise Failure(f"{command} wrote a key into a directory anyone can write")
 
-    # Nothing any command prints is the key. The seed is 32 bytes; the expanded secret is
-    # longer. Neither may appear on either stream, in any command, including the failures.
+    # Nothing any command prints is the key -- and the way that is held is the whole
+    # output, not a search for the secrets this test happens to know. An expanded secret
+    # key is bytes this test has never seen, so looking for known bytes would miss it;
+    # requiring the output to be exactly three named lines does not.
+    shape = re.compile(
+        rb"\Aalgorithm mldsa44\nkey_id    [0-9a-f]{64}\npublic    [0-9a-f]{2624}\n\Z"
+    )
+    successes = [
+        run(tool, ["generate", str(home / "shape.key")]),
+        run(tool, ["import", str(home / "shape-import.key")], SEED_HEX.encode()),
+        run(tool, ["show", str(home / "shape.key")]),
+    ]
+    for done in successes:
+        if done.returncode != 0:
+            raise Failure(f"a command that should succeed did not: {done.stderr!r}")
+        if not shape.match(done.stdout):
+            raise Failure(f"a successful command printed more than the identity: {done.stdout!r}")
+        if done.stderr != b"":
+            raise Failure(f"a successful command wrote to stderr: {done.stderr!r}")
+
+    # The failures, and the commands that do not exist, print no key either. Here the
+    # seed is known, so it can be looked for directly.
     seed = bytes.fromhex(SEED_HEX)
-    transcripts = [
-        run(tool, ["show", str(home / "c.key")]),
+    failures = [
         run(tool, ["show", str(home / "missing.key")]),
         run(tool, ["generate", str(home / "a.key")]),
         run(tool, ["import", str(home / "a.key")], SEED_HEX.encode()),
+        run(tool, ["import", str(home / "never.key")], b"not hexadecimal"),
         run(tool, ["export", str(home / "c.key")]),
         run(tool, ["show"]),
         run(tool, []),
     ]
-    for t in transcripts:
-        for stream in (t.stdout, t.stderr):
+    for done in failures:
+        if done.returncode == 0:
+            raise Failure("a command that should fail succeeded")
+        for stream in (done.stdout, done.stderr):
             if seed in stream:
                 raise Failure("a command printed the seed")
             if SEED_HEX.encode() in stream or SEED_HEX.upper().encode() in stream:
                 raise Failure("a command printed the seed in hexadecimal")
+            if shape.match(stream):
+                raise Failure("a refused command printed an identity")
 
     # And there is no command that would.
     for invented in ("export", "dump", "secret", "private", "seed"):

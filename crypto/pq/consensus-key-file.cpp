@@ -164,7 +164,11 @@ std::variant<ConsensusPQKey, ConsensusKeyFileError> place_seed(std::string_view 
   // Written under a name of its own and linked into place, so a key that is there is a
   // whole one: an interrupted write leaves the temporary behind rather than a half key
   // the node would refuse on every later start.
-  const std::string temporary = name + ".new";
+  //
+  // The name carries this process, so a temporary left behind by an interrupted run --
+  // or by another process provisioning at the same moment -- is never the name this one
+  // wants. A fixed name would turn one crash into a permanent refusal.
+  const std::string temporary = name + ".new." + std::to_string(::getpid());
   {
     Descriptor fd(::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600));
     if (!fd.valid()) {
@@ -196,7 +200,17 @@ std::variant<ConsensusPQKey, ConsensusKeyFileError> place_seed(std::string_view 
     ::unlink(temporary.c_str());
     return failure == EEXIST ? ConsensusKeyFileError::already_exists : ConsensusKeyFileError::write_failed;
   }
-  ::unlink(temporary.c_str());
+  // Both names now point at the same seed. Leaving the temporary would mean a second
+  // path to the secret that nothing afterwards mentions, so a key is reported as created
+  // only when exactly one path to it exists. If the temporary cannot be removed the new
+  // name is removed instead, which puts the directory back where it started.
+  while (::unlink(temporary.c_str()) != 0) {
+    if (errno == EINTR) {
+      continue;
+    }
+    ::unlink(name.c_str());
+    return ConsensusKeyFileError::write_failed;
+  }
   // The new name has to reach the disk, or a crash leaves the directory pointing at a
   // name that is no longer there. This is the failure the flush exists for, so it is
   // reported rather than ignored: a key that could not be made durable must not be
