@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""Check real signing transcripts with a second Ed25519 implementation.
+"""Check the isolated candidate-authentication transcripts with second implementations.
 
-Legacy preimages are reconstructed from constructor schemas, and legacy BOCs
-and signatures must match the frozen public fixtures. The optional OpenSSL
-ML-DSA check is a separate, explicitly requested interoperability measurement.
+Every Ed25519 signature the experiment emits is re-verified with libsodium, and each
+one is paired with a negative control so a verifier that accepts everything cannot
+pass. The optional OpenSSL ML-DSA check is a separate, explicitly requested
+interoperability measurement.
+
+This covers the isolated experiment only. The live Simplex entrypoints are covered by
+test-n4-certificate-conformance, which runs the production parsers under real
+post-quantum keys, and whose signing preimages are independently reconstructed by
+test/validator/consensus/check-simplex-preimages.py.
 """
 import argparse
 import ctypes
 import ctypes.util
 import json
 from pathlib import Path
-import struct
 import subprocess
 import tempfile
-import zlib
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def require(condition, message):
@@ -41,17 +43,6 @@ def sodium_verifier():
     return verify
 
 
-def tag(schema):
-    return struct.pack('<I', zlib.crc32(schema.encode('ascii')))
-
-
-def wrapped(inner):
-    require(len(inner) < 254, 'unexpected fixture size')
-    sized = bytes([len(inner)]) + inner
-    sized += bytes((-len(sized)) % 4)
-    return tag('consensus.dataToSign session_id:int256 data:bytes = consensus.DataToSign') + bytes([0x42])*32 + sized
-
-
 def der(tag_number, contents):
     n = len(contents)
     length = bytes([n]) if n < 128 else bytes([0x80 + (n.bit_length()+7)//8]) + n.to_bytes((n.bit_length()+7)//8, 'big')
@@ -74,44 +65,15 @@ def openssl_mldsa(key, message, signature, expect_valid):
                 'independent ML-DSA result differs: '+result.stderr[:200])
 
 
-def check(production: Path, experimental: Path, mldsa: bool):
-    golden = json.loads((Path(__file__).with_name('legacy-golden.json')).read_text())['records']
-    legacy = {}
-    production_checks = []
-    for line in production.read_text().splitlines():
-        fields = line.split('\t')
-        if fields[0] in ('VECTOR', 'BOC'):
-            identity = fields[0]+':'+fields[1]
-            require(identity not in legacy, 'duplicate legacy record')
-            legacy[identity] = fields[2:]
-        if fields[0] == 'PASS': production_checks.append(fields[1])
-    require(legacy == golden, 'legacy preimage/signature/BOC drift')
-    require(len(production_checks) >= 140, 'missing production entrypoint checks')
-    vectors = {name.split(':')[1]: [bytes.fromhex(x) for x in fields]
-               for name, fields in legacy.items() if name.startswith('VECTOR:')}
-    require(set(vectors) == {'proposal', 'notarize', 'finalize', 'skip', 'ordinary-proof'}, 'missing signing domains')
-    candidate = vectors['proposal'][1][37:77]
-    require(candidate[:4] == tag('consensus.candidateId slot:int hash:int256 = consensus.CandidateId'), 'candidate tag')
-    require(candidate[4:8] == struct.pack('<I', 7), 'candidate slot')
-    require(vectors['proposal'][1] == wrapped(candidate), 'proposal preimage')
-    for name in ('notarize', 'finalize'):
-        inner = tag(f'consensus.simplex.{name}Vote id:consensus.CandidateId = consensus.simplex.UnsignedVote') + candidate
-        require(vectors[name][1] == wrapped(inner), name+' preimage')
-    inner = tag('consensus.simplex.skipVote slot:int = consensus.simplex.UnsignedVote') + struct.pack('<I', 7)
-    require(vectors['skip'][1] == wrapped(inner), 'skip preimage')
-    ordinary = tag('tos.blockId root_cell_hash:int256 file_hash:int256 = tos.BlockId') + bytes([0x31])*32 + bytes([0x32])*32
-    require(vectors['ordinary-proof'][1] == ordinary, 'ordinary proof must not acquire a session wrapper')
+def check(experimental: Path, mldsa: bool):
     verify = sodium_verifier()
-    independent_ed = 0
-    for key, message, signature in vectors.values():
-        require(verify(key, message, signature), 'libsodium rejects native legacy signature')
-        require(not verify(key, message+b'x', signature), 'independent negative control did not fail')
-        independent_ed += 2
-    pq_checked, experimental_checks, signatures = 0, [], []
+    independent_ed, pq_checked, checks, signatures = 0, 0, [], []
     for line in experimental.read_text().splitlines():
         fields = line.split('\t')
-        if fields[0] == 'PASS': experimental_checks.append(fields[1])
-        if fields[0] != 'VECTOR': continue
+        if fields[0] == 'PASS':
+            checks.append(fields[1])
+        if fields[0] != 'VECTOR':
+            continue
         require(len(fields) == 6, 'malformed experimental transcript')
         _, label, scheme, key, message, signature = fields
         key, message, signature = map(bytes.fromhex, (key, message, signature))
@@ -129,20 +91,18 @@ def check(production: Path, experimental: Path, mldsa: bool):
         else:
             raise ValueError('unknown transcript scheme')
         signatures.append((label, scheme))
-    require(len(experimental_checks) >= 300 and len(signatures) == 5, 'missing isolated signature evidence')
-    return {'success': True, 'production_assertions': len(production_checks),
-            'experimental_assertions': len(experimental_checks), 'legacy_vectors_and_bocs': len(legacy),
+    require(len(checks) >= 300 and len(signatures) == 5, 'missing isolated signature evidence')
+    return {'success': True, 'experimental_assertions': len(checks),
             'independent_ed25519_checks': independent_ed, 'independent_mldsa_checks': pq_checked,
-            'scope': 'entrypoint regressions and isolated candidate authentication, not network activation'}
+            'scope': 'isolated candidate authentication, not the live consensus entrypoints'}
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('production', type=Path)
     parser.add_argument('experimental', type=Path)
     parser.add_argument('--openssl-mldsa', action='store_true')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
-    result = check(args.production, args.experimental, args.openssl_mldsa)
+    result = check(args.experimental, args.openssl_mldsa)
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True)+'\n')
     print(json.dumps(result))

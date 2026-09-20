@@ -31,6 +31,39 @@ target_link_libraries(test-n4-consensus-verify PRIVATE
 )
 add_test(NAME n4-consensus-verify COMMAND test-n4-consensus-verify)
 
+# N4 — the structural and cryptographic guards on the live Simplex entrypoints, under
+# post-quantum keys. It links the production sources through `validator`; nothing here
+# re-implements quorum arithmetic or signature checking.
+add_executable(test-n4-certificate-conformance test-n4-certificate-conformance.cpp)
+set_target_properties(test-n4-certificate-conformance PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(test-n4-certificate-conformance PRIVATE
+    validator
+    tos_validator
+    tos_block
+    adnl
+    overlay
+    dht
+    tl_api
+    tl-utils
+    tos_crypto
+    tos_pq_consensus_signer
+    tos_pq_consensus
+    tos_mldsa44
+    tdactor
+    tdutils
+)
+add_test(NAME n4-certificate-conformance COMMAND test-n4-certificate-conformance)
+
+# The same binary emits one transcript per signing domain. This rebuilds each preimage from
+# the TL constructor schemas in Python and requires an exact match, so the C++ serializer
+# cannot agree with itself about a change to what a validator signs.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME n4-simplex-preimages
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check-simplex-preimages.py
+                     $<TARGET_FILE:test-n4-certificate-conformance>)
+endif()
+
 add_executable(test-validator-manager-resource-policy test-validator-manager-resource-policy.cpp)
 target_link_libraries(test-validator-manager-resource-policy PRIVATE
     adnl

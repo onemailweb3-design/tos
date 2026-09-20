@@ -7,20 +7,11 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTION = 'test-validator-auth-production'
 EXPERIMENTAL = 'test-validator-auth-experimental'
+# The live Simplex guards -- peer verification, duplicate signer, quorum boundary and the
+# producer identity -- are mutation-killed by test-n4-certificate-conformance, which runs
+# them under real post-quantum keys. What is left here is the isolated experiment.
 MUTANTS = [
-    ('live-peer-verification', 'validator/consensus/types.cpp',
-     'return enc.move_as_ok()->check_signature(signed_data, signature).is_ok();',
-     '(void)enc.move_as_ok()->check_signature(signed_data, signature); return true;', PRODUCTION),
-    ('live-duplicate-signer', 'validator/consensus/simplex/certificate.cpp',
-     'if (voted[who]) {', 'if (false) {', PRODUCTION),
-    ('live-quorum-boundary', 'validator/consensus/simplex/certificate.cpp',
-     'voted_weight < tos::quorum_threshold(bus.total_weight)',
-     'voted_weight <= tos::quorum_threshold(bus.total_weight)', PRODUCTION),
-    ('legacy-proof-preimage', 'crypto/block/signature-set.cpp',
-     'tos::create_serialize_tl_object<tos::tos_api::tos_blockId>(block_id.root_hash, block_id.file_hash)',
-     'tos::create_serialize_tl_object<tos::tos_api::tos_blockId>(block_id.root_hash, block_id.root_hash)', PRODUCTION),
     ('candidate-required-crypto', 'validator/auth/experimental.h',
      'if (outcome != CryptoResult::valid)', 'if (false)', EXPERIMENTAL),
     ('candidate-network-binding', 'validator/auth/experimental.h',
@@ -55,7 +46,7 @@ def main():
         with logfile.open('w') as log:
             subprocess.run(['cmake', '--build', str(build), '--target', name, '-j'+str(args.jobs)],
                            stdout=log, stderr=subprocess.STDOUT, check=True, timeout=1800)
-    for target in (PRODUCTION, EXPERIMENTAL):
+    for target in (EXPERIMENTAL,):
         compile_target(target, logs/(target+'-baseline.log'))
         baseline = execute(build, target)
         if baseline.returncode != 0 or 'SUMMARY\t' not in baseline.stdout:
