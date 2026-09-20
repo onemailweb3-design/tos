@@ -219,6 +219,27 @@ void check_vectors() {
     }
   }
 
+  // The domain table has its own manifest, rebuilt here the way the generator
+  // wrote it. Nothing on chain commits to this digest; it exists so the table
+  // cannot drift between the three places it is written.
+  {
+    std::string stream;
+    const char tag[] = "TOS-SHIELDED-DOMAINS-v1";
+    stream.append(tag, sizeof(tag));  // the trailing NUL is part of the stream
+    stream.push_back(static_cast<char>(std::size(kat::domains)));
+    for (const auto& domain : kat::domains) {
+      const std::size_t length = std::char_traits<char>::length(domain.label);
+      stream.push_back(static_cast<char>(length));
+      stream.append(domain.label, length);
+      stream.append(reinterpret_cast<const char*>(domain.value), 32);
+    }
+    unsigned char digest[32];
+    digest::hash_str<digest::SHA256>(digest, stream.data(), stream.size());
+    require(std::memcmp(digest, kat::domain_manifest_sha256, 32) == 0, "domain manifest digest " + hex(digest, 32) +
+                                                                           " does not match the generated " +
+                                                                           hex(kat::domain_manifest_sha256, 32));
+  }
+
   for (const auto& domain : kat::domains) {
     bool nonzero = false;
     for (unsigned char byte : domain.value) {

@@ -1,0 +1,85 @@
+;; The commitment tree, section 5 of the V1 implementation profile.
+;;
+;; Shape: arity 7, depth 12, leaf indices uint32. The empty leaf is field zero
+;; and the empty-subtree ladder is generated in empty-roots.fc rather than
+;; recomputed, because it never changes.
+;;
+;; Requires domains.fc, empty-roots.fc and notes.fc.
+
+;; The largest index that may be appended, exclusive. The persistent counter is
+;; uint64 only so that this exhausted sentinel is representable.
+int commitment_capacity() asm "4294967296 PUSHINT";
+int tree_depth() asm "12 PUSHINT";
+int tree_arity() asm "7 PUSHINT";
+
+int commit_node(int c0, int c1, int c2, int c3, int c4, int c5, int c6) inline {
+  return h7(domain_commit_node(), c0, c1, c2, c3, c4, c5, c6);
+}
+
+int empty_root_at(int level) inline_ref {
+  if (level == 0) { return empty_root_0(); }
+  if (level == 1) { return empty_root_1(); }
+  if (level == 2) { return empty_root_2(); }
+  if (level == 3) { return empty_root_3(); }
+  if (level == 4) { return empty_root_4(); }
+  if (level == 5) { return empty_root_5(); }
+  if (level == 6) { return empty_root_6(); }
+  if (level == 7) { return empty_root_7(); }
+  if (level == 8) { return empty_root_8(); }
+  if (level == 9) { return empty_root_9(); }
+  if (level == 10) { return empty_root_10(); }
+  if (level == 11) { return empty_root_11(); }
+  if (level == 12) { return empty_root_12(); }
+  throw(90);  ;; level outside the frozen depth
+  return 0;
+}
+
+;; frontier_store is a HashmapE 7 keyed by level * 7 + child_position, 0..83.
+;; A missing entry means field zero, and canonical state stores no explicit
+;; zero, so reading and writing both have to treat absence as the value.
+int frontier_key(int level, int position) inline {
+  return (level * tree_arity()) + position;
+}
+
+int frontier_get(cell frontier, int level, int position) inline {
+  (slice value, int found) = frontier.udict_get?(7, frontier_key(level, position));
+  if (~ found) { return 0; }
+  return value~load_uint(256);
+}
+
+cell frontier_set(cell frontier, int level, int position, int value) inline {
+  int key = frontier_key(level, position);
+  if (value == 0) {
+    ;; Canonical state must not carry an explicit zero.
+    (cell updated, int removed) = frontier.udict_delete?(7, key);
+    return updated;
+  }
+  return frontier.udict_set_builder(7, key, begin_cell().store_uint(value, 256));
+}
+
+;; Appends one leaf at `index` and returns the updated frontier and the new root.
+;; Slots above the current digit are stale by construction and are read as the
+;; level's empty root rather than from the store.
+(cell, int) frontier_append(cell frontier, int index, int leaf) {
+  throw_unless(91, index >= 0);
+  throw_unless(92, index < commitment_capacity());
+  int carry = leaf;
+  int stride = 1;
+  int level = 0;
+  while (level < tree_depth()) {
+    int digit = (index / stride) % tree_arity();
+    frontier = frontier_set(frontier, level, digit, carry);
+    int empty = empty_root_at(level);
+    int c0 = digit >= 0 ? frontier_get(frontier, level, 0) : empty;
+    int c1 = digit >= 1 ? frontier_get(frontier, level, 1) : empty;
+    int c2 = digit >= 2 ? frontier_get(frontier, level, 2) : empty;
+    int c3 = digit >= 3 ? frontier_get(frontier, level, 3) : empty;
+    int c4 = digit >= 4 ? frontier_get(frontier, level, 4) : empty;
+    int c5 = digit >= 5 ? frontier_get(frontier, level, 5) : empty;
+    int c6 = digit >= 6 ? frontier_get(frontier, level, 6) : empty;
+    carry = commit_node(c0, c1, c2, c3, c4, c5, c6);
+    stride = stride * tree_arity();
+    level = level + 1;
+  }
+  return (frontier, carry);
+}
