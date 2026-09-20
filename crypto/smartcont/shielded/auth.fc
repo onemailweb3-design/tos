@@ -30,12 +30,10 @@
 ;; Requires domains.fc and notes.fc, and a VM at global version 17 or above:
 ;; PQCHECKSIG_MLDSA44 arrives at version 16 and POSEIDON2_HASH7 at version 17.
 
-;; PQCHECKSIG_MLDSA44, opcode 0xF93100. The mnemonic is defined in
-;; crypto/fift/lib/PQ.fif, which is not part of the base assembler library, so
-;; the opcode is emitted directly rather than by name. The operand order is the
-;; one crypto/vm/pqops.cpp pops: the public key is on top of the stack.
+;; The operand order is the one crypto/vm/pqops.cpp pops: the public key is on
+;; top of the stack.
 int pq_verify_mldsa44(cell message, cell context, cell signature, cell public_key)
-  asm "x{F93100} @addop";
+  asm "PQCHECKSIG_MLDSA44";
 
 ;; SHA256 of the concatenated data bits of twelve operands, in the order given.
 ;; HASHEXT_SHA256 takes the operand count from the stack.
