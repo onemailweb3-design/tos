@@ -17,6 +17,7 @@ pub mod error;
 pub mod field;
 pub mod fixture;
 pub mod gadgets;
+pub mod imt;
 pub mod groth16;
 pub mod notes;
 pub mod params;
