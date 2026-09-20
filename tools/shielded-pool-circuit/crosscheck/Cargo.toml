@@ -1,0 +1,18 @@
+[package]
+name = "shielded-pool-circuit-crosscheck"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Runs the shielded FunC library in the VM and compares it against the circuit gadgets, value for value."
+
+[dependencies]
+shielded-pool-circuit = { path = ".." }
+chain_block = { path = "../../../tosctl/src/block" }
+tos_sandbox = { path = "../../../tosctl/src/sandbox" }
+tos_vm = { path = "../../../tosctl/src/vm" }
+serde_json = "=1.0.145"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
