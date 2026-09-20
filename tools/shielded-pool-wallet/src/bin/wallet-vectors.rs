@@ -25,6 +25,7 @@ use shielded_pool_wallet::delivery::{self, Kind, Plaintext};
 use shielded_pool_wallet::descriptor::Descriptor;
 use shielded_pool_wallet::import::{import, ChainSlot};
 use shielded_pool_wallet::keys::{fr_be32, PoolInstance};
+use shielded_pool_wallet::scan::{self, ObservedOutput};
 
 /// A field element as the decimal string `BigInt` reads.
 fn dec(value: Fr) -> String {
@@ -52,6 +53,147 @@ fn hex(bytes: &[u8]) -> String {
 /// go in the file, together with enough of the head to catch a wrong prefix.
 fn digest(bytes: &[u8]) -> String {
     hex(&fr_be32(wire::output_data_hash(bytes)))
+}
+
+
+/// One scan's worth of observed outputs, and what a restored wallet makes of
+/// them.
+///
+/// The scenario is chosen so that every rule of section 2.5 has a case:
+/// indices with gaps between them, a dummy that consumes an index without
+/// carrying balance, somebody else's payload that must leave no trace at all,
+/// two notes at one index because a payer reused a descriptor, and a payload
+/// that opens and is then refused because its fields are not ones this wallet
+/// derives.
+fn recovery_vector(seed: &[u8; 32], other_seed: &[u8; 32], domain: Fr) -> String {
+    let wallet = PoolInstance::new(seed, domain);
+    let stranger = PoolInstance::new(other_seed, domain);
+
+    struct Observed {
+        slot: u8,
+        sealed: Vec<u8>,
+        output_data_hash: Fr,
+        note_body: Fr,
+    }
+
+    let mut observed: Vec<Observed> = Vec::new();
+    let mut note = |instance: &PoolInstance, kind: Kind, index: u64, amount: u128,
+                    secret: u64, slot: u8, break_owner: bool| {
+        let plaintext = Plaintext {
+            slot,
+            kind,
+            amount,
+            note_secret: Fr::from(secret),
+            owner_nf_key_hash: if break_owner {
+                Fr::from(1u64)
+            } else {
+                match kind {
+                    Kind::Dummy => shielded_pool_circuit::domains::dummy_owner_nf_hash(),
+                    _ => instance.owner_nf_key_hash(index).expect("a hash"),
+                }
+            },
+            note_key_index: index,
+            pq_auth_key_hash: instance.pq_auth_key_hash(index).expect("a hash"),
+        };
+        let sealed = delivery::seal(
+            &instance.mlkem_encapsulation_key().expect("a key"),
+            domain,
+            &plaintext,
+        )
+        .expect("seal");
+        let owner = notes::owner_commitment(
+            plaintext.owner_nf_key_hash,
+            plaintext.pq_auth_key_hash,
+            plaintext.note_secret,
+        );
+        let output_data_hash = wire::output_data_hash(&sealed);
+        observed.push(Observed {
+            slot,
+            sealed,
+            output_data_hash,
+            note_body: notes::note_body_commitment(owner, Fr::from(amount), output_data_hash),
+        });
+    };
+
+    // Indices 0 and 4, so a wallet that merely counted would reissue 1.
+    note(&wallet, Kind::Ordinary, 0, 1_000, 0xa1, 0, false);
+    note(&wallet, Kind::Ordinary, 4, 2_000, 0xa2, 1, false);
+    // A dummy at 6: no balance, index consumed all the same.
+    note(&wallet, Kind::Dummy, 6, 0, 0xa3, 2, false);
+    // Somebody else's, which must not open and must leave no diagnostic.
+    note(&stranger, Kind::Ordinary, 0, 9_999, 0xa4, 0, false);
+    // A payer reusing a descriptor: a second note at index 4.
+    note(&wallet, Kind::Ordinary, 4, 3_000, 0xa5, 1, false);
+    // Ours, opens, and is then refused: the owner hash is not one we derive.
+    note(&wallet, Kind::Ordinary, 2, 500, 0xa6, 0, true);
+
+    let outputs: Vec<ObservedOutput> = observed
+        .iter()
+        .map(|entry| ObservedOutput {
+            slot: entry.slot,
+            output_data: entry.sealed.clone(),
+            chain: ChainSlot {
+                output_data_hash: entry.output_data_hash,
+                note_body: entry.note_body,
+            },
+        })
+        .collect();
+    let recovered = scan::recover(&wallet, &outputs).expect("recover");
+
+    let mut out = String::from("{\n");
+    out.push_str(&format!("    \"seed\": \"{}\",\n", hex(seed)));
+    out.push_str(&format!("    \"execution_domain\": \"{}\",\n", dec(domain)));
+    out.push_str("    \"outputs\": [\n");
+    for (position, entry) in observed.iter().enumerate() {
+        if position > 0 {
+            out.push_str(",\n");
+        }
+        out.push_str("      {\n");
+        out.push_str(&format!("        \"slot\": {},\n", entry.slot));
+        out.push_str(&format!("        \"sealed\": \"{}\",\n", hex(&entry.sealed)));
+        out.push_str(&format!(
+            "        \"output_data_hash\": \"{}\",\n",
+            dec(entry.output_data_hash)
+        ));
+        out.push_str(&format!("        \"note_body\": \"{}\"\n", dec(entry.note_body)));
+        out.push_str("      }");
+    }
+    out.push_str("\n    ],\n");
+    out.push_str("    \"expected\": {\n");
+    out.push_str(&format!("      \"balance\": \"{}\",\n", recovered.balance()));
+    out.push_str(&format!(
+        "      \"next_note_key_index\": {},\n",
+        recovered.next_note_key_index
+    ));
+    out.push_str("      \"notes\": [\n");
+    for (position, found) in recovered.notes.iter().enumerate() {
+        if position > 0 {
+            out.push_str(",\n");
+        }
+        out.push_str(&format!(
+            "        {{ \"kind\": \"{:?}\", \"index\": {}, \"amount\": \"{}\", \"spendable\": {}, \"note_body\": \"{}\" }}",
+            found.kind, found.note_key_index, found.amount, found.spendable,
+            dec(found.note_body)
+        ));
+    }
+    out.push_str("\n      ],\n");
+    out.push_str("      \"reused\": [");
+    for (position, index) in recovered.reused.iter().enumerate() {
+        if position > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&index.to_string());
+    }
+    out.push_str("],\n");
+    out.push_str("      \"diagnostics\": [");
+    for (position, diagnostic) in recovered.diagnostics.iter().enumerate() {
+        if position > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!("\"{:?}\"", diagnostic.why));
+    }
+    out.push_str("]\n    }\n  }");
+    out
 }
 
 fn main() {
@@ -203,6 +345,14 @@ fn main() {
         out.push_str("    }");
     }
     out.push_str("\n  ],\n");
+
+    // A whole scan. The TypeScript has no chain to check itself against, so
+    // what pins it is that the same observed outputs produce the same
+    // conclusions: which notes, which balance, which index next, which
+    // indices burnt, and which payloads opened and were then refused.
+    out.push_str("  \"recovery\": ");
+    out.push_str(&recovery_vector(&seeds[0], &seeds[1], domains[0]));
+    out.push_str(",\n");
 
     // The derived public inputs, which the TypeScript has to compute the same
     // way to build a transaction the contract will accept.
