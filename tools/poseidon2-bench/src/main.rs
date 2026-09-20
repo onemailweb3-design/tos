@@ -79,12 +79,18 @@ fn subjects() -> Vec<Subject> {
             body: "p_g1_in_group(g1)",
             baseline: "p_one_slice(g1)",
         },
-        Subject {
-            name: "CHKSIGNU",
-            price: Some(4000),
-            body: "p_chksignu(a, sig, a)",
-            baseline: "p_chksignu_base(a, sig, a)",
-        },
+        // CHKSIGNU was here, and was dropped. It was the one anchor whose
+        // cost is not point decompression, which is exactly why it was
+        // wanted -- but the two VMs do not do the same work for it. Given
+        // the same invalid signature they charge the same gas and take
+        // 67 ns and 32,441 ns respectively: the C++ one rejects it before
+        // verifying and the Rust one does not. An anchor the two
+        // implementations disagree about by four hundred times cannot
+        // calibrate either of them.
+        //
+        // Restoring it means passing a signature that actually verifies, so
+        // that both do the whole job. That is worth doing; it is not worth
+        // doing by pretending the current one measures verification.
         Subject {
             name: "BLS_G2_ADD",
             price: Some(6100),
@@ -203,6 +209,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let account = bc.get_account(&addr).ok_or("the probe account")?;
     let probe_code = account.get_code().ok_or("the probe code")?;
     let probe_data = account.get_data().unwrap_or_default();
+
+    // The same compiled probe, written out so the C++ VM can run the exact
+    // same bytecode. Comparing two implementations on two different programs
+    // would compare the programs.
+    if let Ok(path) = std::env::var("POSEIDON2_BENCH_DUMP_CODE") {
+        let boc = chain_block::write_boc(&probe_code)?;
+        std::fs::write(&path, &boc)?;
+        eprintln!("wrote the probe code to {path} ({} bytes)", boc.len());
+        for subject in subjects() {
+            eprintln!(
+                "  method {:<20} id {}",
+                subject.name.to_lowercase(),
+                tos_method_id(&subject.name.to_lowercase())
+            );
+            eprintln!(
+                "  method {:<20} id {}",
+                format!("{}_base", subject.name.to_lowercase()),
+                tos_method_id(&format!("{}_base", subject.name.to_lowercase()))
+            );
+        }
+    }
 
     // One execution of one method.
     let once = |method: &str| -> Result<(Duration, i64, i32), Box<dyn std::error::Error>> {
