@@ -35,35 +35,7 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 ;; Section 14.1 development ceilings. Fail-closed coding constants, not a
 ;; production tariff.
 int deposit_gas_ceiling() asm "500000 PUSHINT";
-
-;; Section 13.3: the output-data payload is 1233 bytes as nine full cells and a
-;; ninety-byte tail.
-int output_data_bytes() asm "1233 PUSHINT";
-int output_data_tail_bytes() asm "90 PUSHINT";
-
-int sha256_of_eleven(slice s0, slice s1, slice s2, slice s3, slice s4, slice s5,
-                     slice s6, slice s7, slice s8, slice s9, slice s10)
-  asm "11 PUSHINT HASHEXT_SHA256";
-
-;; Section 3: output_data_hash over the exact bytes, never over a hash the
-;; sender supplied. The chain shape is the same canonical one the ML-DSA
-;; operands use, so the layout of a fixed-length payload is forced.
-int output_data_hash(cell output_data) impure {
-  int full = pq_chain_chunk_bytes();
-  (slice c0, cell rest) = pq_chain_chunk(output_data, full, 1);
-  (slice c1, rest) = pq_chain_chunk(rest, full, 1);
-  (slice c2, rest) = pq_chain_chunk(rest, full, 1);
-  (slice c3, rest) = pq_chain_chunk(rest, full, 1);
-  (slice c4, rest) = pq_chain_chunk(rest, full, 1);
-  (slice c5, rest) = pq_chain_chunk(rest, full, 1);
-  (slice c6, rest) = pq_chain_chunk(rest, full, 1);
-  (slice c7, rest) = pq_chain_chunk(rest, full, 1);
-  (slice c8, rest) = pq_chain_chunk(rest, full, 1);
-  (slice c9, rest) = pq_chain_chunk(rest, output_data_tail_bytes(), 0);
-  return reduce_to_field(
-    sha256_of_eleven("TOS-SHIELDED-OUTPUT-DATA-v1",
-                     c0, c1, c2, c3, c4, c5, c6, c7, c8, c9));
-}
+int topup_gas_ceiling() asm "50000 PUSHINT";
 
 ;; Section 16.1, in its order.
 () handle_deposit(int msg_value, slice body) impure {
@@ -121,6 +93,23 @@ int output_data_hash(cell output_data) impure {
                        frontier, anchors, config, vk));
 }
 
+;; Sections 12.3 and 16.4. Anyone may replenish operational reserve without
+;; minting a note. Nothing about the shielded state changes: the remaining
+;; inbound value after bounded compute is simply unencumbered balance, which is
+;; what makes it reserve rather than liability.
+() handle_reserve_topup(int msg_value, slice body) impure {
+  ;; Nothing after the query id, and nothing hanging off it. A separate
+  ;; reference-count check would be implied by this one: there is no "too few"
+  ;; direction to catch when the count is zero.
+  int query_id = body~load_uint(64);
+  throw_unless(200, body.slice_empty?());
+
+  throw_unless(203, msg_value >= get_compute_fee(0, topup_gas_ceiling()));
+  set_gas_limit(topup_gas_ceiling());
+  ;; No ACCEPT, no state write, no outbound message. The value that arrived is
+  ;; already in the balance; leaving liability alone is what makes it reserve.
+}
+
 () recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
   ;; A bounce carries no operation of ours. So does a plain top-up of the
   ;; balance, which is allowed and changes no shielded state.
@@ -136,6 +125,10 @@ int output_data_hash(cell output_data) impure {
   int op = in_msg_body~load_uint(32);
   if (op == op_deposit()) {
     handle_deposit(msg_value, in_msg_body);
+    return ();
+  }
+  if (op == op_reserve_topup()) {
+    handle_reserve_topup(msg_value, in_msg_body);
     return ();
   }
   throw(201);

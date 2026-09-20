@@ -44,6 +44,7 @@ const EPOCH_NONE: u32 = 0xffff_ffff;
 
 const OP_DEPOSIT: u32 = 0x5348_5001;
 const OP_TRANSACT: u32 = 0x5348_5002;
+const OP_RESERVE_TOPUP: u32 = 0x5348_5003;
 
 const DEPOSIT_GAS_CEILING: i64 = 500_000;
 const RESERVE_FLOOR: u64 = 5 * TOS;
@@ -294,6 +295,7 @@ impl Pool {
             std::path::PathBuf::from(format!("{library}/shielded/notes.fc")),
             std::path::PathBuf::from(format!("{library}/shielded/tree.fc")),
             std::path::PathBuf::from(format!("{library}/shielded/auth.fc")),
+            std::path::PathBuf::from(format!("{library}/shielded/payload.fc")),
             std::path::PathBuf::from(format!("{library}/shielded/anchors.fc")),
             std::path::PathBuf::from(format!("{library}/shielded/state.fc")),
             std::path::PathBuf::from(format!("{library}/tos-shielded-pool-v1.fc")),
@@ -569,6 +571,51 @@ fn only_a_configured_denomination_and_the_frozen_body_shape_are_accepted() {
     assert_eq!(pool.get("commitment_next_index"), "0", "a refused message appended a leaf");
     assert_eq!(pool.get("native_liability"), "0", "a refused message was credited");
     pool.assert_backed("after refusals");
+}
+
+/// Sections 12.3 and 16.4: reserve without a note.
+#[test]
+fn a_reserve_top_up_adds_balance_and_nothing_else() {
+    let mut pool = Pool::deploy();
+    pool.deposit(TOS, &[8u8; 32], 0).expect_success();
+    let root = pool.get("commitment_root");
+    let liability = pool.get("native_liability");
+    let index = pool.get("commitment_next_index");
+    let before = pool.balance();
+
+    let mut body = BuilderData::new();
+    body.append_u32(OP_RESERVE_TOPUP).unwrap();
+    body.append_u64(7).unwrap();
+    let top_up = body.into_cell().unwrap();
+    pool.send(4 * TOS, top_up.clone()).expect_success();
+
+    assert!(pool.balance() > before + 3 * TOS, "the top-up did not become balance");
+    assert_eq!(pool.get("native_liability"), liability, "a top-up became liability");
+    assert_eq!(pool.get("commitment_root"), root, "a top-up moved the tree");
+    assert_eq!(pool.get("commitment_next_index"), index, "a top-up assigned a leaf");
+    pool.assert_backed("after a top-up");
+
+    // It still has to pay for its own bounded compute.
+    let fee = 50_000 * 400;
+    pool.send(fee - 1, top_up.clone()).expect_exit_code(203);
+    pool.send(fee, top_up).expect_success();
+
+    // And it carries no payload: a reference or a trailing bit is a different
+    // message.
+    let mut with_ref = BuilderData::new();
+    with_ref.append_u32(OP_RESERVE_TOPUP).unwrap();
+    with_ref.append_u64(7).unwrap();
+    with_ref.checked_append_reference(Cell::default()).unwrap();
+    pool.send(4 * TOS, with_ref.into_cell().unwrap()).expect_exit_code(200);
+
+    let mut trailing = BuilderData::new();
+    trailing.append_u32(OP_RESERVE_TOPUP).unwrap();
+    trailing.append_u64(7).unwrap();
+    trailing.append_bit_zero().unwrap();
+    pool.send(4 * TOS, trailing.into_cell().unwrap()).expect_exit_code(200);
+
+    assert_eq!(pool.get("native_liability"), liability, "a refused top-up changed liability");
+    pool.assert_backed("after refused top-ups");
 }
 
 #[test]

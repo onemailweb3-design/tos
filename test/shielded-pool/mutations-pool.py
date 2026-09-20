@@ -32,6 +32,7 @@ STARVED_TEST = 'a_message_that_cannot_pay_for_its_own_gas_never_reaches_the_pool
 FUNDING_TEST = 'a_deposit_must_fund_its_principal_and_its_execution'
 SHAPE_TEST = 'only_a_configured_denomination_and_the_frozen_body_shape_are_accepted'
 TOPUP_TEST = 'a_plain_top_up_and_a_bounce_change_no_shielded_state'
+RESERVE_TEST = 'a_reserve_top_up_adds_balance_and_nothing_else'
 
 
 @dataclass
@@ -69,7 +70,8 @@ CASES = [
          '  throw_unless(200, body.slice_refs() == 1);',
          '  throw_unless(200, body.slice_refs() >= 0);', SHAPE_TEST),
     Case('body-trailing', 'trailing bits after the deposit fields are ignored', POOL,
-         '  throw_unless(200, body.slice_empty?());\n', '', SHAPE_TEST),
+         '  cell output_data = body~load_ref();\n  throw_unless(200, body.slice_empty?());',
+         '  cell output_data = body~load_ref();', SHAPE_TEST),
     Case('denomination', 'any amount is a denomination', POOL,
          '  throw_unless(202, config_has_denomination(config, deposit_amount));',
          '  throw_unless(202, deposit_amount > 0);', SHAPE_TEST),
@@ -98,6 +100,18 @@ CASES = [
     Case('liability-none', 'a deposit adds no liability at all', POOL,
          '  int new_liability = native_liability + deposit_amount;',
          '  int new_liability = native_liability;', LEDGER_TEST),
+
+    # Sections 12.3 and 16.4: reserve without a note.
+    Case('topup-leftover', 'anything left over after the query id is ignored', POOL,
+         '  int query_id = body~load_uint(64);\n  throw_unless(200, body.slice_empty?());',
+         '  int query_id = body~load_uint(64);', RESERVE_TEST),
+    Case('topup-funding', 'a top-up need not pay for its own compute', POOL,
+         '  throw_unless(203, msg_value >= get_compute_fee(0, topup_gas_ceiling()));',
+         '  throw_unless(203, msg_value >= 0);', RESERVE_TEST),
+    Case('topup-op', 'a top-up is dispatched to the deposit handler', POOL,
+         '  if (op == op_reserve_topup()) {\n    handle_reserve_topup(msg_value, in_msg_body);',
+         '  if (op == op_reserve_topup()) {\n    handle_deposit(msg_value, in_msg_body);',
+         RESERVE_TEST),
 
     # A message with no operation must not be mistaken for one.
     Case('empty-body', 'a body too short to hold an operation is parsed anyway', POOL,
