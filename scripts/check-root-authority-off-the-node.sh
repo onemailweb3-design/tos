@@ -66,6 +66,44 @@ for source in "${OFFLINE_SOURCES[@]}"; do
   fi
 done
 
+# The consensus key is authority too, and the node's surfaces that spend it are gated as
+# such. A client permitted only to read the node must not be able to have it commit a
+# stake or cast a vote.
+ENGINE="$REPO_ROOT/validator-engine/validator-engine.cpp"
+for query in createPqStakeAuthorization createProposalVote createComplaintVote; do
+  handler=$(awk -v q="engine_validator_${query} &query" '
+    index($0, q) { grab = 1 }
+    grab { print }
+    grab && /vep_/ { exit }
+  ' "$ENGINE")
+  if [[ -z "$handler" ]]; then
+    echo "no control handler found for $query" >&2
+    status=1
+  elif ! grep -q "vep_modify" <<<"$handler"; then
+    echo "$query is not gated on vep_modify, and it signs with the consensus key" >&2
+    status=1
+  fi
+done
+
+# A stake is how a node enters a validator set, so the creator that signs one must not
+# require membership in one. The lookup it may use resolves configured identity and
+# custodied key and nothing about any set.
+CREATOR=$(awk '
+  /^class PqStakeAuthorizationCreator/ { grab = 1 }
+  grab { print }
+  grab && /^};/ { exit }
+' "$ENGINE")
+if [[ -z "$CREATOR" ]]; then
+  echo "the stake authorisation creator is missing" >&2
+  status=1
+elif grep -q "get_current_validator" <<<"$CREATOR"; then
+  echo "the stake authorisation creator consults the current validator set: a node could never sign its first stake" >&2
+  status=1
+elif ! grep -q "get_local_pq_identity" <<<"$CREATOR"; then
+  echo "the stake authorisation creator does not resolve the node's local identity" >&2
+  status=1
+fi
+
 # The node must still be able to load its own consensus key: a boundary that removed
 # both halves would pass every check above and leave a validator unable to sign.
 if ! grep -q "load_consensus_key" "$REPO_ROOT/validator-engine/validator-engine.cpp"; then

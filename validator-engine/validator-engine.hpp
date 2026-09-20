@@ -597,6 +597,23 @@ class ValidatorEngine : public td::actor::Actor {
   };
   void get_current_validator(td::Promise<LocalValidator> promise);
 
+  // This node's post-quantum identity as it is configured and custodied, and nothing
+  // about any validator set.
+  //
+  // A stake is how a validator gets into a set, so the lookup that signs one cannot
+  // require being in a set already: a fresh controller with a bound key and a
+  // provisioned seed has never been elected, and the current-set lookup above would
+  // refuse it with "not a validator" -- a circle nothing could enter. The votes keep
+  // that lookup, because a vote is authority a member exercises; a stake is a request
+  // to become one.
+  struct LocalIdentity {
+    tos::ValidatorId validator_id;
+    tos::ConsensusKeyId key_id;
+    std::shared_ptr<const tos::pq::ValidatorPQKeyStore> signer;
+    td::int32 global_id;
+  };
+  void get_local_pq_identity(td::Promise<LocalIdentity> promise);
+
   void try_add_adnl_node(tos::PublicKeyHash pub, AdnlCategory cat, td::Promise<td::Unit> promise);
   void try_add_dht_node(tos::PublicKeyHash pub, td::Promise<td::Unit> promise);
   void try_add_validator_permanent_key(tos::PublicKeyHash key_hash, td::uint32 election_date, td::uint32 ttl,

@@ -1006,18 +1006,20 @@ class PqStakeAuthorizationCreator : public td::actor::Actor {
   }
 
   void start_up() override {
-    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<ValidatorEngine::LocalValidator> R) {
+    // The local identity and not the current-set lookup: a stake is how a node enters a
+    // set, so the first one is always signed by a node that is not in one yet.
+    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<ValidatorEngine::LocalIdentity> R) {
       if (R.is_error()) {
         td::actor::send_closure(SelfId, &PqStakeAuthorizationCreator::abort_query,
                                 R.move_as_error_prefix("this node cannot authorise a stake: "));
       } else {
-        td::actor::send_closure(SelfId, &PqStakeAuthorizationCreator::got_validator, R.move_as_ok());
+        td::actor::send_closure(SelfId, &PqStakeAuthorizationCreator::got_identity, R.move_as_ok());
       }
     });
-    td::actor::send_closure(engine_, &ValidatorEngine::get_current_validator, std::move(P));
+    td::actor::send_closure(engine_, &ValidatorEngine::get_local_pq_identity, std::move(P));
   }
 
-  void got_validator(ValidatorEngine::LocalValidator self) {
+  void got_identity(ValidatorEngine::LocalIdentity self) {
     if (adnl_addr_.is_zero()) {
       abort_query(td::Status::Error("a validator is reachable at an address it states"));
       return;
@@ -1031,8 +1033,10 @@ class PqStakeAuthorizationCreator : public td::actor::Actor {
       return;
     }
 
-    td::Bits256 key_id;
-    std::memcpy(key_id.data(), self.key_id.value.data(), key_id.size());
+    // Both are Bits256, so this is a copy, not a memcpy: Bits256::size() counts bits, and
+    // copying 256 bytes into a 32-byte buffer is a stack overflow the compiler would not
+    // catch. The equivalent line in the vote tool crashed exactly this way.
+    const td::Bits256 &key_id = self.key_id.value;
     auto preimage =
         tos::pq::stake_preimage(self.global_id, election_date_, max_factor_, self.validator_id.value, stake_owner_,
                                 static_cast<std::uint16_t>(tos::pq::PQAlgorithmId::mldsa44), key_id, adnl_addr_);
@@ -4507,7 +4511,10 @@ void ValidatorEngine::run_control_query(tos::tos_api::engine_validator_getStats 
 void ValidatorEngine::run_control_query(tos::tos_api::engine_validator_createPqStakeAuthorization &query,
                                         td::BufferSlice data, tos::PublicKeyHash src, td::uint32 perm,
                                         td::Promise<td::BufferSlice> promise) {
-  if (!(perm & ValidatorEnginePermissions::vep_default)) {
+  // This signs with the consensus key: it produces authority, the way the two vote
+  // creators do, and is gated the way they are. A client that may only read the node
+  // must not be able to have it commit somebody's stake to an election.
+  if (!(perm & ValidatorEnginePermissions::vep_modify)) {
     promise.set_value(create_control_query_error(td::Status::Error(tos::ErrorCode::error, "not authorized")));
     return;
   }
@@ -5777,6 +5784,25 @@ void ValidatorEngine::add_json_rpc_trusted_proxy(std::string ip) {
   // always implicit; this list extends trust to additional intermediate
   // proxies when the operator runs the JSON-RPC behind one.
   json_rpc_opts_.trusted_proxies.push_back(std::move(ip));
+}
+
+void ValidatorEngine::get_local_pq_identity(td::Promise<LocalIdentity> promise) {
+  if (state_.is_null()) {
+    promise.set_error(td::Status::Error(tos::ErrorCode::notready, "not started"));
+    return;
+  }
+  if (!pq_consensus_signer_ || !config_.pq_consensus) {
+    promise.set_error(td::Status::Error(tos::ErrorCode::notready, "no post-quantum consensus key is custodied"));
+    return;
+  }
+  // The identity is the configured controller account; the key is whatever the custodied
+  // seed derives. Neither is looked up in a validator set, and nothing here can be, or a
+  // node could never place the stake that puts it into one.
+  const auto &held_key = pq_consensus_signer_->consensus_key();
+  tos::ConsensusKeyId key_id;
+  std::memcpy(key_id.value.data(), held_key.key_id.data(), held_key.key_id.size());
+  promise.set_value(
+      LocalIdentity{config_.pq_consensus->validator_id, key_id, pq_consensus_signer_, state_->get_global_id()});
 }
 
 void ValidatorEngine::get_current_validator(td::Promise<LocalValidator> promise) {
