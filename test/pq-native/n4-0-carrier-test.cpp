@@ -91,10 +91,13 @@ int main() {
   assert(carrier::simplex_carrier_accepts(certificate_bytes(21)));
   assert(carrier::simplex_carrier_accepts(certificate_bytes(100)));
 
-  // The peer-MTU allowance carries the framed hard max.
-  assert(carrier::simplex_carrier_peer_mtu_bytes >
-             carrier::simplex_protocol_hard_max_bytes + carrier::simplex_carrier_framing_bytes - 1 &&
-         "the peer-MTU allowance must cover the inner hard max plus framing");
+  // The peer-MTU allowance carries the fully wrapped hard max: inner + overlay.message +
+  // the transport wrapper the sender's limit is actually checked against. The worst case
+  // is the RLDP wrapper (inner + 36 + 40); the allowance must cover it.
+  const std::size_t rldp_framed_hard_max = carrier::simplex_protocol_hard_max_bytes +
+                                           carrier::kOverlayMessagePrefixBytes + carrier::kTransportWrapperMaxBytes;
+  assert(carrier::simplex_carrier_peer_mtu_bytes >= rldp_framed_hard_max &&
+         "the peer-MTU allowance must cover the inner hard max wrapped in overlay + transport framing");
 
   std::printf("N4_0_CARRIER_OK hard_max=%zu cert400=%zu peer_mtu=%zu\n", carrier::simplex_protocol_hard_max_bytes,
               cert_ceiling, carrier::simplex_carrier_peer_mtu_bytes);

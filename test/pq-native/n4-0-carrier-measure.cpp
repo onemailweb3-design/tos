@@ -29,12 +29,17 @@
 namespace {
 
 // The current transport carrier, read from source (constexpr there, cited here so a drift
-// is visible). adnl/adnl-network-manager.h: Adnl::get_mtu() == 1440. overlay/overlays.h:
-// Overlays::max_message_size() == Adnl::get_mtu() - 36, the 36 being the overlay.message
-// header (constructor id 4 + overlay:int256 32) prepended to a direct message.
-constexpr std::uint32_t kAdnlMtu = 1440;
+// is visible). adnl/adnl.h: adnl::Adnl::get_mtu() == 1024 (NOT AdnlNetworkManager's 1440).
+// overlay/overlays.h: Overlays::max_message_size() == adnl::Adnl::get_mtu() - 36, the 36
+// being the overlay.message header (ctor id 4 + overlay:int256 32) prepended to a direct
+// message. Below the overlay, the AdnlSenderEx wraps the whole buffer once more and checks
+// its per-peer limit against the wrapped size: QUIC `quic.message` adds 8 B, RLDP2
+// `rldp.message` adds 40 B.
+constexpr std::uint32_t kAdnlMtu = 1024;
 constexpr std::uint32_t kOverlayMessageHeader = 36;
-constexpr std::uint32_t kDirectMessageMax = kAdnlMtu - kOverlayMessageHeader;  // 1404
+constexpr std::uint32_t kDirectMessageMax = kAdnlMtu - kOverlayMessageHeader;  // 988
+constexpr std::uint32_t kQuicMessageWrapper = 8;
+constexpr std::uint32_t kRldpMessageWrapper = 40;
 
 td::Bits256 fill(unsigned char b) {
   td::Bits256 out;
@@ -176,13 +181,19 @@ int main() {
   std::printf("certificate 100     %zu bytes\n", cert100);
   std::printf("certificate 400     %zu bytes\n", cert400);
   std::printf("\n");
-  std::printf("current carrier     Adnl::get_mtu()=%u, overlay header=%u, direct-message max=%u bytes\n", kAdnlMtu,
-              kOverlayMessageHeader, kDirectMessageMax);
+  std::printf("current carrier     adnl::Adnl::get_mtu()=%u, overlay header=%u, direct-message max=%u bytes\n",
+              kAdnlMtu, kOverlayMessageHeader, kDirectMessageMax);
   std::printf("a single vote %s in one direct message today (%zu vs %u)\n",
               vote_sz <= kDirectMessageMax ? "FITS" : "DOES NOT FIT", vote_sz, kDirectMessageMax);
   std::printf("\n");
-  // The number the frozen hard carrier bound must cover: the 400-signer certificate plus
-  // the overlay header, because the peer-MTU allowance is applied to the framed message.
-  std::printf("HARD_CARRIER_MUST_COVER  cert400 + overlay header = %zu bytes\n", cert400 + kOverlayMessageHeader);
+  // The peer-MTU allowance is checked against the fully wrapped stream, so the 400-signer
+  // certificate must be covered together with the overlay header and the transport wrapper
+  // the sender's limit sees (RLDP is the larger at +40).
+  std::printf("cert400 framed QUIC     %zu bytes  (cert400 + overlay %u + quic.message %u)\n",
+              cert400 + kOverlayMessageHeader + kQuicMessageWrapper, kOverlayMessageHeader, kQuicMessageWrapper);
+  std::printf("cert400 framed RLDP     %zu bytes  (cert400 + overlay %u + rldp.message %u)\n",
+              cert400 + kOverlayMessageHeader + kRldpMessageWrapper, kOverlayMessageHeader, kRldpMessageWrapper);
+  std::printf("PEER_MTU_MUST_COVER     %zu bytes  (the larger, RLDP-framed)\n",
+              cert400 + kOverlayMessageHeader + kRldpMessageWrapper);
   return 0;
 }
