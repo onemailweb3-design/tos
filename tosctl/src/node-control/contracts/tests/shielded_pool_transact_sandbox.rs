@@ -651,9 +651,16 @@ impl Pool {
     }
 
     fn exit_of(&mut self, value: u64, body: Cell) -> i32 {
+        self.run(value, body).0
+    }
+
+    /// The exit code and the gas it took to get there.
+    fn run(&mut self, value: u64, body: Cell) -> (i32, i64) {
         let result = self.send(value, body);
         match result.read_primary_description().compute_ph {
-            chain_block::TrComputePhase::Vm(vm) => vm.exit_code,
+            chain_block::TrComputePhase::Vm(vm) => {
+                (vm.exit_code, vm.gas_used.to_string().parse().expect("gas used"))
+            }
             chain_block::TrComputePhase::Skipped(s) => panic!("compute skipped: {:?}", s.reason),
         }
     }
@@ -857,6 +864,75 @@ fn a_proof_that_does_not_verify_stops_the_transaction() {
         "a message with an unverifiable proof was not stopped by the proof"
     );
     assert_eq!(pool.snapshot(), before, "a proof that did not verify still moved the state");
+}
+
+/// Where the gas goes. A message that fails at step N has paid for steps 1
+/// through N, so the cost of each step is the difference between two failures
+/// -- no instrumentation, no estimate, and nothing the contract does not
+/// really do. The ceiling question below is a question about which of these
+/// numbers can be made smaller, so it needs them.
+#[test]
+fn what_a_transact_spends_and_where() {
+    let state = RefState::genesis();
+    let keys = [Key::generate(), Key::generate()];
+    let digest = small(0x2222_3333_4444_5555);
+    let mut pool = Pool::deploy_with_gas_limit(state.root(), Some(10_000_000));
+    let now = pool.bc.now();
+    let value = 10_000_000 * 400;
+
+    let good = || {
+        let mut message = well_formed(&state, &keys, digest);
+        message.valid_until = now + 60;
+        message
+    };
+
+    // Each message is correct up to the step named and wrong at it, so the
+    // gas it burned is the cost of everything before that step.
+    let mut stale = good();
+    stale.valid_until = now - 1;
+    let mut forged = good();
+    forged.anchor_root = small(7);
+    // Wrong from the start: the first insertion rejects it.
+    let mut swapped = good();
+    swapped.witnesses.swap(0, 1);
+    // Right for the first insertion and wrong for the second: the second
+    // witness agrees with the tree as it was, not with the tree the first
+    // insertion left. So this one pays for a whole insertion first.
+    let mut stale_second = good();
+    let (witness_1, _, _, _) = state.clone().witness_for(&small(202));
+    stale_second.witnesses[1] = encode_witness(&witness_1);
+    let mut misauthorized = good();
+    misauthorized.signatures[0] = byte_chain(&keys[0].authorize(&small(1)));
+
+    let stages: Vec<(&str, Cell)> = vec![
+        ("parse and the validity window", stale.body()),
+        ("+ the anchor", forged.body()),
+        ("+ the first insertion, rejected at its witness", swapped.body()),
+        ("+ one whole insertion, the second rejected", stale_second.body()),
+        ("+ both insertions and the first authorization", misauthorized.body()),
+        ("+ the second authorization and the proof", good().body()),
+    ];
+
+    let mut previous = 0i64;
+    let mut reached_proof = 0i64;
+    for (what, body) in stages {
+        let (exit, used) = pool.run(value, body);
+        assert_ne!(exit, 0, "{what}: the message was accepted");
+        assert!(
+            used > previous,
+            "{what}: cost {used} gas, no more than the step before it ({previous})"
+        );
+        eprintln!("{used:>9}  (+{:>8})  {what}", used - previous);
+        previous = used;
+        reached_proof = used;
+    }
+
+    // The total is what the suite reports elsewhere; this test's claim is the
+    // shape of the breakdown, not the total.
+    assert!(
+        reached_proof > 1_000_000,
+        "the whole path now costs {reached_proof} gas and the ceiling question has moved"
+    );
 }
 
 /// What a transact costs, measured rather than estimated, and the ceiling
