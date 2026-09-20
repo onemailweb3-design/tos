@@ -1516,6 +1516,60 @@ fn controller_code() -> chain_block::Cell {
 }
 
 /// Deploy a controller, its authority rooted in a key only this test holds.
+/// A single-nominator pool, deployed and funded, staking through `controller`.
+///
+/// The real contract, compiled from its own source: what is being proved is that a pool's
+/// money reaches an election, and a stand-in for the pool would prove nothing about the
+/// pool.
+fn deploy_single_nominator(
+    chain: &mut Chain,
+    owner: &MsgAddressInt,
+    validator: &MsgAddressInt,
+    controller: &MsgAddressInt,
+    balance: u64,
+) -> MsgAddressInt {
+    use chain_block::{GetRepresentationHash, Serializable};
+    let root = std::env::var("TOS_ROOT").map(std::path::PathBuf::from).unwrap_or_else(|_| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(4)
+            .expect("repository root")
+            .to_path_buf()
+    });
+    let code = tos_sandbox::compile_func_with_stdlib(&[
+        root.join("crypto/smartcont/single-nominator-pool/single-nominator-code.fc")
+    ])
+    .expect("the single-nominator contract compiles");
+
+    let mut data = chain_block::BuilderData::new();
+    owner.write_to(&mut data).expect("owner address");
+    validator.write_to(&mut data).expect("validator address");
+    controller.write_to(&mut data).expect("controller address");
+
+    let state = chain_block::StateInit::with_code_and_data(
+        code,
+        data.into_cell().expect("the pool's storage"),
+    );
+    let address = MsgAddressInt::with_params(
+        -1,
+        state.write_to_new_cell().expect("state").into_cell().expect("state cell").hash(0),
+    )
+    .expect("the pool's address");
+    let funder = chain.blockchain.treasury("pool-funder", 200_000 * TOS).expect("funding");
+    chain
+        .blockchain
+        .send_message(
+            tos_sandbox::MessageBuilder::internal(funder.address(), &address, balance)
+                .bounce(false)
+                .state_init(state)
+                .body(chain_block::Cell::default())
+                .build(),
+        )
+        .expect("the pool deploys")
+        .expect_success();
+    address
+}
+
 fn deploy_rooted_validator(chain: &mut Chain, index: u8) -> RootedValidator {
     use chain_block::{GetRepresentationHash, IBitstring, Serializable};
     let root = PqValidator::new(0x80 + index);
@@ -2166,6 +2220,164 @@ fn complaint_voters(chain: &Chain, election: u32, complaint: &[u8; 32]) -> Vec<u
     .expect("the voters");
     indices.sort_unstable();
     indices
+}
+
+/// A pool's money reaches an election, and comes back to the pool.
+///
+/// The three halves of this have each been run on their own: a pool sends its stake to a
+/// controller, a controller relays one to the elector, and the elector takes a stake whose
+/// owner is not its sender. Three green halves are not a working whole, and the point of
+/// the pooled-staking ruling is the whole -- so here it is, end to end, with nothing
+/// standing in for anything.
+///
+/// The single-nominator pool is the one used, because it is the smallest of the three and
+/// what is being proved is the path rather than any pool's accounting.
+#[test]
+fn a_pools_money_reaches_an_election_through_a_real_controller() {
+    use chain_block::IBitstring;
+
+    let (mut chain, _treasury, election) = open_election("pool-e2e", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+
+    // Four controllers, so the election has enough behind it to conduct, and the code
+    // they were deployed as is the only one admitted.
+    let mut validators: Vec<RootedValidator> =
+        (0..4u8).map(|index| deploy_rooted_validator(&mut chain, 0x20 + index)).collect();
+    admit_code_of(&mut chain, &validators[0].address);
+
+    // The pool that holds the money, staking through the first of them.
+    let owner = chain.blockchain.treasury("pool-e2e-owner", 100_000 * TOS).expect("an owner");
+    let operator = chain.blockchain.treasury("pool-e2e-operator", 100_000 * TOS).expect("a wallet");
+    let controller = validators[0].address.clone();
+    let pool = deploy_single_nominator(
+        &mut chain,
+        owner.address(),
+        operator.address(),
+        &controller,
+        40_000 * TOS,
+    );
+
+    // The validator's permission: signed by the consensus key its controller is bound to,
+    // naming the pool as the account whose money this is.
+    let pool_id = chain_block::UInt256::from_slice(&pool.address().get_bytestring(0));
+    let preimage = pq_stake_preimage_for(
+        global_id(&chain),
+        election,
+        0x10000,
+        &validators[0].id(),
+        &pool_id,
+        1,
+        &validators[0].consensus.key_id(),
+        &validators[0].consensus.adnl,
+    );
+    let signature = validators[0].consensus.sign(&preimage);
+
+    // The operator's order to the pool, carrying those terms and the controller's proof
+    // of what it was deployed as.
+    let mut order = chain_block::BuilderData::new();
+    order.append_u32(0x4e73_744b).expect("operation");
+    order.append_u64(1).expect("query id");
+    chain_block::Serializable::write_to(&chain_block::Coins::new(11_000 * TOS), &mut order)
+        .expect("stake amount");
+    order.append_u32(election).expect("election");
+    order.append_u32(0x10000).expect("max factor");
+    order.append_raw(&validators[0].consensus.adnl, 256).expect("transport address");
+    order.append_u16(1).expect("algorithm");
+    order
+        .checked_append_reference(stored_bytes(&validators[0].consensus.public_key))
+        .expect("the key");
+    order.checked_append_reference(stored_bytes(&signature)).expect("the signature");
+    order.append_bit_one().expect("a witness is present");
+    order.checked_append_reference(birth_witness(&chain, &controller)).expect("the proof");
+
+    let result = chain
+        .blockchain
+        .send_message(operator.build_message(
+            &pool,
+            2 * TOS,
+            true,
+            Some(order.into_cell().expect("an order")),
+        ))
+        .expect("the order is delivered");
+    result.expect_success();
+
+    // The elector took it, and the member it registered is the controller.
+    assert!(
+        replies(&result).contains(&STAKE_ACCEPTED),
+        "the pool's stake never reached the election: {:02x?}",
+        replies(&result)
+    );
+    let (members, _) = pq_book(&chain);
+    assert!(
+        members.get(controller.address().clone()).expect("lookup").is_some(),
+        "the controller is not a member of the election"
+    );
+    assert!(
+        members.get(pool.address().clone()).expect("lookup").is_none(),
+        "the pool became a validator, which is the thing this separation prevents"
+    );
+
+    // The other three stake for themselves, so the election can conduct.
+    let network = global_id(&chain);
+    for index in 1..validators.len() {
+        let preimage = pq_stake_preimage(
+            network,
+            election,
+            0x10000,
+            &validators[index].id(),
+            &validators[index].consensus.key_id(),
+            &validators[index].consensus.adnl,
+        );
+        let signature = validators[index].consensus.sign(&preimage);
+        let witness = birth_witness(&chain, &validators[index].address.clone());
+        let body = pq_stake_body(
+            20 + index as u64,
+            &validators[index].consensus,
+            election,
+            0x10000,
+            &signature,
+            Some(witness),
+        );
+        let placed = validators[index].send_to_elector(&mut chain, 11_000 * TOS, body);
+        assert!(
+            replies(&placed).contains(&STAKE_ACCEPTED),
+            "controller {index} could not place its own stake"
+        );
+    }
+
+    // Run the round to its end, and the money goes home to the pool rather than to the
+    // controller that carried it.
+    chain.blockchain.set_now(election - chain.elect_end_before);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain.blockchain.set_now(chain.blockchain.now() + 10 * 365 * 24 * 3600);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+
+    let pool_bytes: [u8; 32] = pool.address().get_bytestring(0).try_into().expect("an address");
+    let controller_bytes: [u8; 32] =
+        controller.address().get_bytestring(0).try_into().expect("an address");
+    assert!(owed(&chain, &pool_bytes) > 0, "the pool was not repaid what it staked");
+    assert_eq!(
+        owed(&chain, &controller_bytes),
+        0,
+        "the controller was repaid money it never put up"
+    );
 }
 
 #[test]
