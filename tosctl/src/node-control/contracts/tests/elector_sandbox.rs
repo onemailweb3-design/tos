@@ -2556,6 +2556,35 @@ fn install_synthetic_book(chain: &mut Chain, count: u16, stake_each: u64) {
 /// The effective total is summed over the codes the configuration still admits, so how
 /// many there are is part of what an election costs.
 fn install_synthetic_book_over(chain: &mut Chain, count: u16, stake_each: u64, profiles: u16) {
+    install_synthetic_book_owned(chain, count, stake_each, profiles, &|_, identity| identity)
+}
+
+/// The same, with each member's stake owner chosen.
+///
+/// A validator's authority and a validator's capital are two things: the identity is the
+/// controller, the owner is whoever put the money up. They are the same account when a
+/// controller stakes its own funds and different when a pool stakes for it, and nothing
+/// distinguishes the two unless a test makes them differ.
+fn install_synthetic_book_owned(
+    chain: &mut Chain,
+    count: u16,
+    stake_each: u64,
+    profiles: u16,
+    owner_of: &dyn Fn(u16, [u8; 32]) -> [u8; 32],
+) {
+    install_synthetic_book_full(chain, count, profiles, owner_of, &|_| stake_each)
+}
+
+/// The same again, with each member's stake chosen too. Equal stakes are capped at the
+/// smallest and leave nothing over, so a book where they differ is the only one where the
+/// unused part of a stake exists at all.
+fn install_synthetic_book_full(
+    chain: &mut Chain,
+    count: u16,
+    profiles: u16,
+    owner_of: &dyn Fn(u16, [u8; 32]) -> [u8; 32],
+    stake_of: &dyn Fn(u16) -> u64,
+) {
     use chain_block::IBitstring;
     assert!(profiles >= 1, "a book needs at least one admitted profile");
     let code_of = |index: u16| {
@@ -2579,7 +2608,7 @@ fn install_synthetic_book_over(chain: &mut Chain, count: u16, stake_each: u64, p
         adnl[31] = 1;
 
         let mut record = chain_block::BuilderData::new();
-        chain_block::Serializable::write_to(&chain_block::Coins::new(stake_each), &mut record)
+        chain_block::Serializable::write_to(&chain_block::Coins::new(stake_of(index)), &mut record)
             .expect("the stake");
         record.append_u32(chain.blockchain.now()).expect("registered at");
         record.append_u32(0x10000).expect("max factor");
@@ -2587,11 +2616,16 @@ fn install_synthetic_book_over(chain: &mut Chain, count: u16, stake_each: u64, p
         record.append_raw(key_id.as_slice(), 256).expect("key identity");
         record.checked_append_reference(stored_bytes(&key)).expect("the key");
         record.append_raw(&adnl, 256).expect("transport identity");
-        let mut code = chain_block::BuilderData::new();
-        code.append_raw(code_of(index).as_slice(), 256).expect("the controller code");
+        // Who the money is, and what the controller was admitted as. Both live behind one
+        // reference: either of them inline overflows the member record's dictionary write.
+        // The synthetic book stakes each member from its own identity, which is what a
+        // controller staking its own funds looks like.
+        let mut rest = chain_block::BuilderData::new();
+        rest.append_raw(&owner_of(index, validator_id), 256).expect("the stake owner");
+        rest.append_raw(code_of(index).as_slice(), 256).expect("the controller code");
         record
-            .checked_append_reference(code.into_cell().expect("a code cell"))
-            .expect("the controller code");
+            .checked_append_reference(rest.into_cell().expect("a cell"))
+            .expect("the owner and the code");
 
         let id_key = chain_block::SliceData::load_builder(
             chain_block::BuilderData::with_raw(validator_id.to_vec(), 256).expect("a key"),
@@ -2614,13 +2648,13 @@ fn install_synthetic_book_over(chain: &mut Chain, count: u16, stake_each: u64, p
     }
 
     for profile in 0..profiles {
-        let members_here = u64::from(count / profiles) + u64::from(count % profiles > profile);
+        // Summed rather than multiplied, because the members under a profile need not
+        // have staked the same amount.
+        let staked_here: u64 =
+            (0..count).filter(|index| index % profiles == profile).map(stake_of).sum();
         let mut total = chain_block::BuilderData::new();
-        chain_block::Serializable::write_to(
-            &chain_block::Coins::new(stake_each * members_here),
-            &mut total,
-        )
-        .expect("the aggregate");
+        chain_block::Serializable::write_to(&chain_block::Coins::new(staked_here), &mut total)
+            .expect("the aggregate");
         by_code
             .set_builder(
                 chain_block::SliceData::load_builder(
@@ -2753,6 +2787,293 @@ fn an_election_is_measured_at_the_sizes_the_chain_allows() {
 /// The effective total an election is judged on is summed over the codes the
 /// configuration still admits, and the ceiling on those is eight. The figure to know is
 /// whether the election a chain runs depends on how its operators are spread.
+/// What the elector owes an account, in nanotomis.
+fn owed(chain: &Chain, account: &[u8; 32]) -> u128 {
+    // The get-method takes the address as a 256-bit unsigned integer. Built from the
+    // bytes rather than from a hexadecimal string: `big_int` strips an `0x` prefix and
+    // then parses what is left in decimal, which reads most addresses as a different
+    // number and the rest as an error.
+    let argument = tos_vm::stack::StackItem::integer(
+        tos_vm::stack::integer::IntegerData::from_unsigned_bytes_be(account),
+    );
+    let result = chain
+        .blockchain
+        .run_get_method(&chain.elector, "compute_returned_stake", vec![argument])
+        .expect("the elector answers");
+    assert_eq!(result.exit_code, 0, "compute_returned_stake failed");
+    result
+        .stack
+        .last()
+        .expect("a value")
+        .as_integer()
+        .expect("an integer")
+        .to_string()
+        .parse()
+        .expect("an amount")
+}
+
+/// The money goes back to whoever put it up, not to the identity that staked it.
+///
+/// This is the separation the inherited elector had and the post-quantum cutover lost: a
+/// pool holds nominators' funds and has no authority, a controller has authority and need
+/// not hold the funds. A book where the two differ is the only way to tell one from the
+/// other, because a controller staking its own money makes them the same account and
+/// every test then passes either way.
+#[test]
+fn the_unused_part_of_a_stake_goes_to_its_owner_and_not_to_the_validator() {
+    let (mut chain, _treasury, election) = open_election("stake-owner", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+
+    // Each member's money belongs to a different account from its identity.
+    let owner_of = |index: u16, _identity: [u8; 32]| {
+        let mut owner = [0xEEu8; 32];
+        owner[30..32].copy_from_slice(&(index + 1).to_be_bytes());
+        owner
+    };
+    install_synthetic_book_owned(&mut chain, 8, 11_000 * TOS, 1, &owner_of);
+
+    chain.blockchain.set_now(election - chain.elect_end_before);
+    let result =
+        chain.blockchain.tick_tock(&chain.elector, TransactionTickTock::Tick).expect("tick runs");
+    result.expect_success();
+    assert!(
+        replies(&result).contains(&VALIDATOR_SET_INSTALLED),
+        "the election did not produce a set"
+    );
+
+    // Every member staked the same amount, so the selection caps each at the smallest and
+    // there is nothing left over. What there is instead is the frozen record, which is
+    // what the stake is returned through when the round ends -- so the test that can see
+    // the difference now is the one that asks who the elector owes after a retirement.
+    for index in 0u16..8 {
+        let mut identity = [0u8; 32];
+        identity[30..32].copy_from_slice(&(index + 1).to_be_bytes());
+        assert_eq!(
+            owed(&chain, &identity),
+            0,
+            "the elector owes the validator identity something it never put up"
+        );
+    }
+}
+
+/// The whole round, from the election to the stake coming back, with the money belonging
+/// to accounts that are not the validators.
+///
+/// Two things only this test can see. The part of a stake the selection does not take is
+/// credited straight away, which needs members who staked different amounts -- equal
+/// stakes are all capped at the smallest and leave nothing over. And the part it does
+/// take is held in the frozen record until the round ends, and returned to the account
+/// that record names, which needs the round to actually end.
+#[test]
+fn the_stake_and_its_unused_part_both_come_back_to_the_owner() {
+    let (mut chain, _treasury, election) = open_election("owner-round", 400_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+
+    let owner_of = |index: u16, _identity: [u8; 32]| {
+        let mut owner = [0xEEu8; 32];
+        owner[30..32].copy_from_slice(&(index + 1).to_be_bytes());
+        owner
+    };
+    // One member stakes three times what the others do, so the selection caps it and the
+    // rest is left over.
+    let members = 21u16;
+    let base = 11_000 * TOS;
+    let stake_of = |index: u16| if index == 0 { 3 * base } else { base };
+    install_synthetic_book_full(&mut chain, members, 1, &owner_of, &stake_of);
+
+    let mut rich_identity = [0u8; 32];
+    rich_identity[30..32].copy_from_slice(&1u16.to_be_bytes());
+    let rich_owner = owner_of(0, rich_identity);
+
+    chain.blockchain.set_now(election - chain.elect_end_before);
+    let result =
+        chain.blockchain.tick_tock(&chain.elector, TransactionTickTock::Tick).expect("tick runs");
+    result.expect_success();
+    assert!(replies(&result).contains(&VALIDATOR_SET_INSTALLED), "the election did not run");
+
+    // The part the selection did not take is already owed, to the owner.
+    let left_over = owed(&chain, &rich_owner);
+    assert!(left_over > 0, "nothing was left over, so this test cannot see where a surplus goes");
+    assert_eq!(
+        owed(&chain, &rich_identity),
+        0,
+        "the surplus went to the validator identity, which never put the money up"
+    );
+
+    // Finish the round and let the held stake come back.
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    assert_eq!(active_election_id(&chain), 0, "the election should be finished by now");
+
+    // Past the point the stake is held to, and one more tick to release it.
+    chain.blockchain.set_now(chain.blockchain.now() + 10 * 365 * 24 * 3600);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+
+    let returned = owed(&chain, &rich_owner);
+    assert!(
+        returned > left_over,
+        "the held stake did not come back to the owner: it is owed {returned}, and {left_over} \
+         was already the unused part"
+    );
+    assert_eq!(
+        owed(&chain, &rich_identity),
+        0,
+        "the held stake went to the validator identity, which never put the money up"
+    );
+}
+
+/// A stake the contract itself recorded, rather than one a test wrote into the book.
+///
+/// The two tests above put members into the election directly, which exercises what the
+/// elector does with a record but not what it writes into one. A controller staking its
+/// own funds makes the owner and the identity the same account, so the only way to see
+/// which of them the record kept is to make the elector use it: retire the controller's
+/// profile and require the refund to arrive.
+#[test]
+fn the_owner_a_real_stake_records_is_the_account_that_sent_it() {
+    let (mut chain, treasury, election) = open_election("recorded-owner", 200_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let _ = treasury;
+
+    let mut senders = Vec::new();
+    for index in 0..4u8 {
+        let validator = PqValidator::new(0x60 + index);
+        let account = chain
+            .blockchain
+            .treasury(&format!("recorded-owner-{index}"), 40_000 * TOS)
+            .expect("a funded account");
+        let result = pq_stake(
+            &mut chain,
+            &account,
+            &validator,
+            election,
+            20 + u64::from(index),
+            11_000 * TOS,
+        );
+        assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "validator {index} could not stake");
+        let bytes: [u8; 32] =
+            account.address().address().get_bytestring(0).try_into().expect("an address");
+        senders.push(bytes);
+    }
+
+    // Conduct the election, finish the round, and let the held stakes come back. What
+    // they come back to is the account each member record names, which is what
+    // `pack_member` wrote when the stake arrived.
+    chain.blockchain.set_now(election - chain.elect_end_before);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain.blockchain.set_now(chain.blockchain.now() + 10 * 365 * 24 * 3600);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+
+    for (index, sender) in senders.iter().enumerate() {
+        assert!(
+            owed(&chain, sender) > 0,
+            "member {index}: the elector owes the account that staked nothing, so the record \
+             kept something else"
+        );
+    }
+}
+
+/// A member whose controller profile has been retired is out of the election, and its
+/// money goes home -- to the account that put it up.
+///
+/// An absent policy admits nobody and postpones the election, so nothing would be
+/// refunded at all. The book is therefore spread over two profiles and only the first is
+/// left admitted: the members under it are elected, and the members under the retired one
+/// take the path home while the election still runs.
+#[test]
+fn a_retired_profiles_stake_returns_to_its_owner() {
+    let (mut chain, _treasury, election) = open_election("retired-owner", 400_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+
+    let owner_of = |index: u16, _identity: [u8; 32]| {
+        let mut owner = [0xEEu8; 32];
+        owner[30..32].copy_from_slice(&(index + 1).to_be_bytes());
+        owner
+    };
+    let members = 24u16;
+    install_synthetic_book_owned(&mut chain, members, 11_000 * TOS, 2, &owner_of);
+
+    // Admit only the first of the two profiles. The book's codes are 0x7c..7c with the
+    // profile in the last two bytes, which is how the builder writes them.
+    let mut admitted = [0x7cu8; 32];
+    admitted[30..32].copy_from_slice(&0u16.to_be_bytes());
+    let mut dict = chain_block::HashmapE::with_bit_len(256);
+    dict.set(
+        chain_block::SliceData::load_builder(
+            chain_block::BuilderData::with_raw(admitted.to_vec(), 256).expect("a key"),
+        )
+        .expect("a key slice"),
+        &chain_block::SliceData::default(),
+    )
+    .expect("insert");
+    let mut policy = chain_block::BuilderData::new();
+    chain_block::IBitstring::append_bit_one(&mut policy).expect("a non-empty policy");
+    policy
+        .checked_append_reference(
+            chain_block::HashmapType::data(&dict).expect("a non-empty dictionary").clone(),
+        )
+        .expect("the codes");
+    set_contract_parameter(&mut chain, 47, policy.into_cell().expect("a controller policy"));
+
+    chain.blockchain.set_now(election - chain.elect_end_before);
+    let result =
+        chain.blockchain.tick_tock(&chain.elector, TransactionTickTock::Tick).expect("tick runs");
+    result.expect_success();
+    assert!(
+        replies(&result).contains(&VALIDATOR_SET_INSTALLED),
+        "the election did not run, so nothing took the refund path"
+    );
+
+    // The odd indices are the retired profile. Their money is owed to the accounts that
+    // put it up, and nothing is owed to the identities that staked it.
+    let mut refunded = 0;
+    for index in (1u16..members).step_by(2) {
+        let mut identity = [0u8; 32];
+        identity[30..32].copy_from_slice(&(index + 1).to_be_bytes());
+        let owner = owner_of(index, identity);
+        assert_eq!(
+            owed(&chain, &identity),
+            0,
+            "member {index}: the elector owes the identity, which never put the money up"
+        );
+        assert_eq!(
+            owed(&chain, &owner),
+            u128::from(11_000 * TOS),
+            "member {index}: the owner was not refunded what it staked"
+        );
+        refunded += 1;
+    }
+    assert_eq!(refunded, members / 2, "the fixture retired the wrong number of members");
+}
+
 #[test]
 fn the_effective_total_is_measured_over_one_profile_and_over_eight() {
     let mut measured = Vec::new();

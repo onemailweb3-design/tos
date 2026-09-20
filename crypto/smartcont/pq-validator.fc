@@ -333,7 +333,8 @@ const int pq::error::index_disagrees = 69;
 ;; stake:Tomis registered_at:uint32 max_factor:uint32 algorithm_id:uint16 key_id:uint256
 ;;   public_key:^Cell adnl_addr:uint256
 builder pq::pack_member(int stake, int registered_at, int max_factor, int algorithm_id, int key_id,
-                        cell public_key, int adnl_addr, int controller_code_hash) inline {
+                        cell public_key, int adnl_addr, int stake_owner,
+                        int controller_code_hash) inline {
   return begin_cell()
     .store_tomis(stake)
     .store_uint(registered_at, 32)
@@ -342,17 +343,27 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
     .store_uint(key_id, 256)
     .store_ref(public_key)
     .store_uint(adnl_addr, 256)
-    ;; The code this controller was admitted under, so a profile retired after it
-    ;; registered stops it changing anything and keeps it out of the next set.
+    ;; Who the money is, and what this controller was admitted as.
     ;;
-    ;; It goes behind a reference rather than inline. A single-entry dictionary keyed by
+    ;; `stake_owner` is the account the stake came from and the account everything goes
+    ;; back to. It is not the validator: a pool holds nominators' funds and has no
+    ;; authority, and the identity above has authority and need not hold the funds.
+    ;;
+    ;; `controller_code_hash` is the code this controller was admitted under, so a profile
+    ;; retired after it registered stops it changing anything and keeps it out of the next
+    ;; set.
+    ;;
+    ;; Both go behind a reference rather than inline. A single-entry dictionary keyed by
     ;; 256 bits spends about 267 of a cell's 1023 on the label, which leaves a member
-    ;; record about 756 bits to live in; inline this field would put it at 900 and the
-    ;; dictionary write would overflow.
-    .store_ref(begin_cell().store_uint(controller_code_hash, 256).end_cell());
+    ;; record about 756 bits to live in; either of these inline overflows the dictionary
+    ;; write, which is exit 8 and was measured rather than reasoned about.
+    .store_ref(begin_cell()
+      .store_uint(stake_owner, 256)
+      .store_uint(controller_code_hash, 256)
+    .end_cell());
 }
 
-(int, int, int, int, int, cell, int, int) pq::unpack_member(slice ms) inline {
+(int, int, int, int, int, cell, int, int, int) pq::unpack_member(slice ms) inline {
   int stake = ms~load_tomis();
   int registered_at = ms~load_uint(32);
   int max_factor = ms~load_uint(32);
@@ -360,10 +371,13 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
   int key_id = ms~load_uint(256);
   cell public_key = ms~load_ref();
   int adnl_addr = ms~load_uint(256);
-  int controller_code_hash = ms~load_ref().begin_parse().preload_uint(256);
+  slice rest = ms~load_ref().begin_parse();
+  int stake_owner = rest~load_uint(256);
+  int controller_code_hash = rest~load_uint(256);
+  rest.end_parse();
   ms.end_parse();
   return (stake, registered_at, max_factor, algorithm_id, key_id, public_key, adnl_addr,
-          controller_code_hash);
+          stake_owner, controller_code_hash);
 }
 
 ;; Registers a controller's key, or replaces the one it already registered, moving the
@@ -376,7 +390,7 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
 ;; this, because a refusal throws and the transaction commits nothing.
 (cell, cell) pq::register_member(cell members, cell key_owner, int validator_id, int stake, int registered_at,
                                  int max_factor, int algorithm_id, cell public_key, int adnl_addr,
-                                 int controller_code_hash) {
+                                 int stake_owner, int controller_code_hash) {
   throw_if(pq::error::zero_validator_id, validator_id == 0);
   throw_if(pq::error::zero_adnl, adnl_addr == 0);
   int key_id = pq::key_id(algorithm_id, public_key);
@@ -396,7 +410,7 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
   ;; record that has no authority over it.
   (slice existing, int registered) = members.udict_get?(256, validator_id);
   if (registered) {
-    (_, _, _, _, int held_key_id, _, _, _) = pq::unpack_member(existing);
+    (_, _, _, _, int held_key_id, _, _, _, _) = pq::unpack_member(existing);
     if (held_key_id != key_id) {
       (slice held_by, int indexed) = key_owner.udict_get?(256, held_key_id);
       throw_unless(pq::error::index_disagrees, indexed);
@@ -408,7 +422,7 @@ builder pq::pack_member(int stake, int registered_at, int max_factor, int algori
   key_owner~udict_set_builder(256, key_id, begin_cell().store_uint(validator_id, 256));
   members~udict_set_builder(256, validator_id,
     pq::pack_member(stake, registered_at, max_factor, algorithm_id, key_id, public_key, adnl_addr,
-                    controller_code_hash));
+                    stake_owner, controller_code_hash));
   return (members, key_owner);
 }
 
