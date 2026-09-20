@@ -14,18 +14,24 @@
 ;; shortcut for a slot that happens to be phantom.
 ;;
 ;; Throw codes used here:
-;;   100 the byte chain ended before the operand did
-;;   101 a byte chain cell is special
-;;   102 a byte chain cell is not at level zero
-;;   103 a byte chain chunk has the wrong bit length
-;;   104 a byte chain chunk has the wrong reference count
-;;   105 an operand length that is not a positive number of bytes
-;;   106 the intent digest is not a canonical field element
-;;   107 the signature in input slot 0 did not verify
-;;   108 the signature in input slot 1 did not verify
-;;   109 valid_until does not fit the public uint32 field
-;;   110 valid_until is already in the past
-;;   111 valid_until is beyond the one-hour window
+;; Exit codes live in 130-149. Each shielded module owns a disjoint range,
+;; because the pool contract will include several of them at once and an
+;; exit code that means two things cannot be diagnosed:
+;;    90-99   tree.fc     100-129  imt.fc
+;;   130-149  auth.fc     150-179  reserved for the state layer
+;;
+;;   130 the byte chain ended before the operand did
+;;   131 a byte chain cell is special
+;;   132 a byte chain cell is not at level zero
+;;   133 a byte chain chunk has the wrong bit length
+;;   134 a byte chain chunk has the wrong reference count
+;;   135 an operand length that is not a positive number of bytes
+;;   136 the intent digest is not a canonical field element
+;;   137 the signature in input slot 0 did not verify
+;;   138 the signature in input slot 1 did not verify
+;;   139 valid_until does not fit the public uint32 field
+;;   140 valid_until is already in the past
+;;   141 valid_until is beyond the one-hour window
 ;;
 ;; Requires domains.fc and notes.fc, and a VM at global version 17 or above:
 ;; PQCHECKSIG_MLDSA44 arrives at version 16 and POSEIDON2_HASH7 at version 17.
@@ -66,12 +72,12 @@ int mldsa44_public_key_tail_bytes() inline {
 ;; the chain, so a chain that is laid out differently is refused here rather
 ;; than hashed anyway.
 (slice, cell) pq_chain_chunk(cell chunk, int payload_bytes, int has_next) impure inline {
-  throw_if(100, cell_null?(chunk));
+  throw_if(130, cell_null?(chunk));
   (slice body, int special) = parse_cell_special(chunk);
-  throw_if(101, special);
-  throw_unless(102, cell_level(chunk) == 0);
-  throw_unless(103, slice_bits(body) == payload_bytes * 8);
-  throw_unless(104, slice_refs(body) == has_next);
+  throw_if(131, special);
+  throw_unless(132, cell_level(chunk) == 0);
+  throw_unless(133, slice_bits(body) == payload_bytes * 8);
+  throw_unless(134, slice_refs(body) == has_next);
   cell next = null();
   if (has_next) {
     next = body~load_ref();
@@ -84,7 +90,7 @@ int mldsa44_public_key_tail_bytes() inline {
 ;; malformed chain too, but it does so with a VM exception after the base
 ;; charge, so the chain is checked before the verifier is asked.
 () check_pq_byte_chain(cell chain, int total_bytes) impure {
-  throw_unless(105, total_bytes > 0);
+  throw_unless(135, total_bytes > 0);
   int remaining = total_bytes;
   while (remaining > pq_chain_chunk_bytes()) {
     (slice body, cell next) = pq_chain_chunk(chain, pq_chain_chunk_bytes(), 1);
@@ -117,7 +123,7 @@ int pq_auth_key_hash(cell public_key) {
 
 ;; 9.4. The message is the 32 raw big-endian bytes of the intent digest.
 cell intent_message(int digest) impure inline {
-  throw_unless(106, (digest >= 0) & (digest < field_modulus()));
+  throw_unless(136, (digest >= 0) & (digest < field_modulus()));
   return begin_cell().store_uint(digest, 256).end_cell();
 }
 
@@ -141,8 +147,8 @@ int verify_intent_signature(cell public_key, cell signature, int digest) impure 
                             cell public_key_1, cell signature_1, int digest) {
   int key_hash_0 = pq_auth_key_hash(public_key_0);
   int key_hash_1 = pq_auth_key_hash(public_key_1);
-  throw_unless(107, verify_intent_signature(public_key_0, signature_0, digest));
-  throw_unless(108, verify_intent_signature(public_key_1, signature_1, digest));
+  throw_unless(137, verify_intent_signature(public_key_0, signature_0, digest));
+  throw_unless(138, verify_intent_signature(public_key_1, signature_1, digest));
   return (key_hash_0, key_hash_1);
 }
 
@@ -183,7 +189,7 @@ int intent_validity_window() asm "3600 PUSHINT";
 int uint32_limit() asm "4294967296 PUSHINT";
 
 () check_intent_validity(int valid_until, int now_seconds) impure inline {
-  throw_unless(109, (valid_until >= 0) & (valid_until < uint32_limit()));
-  throw_unless(110, valid_until >= now_seconds);
-  throw_unless(111, valid_until <= now_seconds + intent_validity_window());
+  throw_unless(139, (valid_until >= 0) & (valid_until < uint32_limit()));
+  throw_unless(140, valid_until >= now_seconds);
+  throw_unless(141, valid_until <= now_seconds + intent_validity_window());
 }

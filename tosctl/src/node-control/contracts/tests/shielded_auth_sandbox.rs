@@ -709,21 +709,21 @@ fn a_noncanonical_public_key_chain_is_refused() {
     }
     assert_eq!(
         probe.key_hash_exit_code(&chain_with_chunks(&short_first)),
-        103,
+        133,
         "a short intermediate cell was hashed anyway"
     );
 
     // A wrong total length, one byte short and one byte long.
     assert_eq!(
         probe.key_hash_exit_code(&byte_chain(&bytes[..PUBLIC_KEY_BYTES - 1])),
-        103,
+        133,
         "a 1311-byte key was accepted"
     );
     let mut too_long = bytes.clone();
     too_long.push(0);
     assert_eq!(
         probe.key_hash_exit_code(&byte_chain(&too_long)),
-        103,
+        133,
         "a 1313-byte key was accepted"
     );
 
@@ -732,14 +732,14 @@ fn a_noncanonical_public_key_chain_is_refused() {
     let truncated: Vec<&[u8]> = bytes[..CHUNK_BYTES * 9].chunks(CHUNK_BYTES).collect();
     assert_eq!(
         probe.key_hash_exit_code(&chain_with_chunks(&truncated)),
-        104,
+        134,
         "a chain that ended early was accepted"
     );
 
     // No chain at all.
     assert_eq!(
         probe.exit_code("p_key_hash", vec![StackItem::None]),
-        100,
+        130,
         "a null cell was accepted as a key chain"
     );
 
@@ -748,7 +748,7 @@ fn a_noncanonical_public_key_chain_is_refused() {
     with_empty_tail.push(&[]);
     assert_eq!(
         probe.key_hash_exit_code(&chain_with_chunks(&with_empty_tail)),
-        104,
+        134,
         "an empty final cell was accepted"
     );
 
@@ -770,7 +770,7 @@ fn a_noncanonical_public_key_chain_is_refused() {
     };
     assert_eq!(
         probe.key_hash_exit_code(&tail_with_reference),
-        104,
+        134,
         "a tail carrying an extra reference was accepted"
     );
 
@@ -779,7 +779,7 @@ fn a_noncanonical_public_key_chain_is_refused() {
     assert_eq!(special_root.cell_type(), CellType::MerkleProof, "the fixture is not special");
     assert_eq!(
         probe.key_hash_exit_code(&special_root),
-        101,
+        131,
         "a special cell was accepted as a key chain"
     );
 
@@ -798,7 +798,7 @@ fn a_noncanonical_public_key_chain_is_refused() {
     assert_ne!(special_tail.level(), 0, "the fixture does not actually raise the level");
     assert_eq!(
         probe.key_hash_exit_code(&special_tail),
-        102,
+        132,
         "a chain whose level is above zero was accepted"
     );
 }
@@ -959,7 +959,7 @@ fn the_signed_bytes_are_the_digest_under_the_fixed_context() {
     // than truncated into 256 bits.
     assert_eq!(
         probe.exit_code("p_message", vec![Probe::field_arg(&field_modulus())]),
-        106,
+        136,
         "the modulus was accepted as a digest"
     );
 
@@ -1000,7 +1000,7 @@ fn the_signed_bytes_are_the_digest_under_the_fixed_context() {
         StackItem::Cell(byte_chain(&good[..SIGNATURE_BYTES - 1])),
         Probe::field_arg(&digest),
     ];
-    assert_eq!(probe.exit_code("p_verify", args), 103, "a 2419-byte signature was accepted");
+    assert_eq!(probe.exit_code("p_verify", args), 133, "a 2419-byte signature was accepted");
     let mut short_first: Vec<&[u8]> = vec![&good[0..1]];
     let mut offset = 1usize;
     while offset < good.len() {
@@ -1015,7 +1015,7 @@ fn the_signed_bytes_are_the_digest_under_the_fixed_context() {
     ];
     assert_eq!(
         probe.exit_code("p_verify", args),
-        103,
+        133,
         "a non-canonically split signature was accepted"
     );
 
@@ -1026,7 +1026,7 @@ fn the_signed_bytes_are_the_digest_under_the_fixed_context() {
             "p_check_chain",
             vec![StackItem::Cell(byte_chain(&good)), Probe::field_arg(&ZERO)],
         ),
-        105,
+        135,
         "a zero-byte operand length was accepted"
     );
     assert_eq!(
@@ -1119,7 +1119,7 @@ fn an_attackers_own_valid_keypair_cannot_authorize_the_transaction() {
             &signature_1,
             &digest
         ),
-        Err(107),
+        Err(137),
         "an attacker's signature under the honest key was accepted in slot 0"
     );
     assert_eq!(
@@ -1130,7 +1130,7 @@ fn an_attackers_own_valid_keypair_cannot_authorize_the_transaction() {
             &signature_1,
             &digest
         ),
-        Err(107),
+        Err(137),
         "the honest signature under an attacker's key was accepted in slot 0"
     );
     assert_eq!(
@@ -1141,7 +1141,7 @@ fn an_attackers_own_valid_keypair_cannot_authorize_the_transaction() {
             &attacker_signature,
             &digest
         ),
-        Err(108),
+        Err(138),
         "an attacker's signature under the honest key was accepted in slot 1"
     );
     assert_eq!(
@@ -1152,7 +1152,7 @@ fn an_attackers_own_valid_keypair_cannot_authorize_the_transaction() {
             &signature_1,
             &digest
         ),
-        Err(108),
+        Err(138),
         "the honest signature under an attacker's key was accepted in slot 1"
     );
 
@@ -1167,7 +1167,7 @@ fn an_attackers_own_valid_keypair_cannot_authorize_the_transaction() {
             &signature_1,
             &other_digest
         ),
-        Err(107),
+        Err(137),
         "a signature bundle authorized a different digest"
     );
 
@@ -1176,7 +1176,7 @@ fn an_attackers_own_valid_keypair_cannot_authorize_the_transaction() {
     let bad_context = byte_chain(&key_1.sign(&digest, b"TOS-SHIELDED-POOL-MLDSA44-v2"));
     assert_eq!(
         probe.authorize(&key_0.key_cell(), &signature_0, &key_1.key_cell(), &bad_context, &digest),
-        Err(108),
+        Err(138),
         "slot 1 was not verified"
     );
 }
@@ -1262,14 +1262,14 @@ fn valid_until_must_be_now_or_within_the_hour() {
     assert_eq!(check(now), 0, "valid_until equal to now was refused");
     assert_eq!(check(now + 1), 0, "a second into the future was refused");
     assert_eq!(check(now + 3600), 0, "the far edge of the window was refused");
-    assert_eq!(check(now + 3601), 111, "a second past the window was accepted");
-    assert_eq!(check(now - 1), 110, "a valid_until in the past was accepted");
+    assert_eq!(check(now + 3601), 141, "a second past the window was accepted");
+    assert_eq!(check(now - 1), 140, "a valid_until in the past was accepted");
     assert_eq!(
         probe.exit_code(
             "p_check_validity",
             vec![Probe::field_arg(&small(4_294_967_296)), Probe::field_arg(&small(now))],
         ),
-        109,
+        139,
         "a valid_until outside uint32 was accepted"
     );
 }
