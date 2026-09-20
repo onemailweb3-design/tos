@@ -124,12 +124,155 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   Eight mutations (`test/shielded-pool/mutations.py`), each killed by the test
   it was aimed at.
 
-  **What it does not establish**: that these are the formulas the circuit will
-  enforce. The FunC and the reference beside it were both written from section
-  4, so a misreading of the profile would appear in both. The cross-check that
-  settles it is the circuit, which does not exist yet.
+  **The cross-check this section used to be waiting for now exists**, and it
+  agrees. See the circuit entry below. What is still not established here is
+  gas: these are get-methods, not a pool transaction.
 
-**Nothing else.** No pool contract, no circuit, no wallet.
+**The nullifier indexed Merkle tree**
+
+- `crypto/smartcont/shielded/imt.fc` — section 7 in FunC: the shape and leaf
+  tuple, `IMT-LEAF` and `IMT-NODE`, the 7.0 empty-subtree ladder and the
+  genesis sentinel root, the eight numbered steps of the 7.1 non-membership and
+  insertion contract, and the canonical witness cell encoding of 7.2.
+
+  The 7.0 ladder is built from `IMT-NODE` and is a *different* ladder from the
+  `COMMIT-NODE` one generated in `empty-roots.fc`. No generated IMT table
+  exists, so `imt.fc` recomputes it rather than carrying a hand-written
+  constant; `imt_insert` never calls it, so the hot path pays nothing. The
+  suite asserts the two ladders differ at every level, so reusing the wrong one
+  later is caught. Generating an `IMT_EMPTY` table from `manifest-gen` would
+  remove the recomputation and has not been done.
+
+  `tosctl/src/node-control/contracts/tests/shielded_imt_sandbox.rs` runs all of
+  it in a VM at global version 17: eleven tests, closing section 19 gate 10.
+  Two sequential nullifiers both insert, with the second witness taken against
+  the root after the first; a bad successor tuple, a non-empty append slot, and
+  duplicate or reordered witnesses each fail with a named exit code. A zero
+  nullifier is refused because the head sentinel holds value zero and step 2 is
+  strict — the sentinel is what reserves zero, not a rule of its own.
+
+  The check that carries the weight is the one that is not a restatement. The
+  contract folds a caller-supplied 72-element path into a root; the reference
+  beside it never folds a path at all, but keeps a map from leaf index to tuple
+  and rebuilds every level. A path that happens to fold to a plausible root
+  cannot pass unnoticed.
+
+  Thirty-two mutations (`test/shielded-pool/mutations-imt.py`), each killed by
+  the test it was aimed at.
+
+  **What it does not establish**: two guards the profile states cannot be
+  killed and are annotated as restatements in the source — the second half of
+  step 4's capacity bound, which the first half implies, and the non-zero
+  allocated leaf hash, which is a property of the permutation rather than of
+  any input. Section 7.2's "reject special cells" is delegated to `begin_parse`,
+  which throws before the contract's own checks run; no test of ours constructs
+  a special cell, so that path rests on VM behaviour. And no pool contract
+  calls any of this.
+
+**The intent digest and ML-DSA-44 authorization**
+
+- `crypto/smartcont/shielded/auth.fc` — section 9 and the 4.1
+  `pq_auth_key_hash` rule. The key hash is computed from the actual canonical
+  1312-byte public-key byte chain, not from a pre-hashed input, enforcing the
+  layout rules `crypto/vm/pqops.cpp` enforces for ML-DSA operands. The rule
+  that a chunk carrying a reference must fill its cell is what makes a
+  fixed-length operand's chain layout unique: 1312 is 10x127 + 42. Both halves
+  of the digest and the final digest follow 9.3 exactly, and two full
+  signatures are verified over the digest's 32 raw big-endian bytes under the
+  fixed 28-byte context of 9.4 — always, including for a phantom slot, so
+  nothing takes a shortcut for a slot that happens to be phantom.
+
+  This chain ships an ML-DSA-44 **verifier only**: no signing, no key
+  generation. Testing section 9 needs signatures over digests the contract
+  computes, which cannot come from `test/pq-mldsa44/fixtures.json`. The suite
+  therefore pins a test-only signer as a dev-dependency and proves
+  interoperability before trusting it for anything else, in both directions:
+  this repository's own fixture signatures verify under that signer, and the
+  signer's signatures verify under `PQCHECKSIG_MLDSA44` inside the VM, with a
+  wrong key and a wrong context both rejected so the verifier is not merely
+  answering true. That test runs first and is a hard gate; if it fails nothing
+  else in the file means anything.
+
+  Eight tests close section 19 gate 6, using an attacker's own genuinely valid
+  keypair whose signature is first shown to verify on chain — so the
+  substitution is not defeated by a bad signature — and gate 8, comparing the
+  full per-cell encoding of both bundles and requiring them equal in the
+  one-real and two-real cases. Each of the fourteen fields the digest is
+  specified to bind is changed alone and required to move the digest.
+
+  Twenty-three mutations (`test/shielded-pool/mutations-auth.py`), each killed
+  by the test it was aimed at.
+
+  **What it does not establish**: any contract behaviour, and no gas figure.
+  One toolchain gap surfaced and was left alone: the mnemonic
+  `PQCHECKSIG_MLDSA44` is defined in `crypto/fift/lib/PQ.fif`, which the
+  sandbox assembler does not include, so `auth.fc` emits the opcode `0xF93100`
+  directly with a comment naming it. Making the mnemonic reachable is a
+  separate change.
+
+**The circuit**
+
+- `tools/shielded-pool-circuit/` — work package C: the Poseidon2 t=8 gadgets,
+  the section 4 and 5 relations, section 11 over the frozen section 10 public
+  input vector, and the section 10.1 development proof and verifying key. It is
+  standalone, not a member of the `tosctl` workspace, with its own `Cargo.lock`
+  and exact pins, the way `crypto/poseidon2/manifest-gen` is. The Groth16
+  backend is an implementation choice; the relations, the input ordering and
+  the output format are not.
+
+  The parameters are parsed from `crypto/poseidon2/manifest.bin` at build time
+  and refused unless the file hashes to the pinned digest, so no constant table
+  is written by hand. The gadget reproduces all 21 permutation and all 28 hash
+  vectors, out of circuit and again with the constraints generated and the R1CS
+  satisfied. The manifest alone is not evidence, and this was measured rather
+  than assumed: running one fewer partial round leaves the three manifest tests
+  green and turns five vector tests red.
+
+  **This is the cross-check the note and tree layer was waiting for.** Sections
+  4 and 5 existed in two places written by the same author from the same
+  document, so a misreading of the profile would have appeared in both and
+  neither would have caught it. These gadgets are an independent third reading,
+  written from the profile before the FunC was read. `crosscheck/` compiles the
+  shielded FunC library with `build/crypto/func`, deploys it at global version
+  17 and compares get-method results against values pinned in circuit: sixty
+  section 4 values across ten cases, thirteen empty roots, four interior nodes
+  and fifteen sequential frontier appends. **All of them agree. No disagreement
+  was found.** The comparison can fail — a deliberately wrong expected value is
+  run through the same path and is required to panic.
+
+  Section 11 is implemented over the 18-element vector, with the allocation
+  order read back out of the constraint system because that order *is* the
+  verifying key's IC order. Twenty-one relations carry twenty-three removal
+  tests: each requires the full circuit to reject the witness and the weakened
+  circuit to accept it, and names the exploit removal lets through — minting
+  through conservation, spending a note the pool never issued, double-spending
+  through a free nullifier, rewriting the fee slot after signing. Three state a
+  baseline, because the witness cannot be built while an earlier relation
+  holds. One relation is recorded as redundant rather than exploitable: the
+  profile makes the same boolean remove a phantom amount from conservation, so
+  a phantom amount reaches no other relation.
+
+  The pairing equation was measured, not recalled, as the profile demands: six
+  candidate sign and order patterns against one valid proof and four mutations,
+  and the two that survive are the same statement written both ways.
+
+  **What it does not establish**: nothing here is a production artifact. The
+  development keys come from a fixed seed, so the toxic waste is known and
+  these keys must never verify a real transaction; the fixture says so in its
+  own `warning` field. Two places where the profile is not self-sufficient were
+  reported rather than decided:
+
+  - section 10.1 fixes the compressed point lengths (48 and 96) but names no
+    byte order, and the two candidate conventions differ in bytes at the same
+    length. The verifying-key digest recorded here is therefore
+    convention-dependent, and the encoding used is recorded in the fixture
+    rather than assumed. **This needs a ruling before any VK hash is frozen.**
+  - the profile gives no width for `withdrawal_fee`. An unbounded fee wraps the
+    field and can balance a theft, so it is bounded here like every other
+    amount and flagged in the source. The contract separately requires the fee
+    to equal config, which is the real mitigation.
+
+**Nothing else.** No pool contract, no wallet.
 
 ## What gates this branch
 
@@ -137,10 +280,14 @@ The safety gates in the specification's section 12 are ordered by whether
 failing them loses money. The first seven (P0-0 through P0-6) cover how funds
 enter, where they actually reside in the account balance, who pays for
 computation, who is authorised to spend, and that a spend cannot half-commit.
-None of them is closed. What the two probes establish is that the rules P0-0
-and P0-1 state are enforceable in this VM and that the assertions for them
-discriminate — not that a pool contract obeys them, because there is no pool
-contract yet. Production code on this branch waits for the gates.
+None of them is closed. What the work on this branch establishes is that the
+rules P0-0, P0-1 and P0-2 state are enforceable in this VM and that the
+assertions for them discriminate — not that a pool contract obeys them,
+because there is no pool contract yet. The same distinction applies to the
+implementation profile's own acceptance gates: 6, 8 and 10 have their
+enforceability shown in the VM, and 3 has its negative tests running in the
+circuit, but a gate is closed by a contract obeying it, not by a probe proving
+it could. Production code on this branch waits for the gates.
 
 Two things do not wait, because their windows close earlier than their
 urgency suggests:
