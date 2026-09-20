@@ -25,7 +25,6 @@ use chain_block::poseidon2_kat::DOMAINS;
 use chain_block::{BuilderData, Cell, IBitstring, MsgAddressInt, Serializable, StateInit};
 use tos_sandbox::{Blockchain, MessageBuilder, compile_func_with_stdlib};
 use tos_vm::stack::StackItem;
-use tos_vm::stack::integer::IntegerData;
 
 const TOS: u64 = 1_000_000_000;
 const ACTIVE_VERSION: u32 = 17;

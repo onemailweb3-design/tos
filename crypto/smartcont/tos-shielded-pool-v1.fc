@@ -22,11 +22,10 @@
 ;; Exit codes 200-229.
 ;;   200 the message body is not the frozen deposit shape
 ;;   201 an operation this contract does not have
-;;   202 the deposit amount is not a configured denomination
+;;   202 the amount is not one the configuration admits
 ;;   203 the message does not fund its own execution and principal
 ;;   204 the end state would not be backed
 ;;   205 the anchor kind/id/root is not one this pool preserved
-;;   206 the withdrawal path is not implemented on this branch yet
 ;;
 ;; Requires the shielded library, and a VM at global version 17.
 
@@ -39,6 +38,7 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 int deposit_gas_ceiling() asm "500000 PUSHINT";
 int topup_gas_ceiling() asm "50000 PUSHINT";
 int transact_gas_ceiling() asm "2000000 PUSHINT";
+int bounce_gas_ceiling() asm "500000 PUSHINT";
 
 ;; Section 16.1, in its order.
 () handle_deposit(int msg_value, slice body) impure {
@@ -128,19 +128,18 @@ int transact_gas_ceiling() asm "2000000 PUSHINT";
   throw_unless(203, msg_value >= get_compute_fee(0, transact_gas_ceiling()));
   set_gas_limit(transact_gas_ceiling());
 
-  ;; The withdrawal half of section 16.2 -- the outbound payout, its fee
-  ;; solvency check and the reserve it leaves behind -- is not on this branch
-  ;; yet. Refusing it is not a stub for the transfer path: a transfer is
-  ;; complete below, and a withdrawal has never been accepted here.
-  throw_unless(206, public_amount_out == 0);
-
   (int commitment_root, int commitment_next_index,
    int nullifier_root, int nullifier_next_index,
    int last_anchor_epoch, int native_liability, int reserve_floor,
    cell frontier, cell anchors, cell config, cell vk) = state_parse(get_data());
 
-  ;; 5. the intent has to be inside its hour.
+  ;; 5. the intent has to be inside its hour, and a withdrawal has to name an
+  ;; amount the pool is willing to pay in one piece. A transfer moves nothing
+  ;; across the boundary, so the denomination list does not apply to it.
   check_intent_validity(valid_until, now());
+  if (public_amount_out > 0) {
+    throw_unless(202, config_has_denomination(config, public_amount_out));
+  }
 
   ;; 3, 4, 6, 7, 8. The eighteen, with the eight derived ones computed from the
   ;; bytes that arrived rather than read from the wire.
@@ -190,8 +189,34 @@ int transact_gas_ceiling() asm "2000000 PUSHINT";
   (frontier, commitment_root) =
     frontier_append(frontier, leaf_index + 2, note_commitment(note_body_2, leaf_index + 2));
 
-  ;; 7 of section 16.1's sense: a transfer moves no value across the boundary,
-  ;; so liability is unchanged and the backing invariant must still hold.
+  ;; 16. a withdrawal, and only a withdrawal, pays out. Everything above this
+  ;; point is identical for both modes; what differs is that a withdrawal
+  ;; discharges liability and sends a message, and a transfer does neither.
+  ;;
+  ;; The order inside the step follows the profile: build the exact message,
+  ;; require the immutable fee to cover it, and only then move the liability.
+  ;; The reserve is set from the new liability before the message is enqueued,
+  ;; so the action phase cannot spend past what the pool still owes. Mode 17
+  ;; pays the forward fee separately and bounces this whole transaction if the
+  ;; action fails, which is what keeps a committed state from outliving a
+  ;; payout that never left.
+  if (public_amount_out > 0) {
+    cell record = payout_record(intent_digest, public_input_at(inputs, 16),
+                                public_input_at(inputs, 13),
+                                recovery_owner_commitment, recovery_data);
+    cell payout = payout_body(intent_digest, record);
+    (_, _, _, int config_withdrawal_fee, _, _) = config_parse(config);
+    payout_require_solvent(withdrawal_fee, config_withdrawal_fee, payout,
+                           bounce_gas_ceiling());
+    native_liability =
+      payout_new_liability(native_liability, public_amount_out, withdrawal_fee);
+    raw_reserve(native_liability + reserve_floor, 0);
+    send_raw_message(payout_message(recipient, public_amount_out, payout), 17);
+  }
+
+  ;; A transfer moves no value across the boundary, so its liability is
+  ;; unchanged; a withdrawal's has just gone down by what is leaving. Either
+  ;; way the end state has to be backed.
   [int balance, _] = get_balance();
   throw_unless(204, balance >= native_liability + reserve_floor);
 

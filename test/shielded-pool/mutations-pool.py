@@ -37,6 +37,7 @@ RESERVE_TEST = 'a_reserve_top_up_adds_balance_and_nothing_else'
 ORDER_TEST = 'each_step_fails_with_its_own_code_and_in_its_own_place'
 ATOMIC_TEST = 'a_failure_at_any_step_changes_nothing'
 COST_TEST = 'a_transact_costs_more_than_the_default_network_gas_limit_allows'
+WITHDRAWAL_TEST = 'a_well_formed_withdrawal_reaches_the_proof_like_a_transfer_does'
 PROOF_TEST = 'a_proof_that_does_not_verify_stops_the_transaction'
 
 
@@ -129,8 +130,17 @@ CASES = [
     Case('transact-funding', 'a transact need not pay for its own compute', POOL,
          '  throw_unless(203, msg_value >= get_compute_fee(0, transact_gas_ceiling()));',
          '  throw_unless(203, msg_value >= 0);', ORDER_TEST, TRANSACT_SUITE),
-    Case('transact-withdrawal', 'the unimplemented withdrawal path is entered', POOL,
-         '  throw_unless(206, public_amount_out == 0);\n', '', ORDER_TEST, TRANSACT_SUITE),
+    Case('transact-withdrawal-refused', 'the withdrawal path is refused outright', POOL,
+         '  check_intent_validity(valid_until, now());\n',
+         '  check_intent_validity(valid_until, now());\n  throw_unless(206, public_amount_out == 0);\n',
+         WITHDRAWAL_TEST, TRANSACT_SUITE),
+    Case('transact-denomination', 'a withdrawal may name any amount it likes', POOL,
+         '    throw_unless(202, config_has_denomination(config, public_amount_out));\n', '',
+         ORDER_TEST, TRANSACT_SUITE),
+    Case('transact-denomination-transfer', 'a transfer is held to the denomination list too', POOL,
+         '  if (public_amount_out > 0) {\n    throw_unless(202, config_has_denomination(config, public_amount_out));\n  }',
+         '  throw_unless(202, config_has_denomination(config, public_amount_out));',
+         ORDER_TEST, TRANSACT_SUITE),
     Case('transact-validity', 'the intent has no window', POOL,
          '  check_intent_validity(valid_until, now());\n', '', ORDER_TEST, TRANSACT_SUITE),
     Case('transact-anchor', 'any anchor is accepted', POOL,

@@ -451,6 +451,11 @@ struct Transact {
     keys: [Cell; 2],
     signatures: [Cell; 2],
     public_amount_out: u64,
+    withdrawal_fee: u64,
+    /// `None` is `addr_none`, which is the only recipient a transfer may name.
+    recipient: Option<Field>,
+    recovery_owner_commitment: Field,
+    recovery_data: Cell,
 }
 
 impl Transact {
@@ -467,11 +472,11 @@ impl Transact {
         proof.checked_append_reference(groth16_proof()).unwrap();
 
         let mut output = BuilderData::new();
-        output.append_raw(&ZERO, 256).unwrap();
+        output.append_raw(&self.recovery_owner_commitment, 256).unwrap();
         for seed in 0..3u8 {
             output.checked_append_reference(byte_chain(&payload(seed))).unwrap();
         }
-        output.checked_append_reference(Cell::default()).unwrap();
+        output.checked_append_reference(self.recovery_data.clone()).unwrap();
 
         let auth = refs_only(&[
             self.keys[0].clone(),
@@ -489,8 +494,18 @@ impl Transact {
         builder.append_u32(self.anchor_id).unwrap();
         builder.append_u32(self.valid_until).unwrap();
         store_coins(&mut builder, self.public_amount_out as u128);
-        store_coins(&mut builder, 0);
-        builder.append_bits(0, 2).unwrap(); // addr_none: a transfer
+        store_coins(&mut builder, self.withdrawal_fee as u128);
+        match &self.recipient {
+            None => {
+                builder.append_bits(0, 2).unwrap();
+            }
+            Some(account) => {
+                builder.append_bits(2, 2).unwrap();
+                builder.append_bit_zero().unwrap();
+                builder.append_i8(0).unwrap();
+                builder.append_raw(account, 256).unwrap();
+            }
+        }
         builder.append_raw(&self.intent_digest, 256).unwrap();
         builder.checked_append_reference(proof.into_cell().unwrap()).unwrap();
         builder.checked_append_reference(output.into_cell().unwrap()).unwrap();
@@ -513,7 +528,7 @@ fn config_store() -> Cell {
     builder.append_raw(&[0x11; 32], 256).unwrap();
     builder.append_raw(&[0x22; 32], 256).unwrap();
     builder.append_raw(&[0x33; 32], 256).unwrap();
-    store_coins(&mut builder, 50_000_000);
+    store_coins(&mut builder, CONFIG_WITHDRAWAL_FEE as u128);
     builder.append_u8(1).unwrap();
     builder.checked_append_reference(chain.into_cell().unwrap()).unwrap();
     builder.into_cell().expect("a config store")
@@ -555,6 +570,31 @@ fn genesis_state(nullifier_root: Field) -> Cell {
     builder.checked_append_reference(config_store()).unwrap();
     builder.checked_append_reference(vk_store()).unwrap();
     builder.into_cell().expect("the genesis state")
+}
+
+/// The configured withdrawal fee and the one configured denomination, which
+/// the genesis state above fixes. A withdrawal that does not match both is
+/// refused before it reaches the proof.
+///
+/// The fee is above the boundary the payout suite measures -- 205,313,600 at
+/// the profile's 500,000 gas bounce ceiling and this chain's gas price -- so a
+/// withdrawal configured this way could actually pay out. A smaller fee would
+/// fail section 14.2's solvency check at step 16, which is after the proof and
+/// therefore out of this suite's reach; configuring it below the boundary
+/// would leave that unsaid rather than untrue.
+const CONFIG_WITHDRAWAL_FEE: u64 = 250_000_000;
+const DENOMINATION: u64 = TOS;
+
+/// Turn a well-formed transfer into a well-formed withdrawal: an amount the
+/// configuration admits, the fee it fixes, a recipient, and the recovery
+/// material a withdrawal has to pre-authorise.
+fn withdrawing(mut message: Transact, recipient: Field) -> Transact {
+    message.public_amount_out = DENOMINATION;
+    message.withdrawal_fee = CONFIG_WITHDRAWAL_FEE;
+    message.recipient = Some(recipient);
+    message.recovery_owner_commitment = small(0x5eed);
+    message.recovery_data = byte_chain(&payload(9));
+    message
 }
 
 struct Pool {
@@ -693,6 +733,10 @@ fn well_formed(state: &RefState, keys: &[Key; 2], digest: Field) -> Transact {
             byte_chain(&keys[1].authorize(&digest)),
         ],
         public_amount_out: 0,
+        withdrawal_fee: 0,
+        recipient: None,
+        recovery_owner_commitment: ZERO,
+        recovery_data: Cell::default(),
     }
 }
 
@@ -726,11 +770,40 @@ fn each_step_fails_with_its_own_code_and_in_its_own_place() {
         "an underfunded message was judged on its contents"
     );
 
-    // Step 2 again: the withdrawal half of the handler does not exist yet, and
-    // it is refused before any work rather than half done.
-    let mut withdrawing = good();
-    withdrawing.public_amount_out = TOS;
-    assert_eq!(pool.exit_of(TRANSACT_FEE, withdrawing.body()), 206, "a withdrawal was attempted");
+    // Step 5, the withdrawal half: an amount the configuration does not admit
+    // is refused, and so is a fee that is not the one the configuration fixed.
+    // Both are checked before any expensive work.
+    let mut odd_amount = withdrawing(good(), small(0x11));
+    odd_amount.public_amount_out = DENOMINATION + 1;
+    assert_eq!(
+        pool.exit_of(TRANSACT_FEE, odd_amount.body()),
+        202,
+        "an amount outside the denomination list was paid out"
+    );
+    let mut wrong_fee = withdrawing(good(), small(0x11));
+    wrong_fee.withdrawal_fee = CONFIG_WITHDRAWAL_FEE - 1;
+    assert_ne!(
+        pool.exit_of(TRANSACT_FEE, wrong_fee.body()),
+        0,
+        "a fee other than the configured one was accepted"
+    );
+
+    // An amount with nobody to send it to, and a recipient with nothing to
+    // send: neither is a withdrawal this contract will start.
+    let mut unaddressed = withdrawing(good(), small(0x11));
+    unaddressed.recipient = None;
+    assert_eq!(
+        pool.exit_of(TRANSACT_FEE, unaddressed.body()),
+        238,
+        "a withdrawal with no recipient was accepted"
+    );
+    let mut addressed_transfer = good();
+    addressed_transfer.recipient = Some(small(0x11));
+    assert_eq!(
+        pool.exit_of(TRANSACT_FEE, addressed_transfer.body()),
+        239,
+        "a transfer that named a recipient was accepted"
+    );
 
     // Step 5: the intent's hour.
     let mut stale = good();
@@ -864,6 +937,34 @@ fn a_proof_that_does_not_verify_stops_the_transaction() {
         "a message with an unverifiable proof was not stopped by the proof"
     );
     assert_eq!(pool.snapshot(), before, "a proof that did not verify still moved the state");
+}
+
+/// A withdrawal gets as far as a transfer does. Every check that only a
+/// withdrawal faces -- the denomination, the configured fee, the recipient,
+/// the pre-authorised recovery material -- is behind it by the time the proof
+/// is reached, so reaching the proof is what says the withdrawal half of the
+/// handler accepts a well-formed withdrawal.
+///
+/// It cannot go further than that here. Step 16 is after step 12, and this
+/// branch has no proof that verifies, so the payout itself has no end-to-end
+/// test. What it has is a library suite of its own and this: the handler
+/// admits a withdrawal to the point where only the proof stands in the way.
+#[test]
+fn a_well_formed_withdrawal_reaches_the_proof_like_a_transfer_does() {
+    let state = RefState::genesis();
+    let keys = [Key::generate(), Key::generate()];
+    let digest = small(0x7777_8888_9999_aaaa);
+    let mut pool = Pool::deploy_with_gas_limit(state.root(), Some(10_000_000));
+    let now = pool.bc.now();
+    let before = pool.snapshot();
+
+    let mut message = withdrawing(well_formed(&state, &keys, digest), small(0x4242));
+    message.valid_until = now + 60;
+
+    let (exit, used) = pool.run(10_000_000 * 400, message.body());
+    assert_eq!(exit, 262, "a well-formed withdrawal was stopped before the proof");
+    assert_eq!(pool.snapshot(), before, "a withdrawal that failed at the proof moved the state");
+    eprintln!("a withdrawal, up to and including the proof: {used} gas");
 }
 
 /// Where the gas goes. A message that fails at step N has paid for steps 1
