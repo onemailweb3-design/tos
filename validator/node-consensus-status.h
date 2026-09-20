@@ -23,6 +23,8 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include "block/validator-set.h"
@@ -80,6 +82,38 @@ class PqConsensusCustody {
     const auto& raw = it->second->consensus_key().key_id;
     std::memcpy(key_id.data(), raw.data(), raw.size());
     return tos::ConsensusKeyId{key_id};
+  }
+
+  // The store to sign a validator's consensus messages with, returned only when the key
+  // this node custodies for `validator_id` is byte-for-byte the one the descriptor
+  // records — the admitted algorithm, the exact 32-byte key id, and the exact 1312-byte
+  // public key. This is the one entry a Simplex group takes a signer from, and it is
+  // fail-closed by construction: a validator_id match with a different key, an Ed25519
+  // key, or no custodied key all return nothing, so a node never signs consensus with a
+  // key the set does not record for it, and never falls back to the network keyring.
+  std::shared_ptr<const tos::pq::ValidatorPQKeyStore> get_matching_store(const tos::ValidatorId& validator_id,
+                                                                         const tos::ValidatorDescr& descr) const {
+    if (!descr.is_pq() || !(descr.validator_id == validator_id)) {
+      return nullptr;
+    }
+    auto it = stores_.find(validator_id);
+    if (it == stores_.end() || !it->second) {
+      return nullptr;
+    }
+    const auto& held = it->second->consensus_key();
+    if (static_cast<td::uint16>(held.algorithm_id) != descr.algorithm_id) {
+      return nullptr;
+    }
+    // Both are the 32-byte key identity; compare exactly 32 bytes. (descr.key_id.value is a
+    // Bits256 whose size() counts bits, so it is never used as a byte count here.)
+    static_assert(std::tuple_size<std::decay_t<decltype(held.key_id)>>::value == 32);
+    if (std::memcmp(held.key_id.data(), descr.key_id.value.data(), 32) != 0) {
+      return nullptr;
+    }
+    if (held.public_key != descr.pq_public_key) {
+      return nullptr;
+    }
+    return it->second;
   }
 
  private:

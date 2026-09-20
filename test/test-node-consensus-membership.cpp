@@ -72,7 +72,7 @@ int main() {
       failures++;
     }
   };
-  auto expect = [&](const char *name, std::pair<bool, bool> got, bool want_has, bool want_in) {
+  auto expect = [&](const char* name, std::pair<bool, bool> got, bool want_has, bool want_in) {
     if (got.first != want_has || got.second != want_in) {
       std::printf("FAIL %s: got {has_keys=%d,in_set=%d} want {%d,%d}\n", name, got.first, got.second, want_has,
                   want_in);
@@ -155,10 +155,46 @@ int main() {
           elsewhere.install(tos::ValidatorId{bits_with_first_byte(0xa9)}, held_store).is_ok());
     expect("custody_of_another_validator_is_not_membership",
            validator::node_validator_membership(pq_set, {}, {}, elsewhere), true, false);
+
+    // get_matching_store: the one entry a Simplex group takes a signer from. It hands back
+    // the store only when the descriptor names byte-for-byte the key this node holds, and
+    // nothing (fail-closed) otherwise.
+    const std::string held_pk = held_store->consensus_key().public_key;
+    ValidatorDescr matched{pq_id, /*algorithm_id=*/1, held_key, held_pk, /*weight=*/1, bits_with_first_byte(0xc0)};
+    check("matching_store_returns_the_held_store", holding.get_matching_store(pq_id, matched) == held_store);
+
+    // The descriptor names a different validator than the one asked for.
+    ValidatorDescr other_id{
+        tos::ValidatorId{bits_with_first_byte(0xb0)}, 1, held_key, held_pk, 1, bits_with_first_byte(0xc0)};
+    check("matching_store_refuses_a_validator_id_mismatch", holding.get_matching_store(pq_id, other_id) == nullptr);
+
+    // Same validator, but the descriptor records a rotated key this node does not hold.
+    ValidatorDescr rotated{
+        pq_id, 1, key_id_of(*other_store), other_store->consensus_key().public_key, 1, bits_with_first_byte(0xc0)};
+    check("matching_store_refuses_a_key_id_mismatch", holding.get_matching_store(pq_id, rotated) == nullptr);
+
+    // Same key id, but a tampered public key: the exact bytes must match.
+    std::string tampered_pk = held_pk;
+    tampered_pk[0] = static_cast<char>(tampered_pk[0] ^ 0x01);
+    ValidatorDescr tampered{pq_id, 1, held_key, tampered_pk, 1, bits_with_first_byte(0xc0)};
+    check("matching_store_refuses_a_public_key_mismatch", holding.get_matching_store(pq_id, tampered) == nullptr);
+
+    // An unadmitted algorithm id is refused even with the right key bytes.
+    ValidatorDescr wrong_algo{pq_id, /*algorithm_id=*/2, held_key, held_pk, 1, bits_with_first_byte(0xc0)};
+    check("matching_store_refuses_a_wrong_algorithm", holding.get_matching_store(pq_id, wrong_algo) == nullptr);
+
+    // A classical descriptor never yields a post-quantum signer.
+    ValidatorDescr classical{pub_member, /*weight=*/1};
+    check("matching_store_refuses_a_classical_descriptor", holding.get_matching_store(pq_id, classical) == nullptr);
+
+    // No custodied key for this validator at all.
+    validator::PqConsensusCustody empty_custody;
+    check("matching_store_refuses_when_nothing_is_custodied",
+          empty_custody.get_matching_store(pq_id, matched) == nullptr);
   }
 
   if (failures == 0) {
-    std::printf("test-node-consensus-membership: 10/10 scenarios OK\n");
+    std::printf("test-node-consensus-membership: all scenarios OK (membership + get_matching_store)\n");
     return 0;
   }
   std::printf("test-node-consensus-membership: %d scenario(s) FAILED\n", failures);
