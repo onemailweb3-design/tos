@@ -734,7 +734,7 @@ class ValidatorEngine : public td::actor::Actor {
                          tos::PublicKeyHash src, td::uint32 perm, td::Promise<td::BufferSlice> promise);
   void run_control_query(tos::tos_api::engine_validator_getStats &query, td::BufferSlice data, tos::PublicKeyHash src,
                          td::uint32 perm, td::Promise<td::BufferSlice> promise);
-  void run_control_query(tos::tos_api::engine_validator_createElectionBid &query, td::BufferSlice data,
+  void run_control_query(tos::tos_api::engine_validator_createPqStakeAuthorization &query, td::BufferSlice data,
                          tos::PublicKeyHash src, td::uint32 perm, td::Promise<td::BufferSlice> promise);
   void run_control_query(tos::tos_api::engine_validator_checkDhtServers &query, td::BufferSlice data,
                          tos::PublicKeyHash src, td::uint32 perm, td::Promise<td::BufferSlice> promise);

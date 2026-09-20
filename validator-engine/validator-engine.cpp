@@ -980,192 +980,87 @@ td::Result<bool> Config::config_del_gc(tos::PublicKeyHash key) {
   return gc.erase(key);
 }
 
-class ValidatorElectionBidCreator : public td::actor::Actor {
+// The permission a validator gives for one election.
+//
+// It replaced a creator that generated Ed25519 keys, registered them as this node's
+// validator keys, and ran a Fift script to build a stake transaction. The elector has one
+// stake operation and does not accept that one, so what it produced could not be placed;
+// and the stake itself is not this node's to make. The account that stakes is a
+// controller, authorised by a root key that by ruling never reaches a validator host.
+//
+// What a node can do is say, with the one key it holds, that this validator agrees to
+// stand in this election with this money behind it. That is what this returns: a
+// signature, over the bytes the elector will rebuild, and nothing else. It signs one
+// tuple rather than bytes it is handed, so the key cannot be asked to sign anything else.
+class PqStakeAuthorizationCreator : public td::actor::Actor {
  public:
-  ValidatorElectionBidCreator(td::uint32 date, std::string addr, std::string wallet, std::string dir,
-                              std::vector<tos::PublicKeyHash> old_keys, td::actor::ActorId<ValidatorEngine> engine,
-                              td::actor::ActorId<tos::keyring::Keyring> keyring, td::Promise<td::BufferSlice> promise)
-      : date_(date)
-      , addr_(addr)
-      , wallet_(wallet)
-      , dir_(dir)
-      , old_keys_(std::move(old_keys))
+  PqStakeAuthorizationCreator(td::uint32 election_date, td::uint32 max_factor, td::Bits256 adnl_addr,
+                              td::Bits256 stake_owner, td::actor::ActorId<ValidatorEngine> engine,
+                              td::Promise<td::BufferSlice> promise)
+      : election_date_(election_date)
+      , max_factor_(max_factor)
+      , adnl_addr_(adnl_addr)
+      , stake_owner_(stake_owner)
       , engine_(engine)
-      , keyring_(keyring)
       , promise_(std::move(promise)) {
-    ttl_ = date_ + 7 * 86400;
   }
 
   void start_up() override {
-    if (old_keys_.size() > 0) {
-      CHECK(old_keys_.size() == 3);
-
-      adnl_addr_ = tos::adnl::AdnlNodeIdShort{old_keys_[2]};
-      perm_key_ = old_keys_[0];
-
-      auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<tos::PublicKey> R) {
-        if (R.is_error()) {
-          td::actor::send_closure(SelfId, &ValidatorElectionBidCreator::abort_query, R.move_as_error());
-        } else {
-          td::actor::send_closure(SelfId, &ValidatorElectionBidCreator::got_perm_public_key, R.move_as_ok());
-        }
-      });
-      td::actor::send_closure(keyring_, &tos::keyring::Keyring::get_public_key, perm_key_, std::move(P));
-      return;
-    }
-    auto pk1 = tos::PrivateKey{tos::privkeys::Ed25519::random()};
-    perm_key_full_ = pk1.compute_public_key();
-    perm_key_ = perm_key_full_.compute_short_id();
-
-    auto pk2 = tos::PrivateKey{tos::privkeys::Ed25519::random()};
-    adnl_key_full_ = tos::adnl::AdnlNodeIdFull{pk2.compute_public_key()};
-    adnl_addr_ = adnl_key_full_.compute_short_id();
-
-    td::MultiPromise mp;
-
-    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<> R) {
+    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<ValidatorEngine::LocalValidator> R) {
       if (R.is_error()) {
-        td::actor::send_closure(SelfId, &ValidatorElectionBidCreator::abort_query,
-                                R.move_as_error_prefix("keyring fail: "));
+        td::actor::send_closure(SelfId, &PqStakeAuthorizationCreator::abort_query,
+                                R.move_as_error_prefix("this node cannot authorise a stake: "));
       } else {
-        td::actor::send_closure(SelfId, &ValidatorElectionBidCreator::written_keys);
+        td::actor::send_closure(SelfId, &PqStakeAuthorizationCreator::got_validator, R.move_as_ok());
       }
     });
-    auto ig = mp.init_guard();
-    ig.add_promise(std::move(P));
-
-    td::actor::send_closure(keyring_, &tos::keyring::Keyring::add_key, std::move(pk1), false, ig.get_promise());
-    td::actor::send_closure(keyring_, &tos::keyring::Keyring::add_key, std::move(pk2), false, ig.get_promise());
+    td::actor::send_closure(engine_, &ValidatorEngine::get_current_validator, std::move(P));
   }
 
-  void written_keys() {
-    td::MultiPromise mp;
-
-    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<> R) {
-      if (R.is_error()) {
-        td::actor::send_closure(SelfId, &ValidatorElectionBidCreator::abort_query,
-                                R.move_as_error_prefix("update config fail: "));
-      } else {
-        td::actor::send_closure(SelfId, &ValidatorElectionBidCreator::updated_config);
-      }
-    });
-    auto ig = mp.init_guard();
-    ig.add_promise(std::move(P));
-
-    td::actor::send_closure(engine_, &ValidatorEngine::add_key_to_set, perm_key_full_);
-    td::actor::send_closure(engine_, &ValidatorEngine::add_key_to_set, adnl_key_full_.pubkey());
-    td::actor::send_closure(engine_, &ValidatorEngine::try_add_validator_permanent_key, perm_key_, date_, ttl_,
-                            ig.get_promise());
-    td::actor::send_closure(engine_, &ValidatorEngine::try_add_validator_temp_key, perm_key_, perm_key_, ttl_,
-                            ig.get_promise());
-    td::actor::send_closure(engine_, &ValidatorEngine::try_add_adnl_node, adnl_addr_.pubkey_hash(), cat_,
-                            ig.get_promise());
-    td::actor::send_closure(engine_, &ValidatorEngine::try_add_validator_adnl_addr, perm_key_, adnl_addr_.pubkey_hash(),
-                            ttl_, ig.get_promise());
-  }
-
-  void got_perm_public_key(tos::PublicKey pub) {
-    perm_key_full_ = pub;
-    updated_config();
-  }
-
-  void updated_config() {
-    auto codeR = td::read_file_str(dir_ + "/validator-elect-req.fif");
-    if (codeR.is_error()) {
-      abort_query(codeR.move_as_error_prefix("fif not found (validator-elect-req.fif)"));
+  void got_validator(ValidatorEngine::LocalValidator self) {
+    if (adnl_addr_.is_zero()) {
+      abort_query(td::Status::Error("a validator is reachable at an address it states"));
       return;
     }
-    auto R = fift::mem_run_fift(codeR.move_as_ok(),
-                                {"validator-elect-req.fif", wallet_, td::to_string(date_), td::to_string(frac),
-                                 adnl_addr_.bits256_value().to_hex(), "OUTPUT"},
-                                dir_ + "/");
-    if (R.is_error()) {
-      abort_query(R.move_as_error_prefix("fift fail (validator-elect-req.fif)"));
+    if (stake_owner_.is_zero()) {
+      abort_query(td::Status::Error("a stake belongs to an account, and zero is not one"));
+      return;
+    }
+    if (max_factor_ < 0x10000) {
+      abort_query(td::Status::Error("a weight factor is at least one, which is 0x10000"));
       return;
     }
 
-    auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<td::BufferSlice> R) {
-      if (R.is_error()) {
-        td::actor::send_closure(SelfId, &ValidatorElectionBidCreator::abort_query,
-                                R.move_as_error_prefix("sign fail: "));
-      } else {
-        td::actor::send_closure(SelfId, &ValidatorElectionBidCreator::signed_bid, R.move_as_ok());
-      }
-    });
-
-    auto res = R.move_as_ok();
-    auto to_signR = res.source_lookup.read_file("OUTPUT");
-    if (to_signR.is_error()) {
-      abort_query(td::Status::Error(PSTRING() << "strange error: no to sign file. Output: " << res.output));
+    td::Bits256 key_id;
+    std::memcpy(key_id.data(), self.key_id.value.data(), key_id.size());
+    auto preimage =
+        tos::pq::stake_preimage(self.global_id, election_date_, max_factor_, self.validator_id.value, stake_owner_,
+                                static_cast<std::uint16_t>(tos::pq::PQAlgorithmId::mldsa44), key_id, adnl_addr_);
+    // Under the election domain, which the elector shares with complaint votes and with
+    // nothing a wallet ever signs.
+    auto signature = self.signer->sign_election(preimage);
+    if (!signature.has_value()) {
+      abort_query(td::Status::Error("the post-quantum consensus key could not sign this stake"));
       return;
     }
 
-    td::actor::send_closure(keyring_, &tos::keyring::Keyring::sign_message, perm_key_,
-                            td::BufferSlice{to_signR.move_as_ok().data}, std::move(P));
-  }
-
-  void signed_bid(td::BufferSlice signature) {
-    signature_ = std::move(signature);
-
-    auto codeR = td::read_file_str(dir_ + "/validator-elect-signed.fif");
-    if (codeR.is_error()) {
-      abort_query(codeR.move_as_error_prefix("fif not found (validator-elect-req.fif)"));
-      return;
-    }
-    auto R = fift::mem_run_fift(
-        codeR.move_as_ok(),
-        {"validator-elect-signed.fif", wallet_, td::to_string(date_), td::to_string(frac),
-         adnl_addr_.bits256_value().to_hex(), td::base64_encode(perm_key_full_.export_as_slice().as_slice()),
-         td::base64_encode(signature_.as_slice()), "OUTPUT"},
-        dir_ + "/");
-    if (R.is_error()) {
-      abort_query(R.move_as_error_prefix("fift fail (validator-elect-req.fif)"));
-      return;
-    }
-
-    auto res = R.move_as_ok();
-    auto dataR = res.source_lookup.read_file("OUTPUT");
-    if (dataR.is_error()) {
-      abort_query(td::Status::Error("strage error: no result boc"));
-      return;
-    }
-
-    result_ = td::BufferSlice(dataR.move_as_ok().data);
-    finish_query();
+    promise_.set_value(tos::create_serialize_tl_object<tos::tos_api::engine_validator_pqStakeAuthorization>(
+        self.validator_id.value, key_id, td::BufferSlice(signature->signature)));
+    stop();
   }
 
   void abort_query(td::Status error) {
     promise_.set_value(ValidatorEngine::create_control_query_error(std::move(error)));
     stop();
   }
-  void finish_query() {
-    promise_.set_value(tos::create_serialize_tl_object<tos::tos_api::engine_validator_electionBid>(
-        date_, perm_key_.tl(), adnl_addr_.bits256_value(), std::move(result_)));
-    stop();
-  }
 
  private:
-  td::uint32 date_;
-  std::string addr_;
-  std::string wallet_;
-  std::string dir_;
-  std::vector<tos::PublicKeyHash> old_keys_;
+  td::uint32 election_date_;
+  td::uint32 max_factor_;
+  td::Bits256 adnl_addr_;
+  td::Bits256 stake_owner_;
   td::actor::ActorId<ValidatorEngine> engine_;
-  td::actor::ActorId<tos::keyring::Keyring> keyring_;
-
   td::Promise<td::BufferSlice> promise_;
-
-  td::uint32 ttl_;
-  AdnlCategory cat_ = 2;
-  double frac = 2.7;
-
-  tos::PublicKeyHash perm_key_;
-  tos::PublicKey perm_key_full_;
-  tos::adnl::AdnlNodeIdShort adnl_addr_;
-  tos::adnl::AdnlNodeIdFull adnl_key_full_;
-
-  td::BufferSlice signature_;
-  td::BufferSlice result_;
 };
 
 // The two votes a validator casts as a member of the current set: on a configuration
@@ -4609,8 +4504,9 @@ void ValidatorEngine::run_control_query(tos::tos_api::engine_validator_getStats 
   td::actor::send_closure(validator_manager_, &tos::validator::ValidatorManagerInterface::prepare_stats, std::move(P));
 }
 
-void ValidatorEngine::run_control_query(tos::tos_api::engine_validator_createElectionBid &query, td::BufferSlice data,
-                                        tos::PublicKeyHash src, td::uint32 perm, td::Promise<td::BufferSlice> promise) {
+void ValidatorEngine::run_control_query(tos::tos_api::engine_validator_createPqStakeAuthorization &query,
+                                        td::BufferSlice data, tos::PublicKeyHash src, td::uint32 perm,
+                                        td::Promise<td::BufferSlice> promise) {
   if (!(perm & ValidatorEnginePermissions::vep_default)) {
     promise.set_value(create_control_query_error(td::Status::Error(tos::ErrorCode::error, "not authorized")));
     return;
@@ -4620,28 +4516,9 @@ void ValidatorEngine::run_control_query(tos::tos_api::engine_validator_createEle
     return;
   }
 
-  if (fift_dir_.empty()) {
-    promise.set_value(create_control_query_error(td::Status::Error(tos::ErrorCode::notready, "no fift dir")));
-    return;
-  }
-
-  std::vector<tos::PublicKeyHash> v;
-  for (auto &x : config_.validators) {
-    if (x.second.election_date == static_cast<tos::UnixTime>(query.election_date_)) {
-      if (x.second.temp_keys.size() == 0 || x.second.adnl_ids.size() == 0) {
-        promise.set_value(
-            create_control_query_error(td::Status::Error(tos::ErrorCode::notready, "prev bid is partial")));
-        return;
-      }
-      v.push_back(x.first);
-      v.push_back(x.second.temp_keys.begin()->first);
-      v.push_back(x.second.adnl_ids.begin()->first);
-    }
-  }
-
-  td::actor::create_actor<ValidatorElectionBidCreator>("bidcreate", query.election_date_, query.election_addr_,
-                                                       query.wallet_, fift_dir_, std::move(v), actor_id(this),
-                                                       keyring_.get(), std::move(promise))
+  td::actor::create_actor<PqStakeAuthorizationCreator>("stakeauth", static_cast<td::uint32>(query.election_date_),
+                                                       static_cast<td::uint32>(query.max_factor_), query.adnl_addr_,
+                                                       query.stake_owner_, actor_id(this), std::move(promise))
       .release();
 }
 

@@ -79,6 +79,21 @@ for script in config-proposal-vote-req config-proposal-vote-signed complaint-vot
     failed=1
   fi
 done
+# The node produced a stake by generating Ed25519 keys and running a Fift script. It
+# cannot produce one at all now: a stake is placed by a controller account, authorised by
+# a root key that never reaches a validator host. What it produces is the signature the
+# elector checks, over one tuple it was asked to agree to.
+for gone in 'ValidatorElectionBidCreator' 'validator-elect-req.fif' 'createElectionBid'; do
+  if grep -q -- "$gone" "$engine"; then
+    echo "authority check failed: validator-engine.cpp has $gone again -- the node builds a stake" >&2
+    failed=1
+  fi
+done
+if ! grep -q -- 'PqStakeAuthorizationCreator' "$engine"; then
+  echo "authority check failed: validator-engine.cpp no longer signs a stake authorisation" >&2
+  failed=1
+fi
+
 for builder in 'block::pq::config_vote_body' 'block::pq::complaint_vote_body'; do
   if ! grep -q -- "$builder" "$engine"; then
     echo "authority check failed: validator-engine.cpp no longer builds its vote with $builder" >&2
