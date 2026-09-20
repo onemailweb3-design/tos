@@ -13,7 +13,9 @@
 //! about where the disagreement is. So they are compared here, against values
 //! the VM actually produced, before anything is proved.
 
-use chain_block::{BuilderData, Cell, IBitstring, MsgAddressInt, Serializable, SliceData, StateInit};
+use chain_block::{
+    BuilderData, Cell, IBitstring, MsgAddressInt, Serializable, SliceData, StateInit,
+};
 use tos_sandbox::{compile_func, Blockchain, MessageBuilder};
 use tos_vm::stack::integer::IntegerData;
 use tos_vm::stack::StackItem;

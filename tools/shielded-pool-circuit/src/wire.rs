@@ -82,7 +82,14 @@ pub fn execution_domain(global_id: i32, pool_account: &[u8; 32]) -> Fr {
 pub fn recovery_template_hash(recovery_owner_commitment: Fr, recovery_data_hash: Fr) -> Fr {
     h7(
         "RECOVERY-TEMPLATE",
-        &[recovery_owner_commitment, recovery_data_hash, Fr::from(0u64), Fr::from(0u64),
-          Fr::from(0u64), Fr::from(0u64), Fr::from(0u64)],
+        &[
+            recovery_owner_commitment,
+            recovery_data_hash,
+            Fr::from(0u64),
+            Fr::from(0u64),
+            Fr::from(0u64),
+            Fr::from(0u64),
+            Fr::from(0u64),
+        ],
     )
 }

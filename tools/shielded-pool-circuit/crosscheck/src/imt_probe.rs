@@ -38,7 +38,7 @@ fn be(value: Fr) -> [u8; 32] {
 /// from the last cell backwards so every non-final cell carries exactly one
 /// reference.
 fn encode_path(fields: &[Fr]) -> Result<Cell> {
-    if fields.len() % 3 != 0 || fields.is_empty() {
+    if !fields.len().is_multiple_of(3) || fields.is_empty() {
         return Err(CrossCheckError::Fixture("a path cell holds exactly three fields".to_string()));
     }
     let cells = fields.len() / 3;
@@ -191,9 +191,6 @@ impl ImtProbe {
 
     fn top(stack: &[StackItem]) -> Result<String> {
         let top = stack.last().ok_or_else(|| CrossCheckError::Vm("no result".to_string()))?;
-        Ok(top
-            .as_integer()
-            .map_err(|error| CrossCheckError::Vm(format!("{error}")))?
-            .to_string())
+        Ok(top.as_integer().map_err(|error| CrossCheckError::Vm(format!("{error}")))?.to_string())
     }
 }

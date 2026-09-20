@@ -124,8 +124,6 @@ fn the_recovery_template_hash_agrees_with_the_vm() {
     let probe = WireProbe::deploy().expect("deploy the wire probe");
     let owner = Fr::from(0x5eedu64);
     let data_hash = wire::output_data_hash(&payload(9));
-    let vm = probe
-        .recovery_template_hash(&dec(owner), &dec(data_hash))
-        .expect("the vm");
+    let vm = probe.recovery_template_hash(&dec(owner), &dec(data_hash)).expect("the vm");
     assert_eq!(dec(wire::recovery_template_hash(owner, data_hash)), vm);
 }

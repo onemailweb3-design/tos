@@ -12,6 +12,10 @@ tos_sandbox = { path = "../../../tosctl/src/sandbox" }
 tos_vm = { path = "../../../tosctl/src/vm" }
 serde_json = "=1.0.145"
 ark-ff = "=0.5.0"
+# Test-only ML-DSA-44 signer. The chain ships a verifier only, so an
+# end-to-end transaction needs a signer to produce signatures over a digest
+# the contract itself computes. Pinned exactly; never used outside tests.
+fips204 = { version = "=0.4.6", default-features = false, features = ["ml-dsa-44", "default-rng"] }
 
 [lints.clippy]
 unwrap_used = "deny"
