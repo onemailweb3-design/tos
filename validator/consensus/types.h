@@ -85,15 +85,10 @@ struct PeerValidator {
   tos::pq::ConsensusPQKey consensus_key;
 
   // The Ed25519 transport/overlay identity, derived from the descriptor's ADNL address.
-  // It authorizes network traffic (private overlay, FEC), never a consensus signature.
+  // It authorizes network traffic (private overlay, FEC), never a consensus signature. A
+  // transport key hash must never be passed where a consensus verify key is expected.
   PublicKeyHash transport_key_id;
 
-  // TODO(N4.1): `key` and `short_id` are being removed. During the expand-contract
-  // migration they are still populated so consumers can move one file at a time; the
-  // consensus verifier already uses `consensus_key`, and transport uses
-  // `transport_key_id`. Nothing new should read these two.
-  PublicKey key;
-  PublicKeyHash short_id;
   adnl::AdnlNodeIdShort adnl_id;
   ValidatorWeight weight;
 };

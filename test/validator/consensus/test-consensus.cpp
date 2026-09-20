@@ -684,18 +684,29 @@ class TestConsensus : public td::actor::Actor {
 
       node.weight = 11;
 
+      // A distinct post-quantum consensus key per node, seeded deterministically off its
+      // Ed25519 node id so the run is reproducible.
+      std::string seed(32, '\0');
+      std::memcpy(seed.data(), node.node_id.bits256_value().data(), 32);
+      node.pq_store =
+          std::make_shared<const tos::pq::ValidatorPQKeyStore>(tos::pq::ValidatorPQKeyStore::from_seed(seed).value());
+
       nodes_.push_back(std::move(node));
     }
 
     std::vector<ValidatorDescr> validator_descrs;
     for (size_t idx = 0; idx < nodes_.size(); ++idx) {
       Node &node = nodes_[idx];
-      validator_descrs.push_back(ValidatorDescr(Ed25519_PublicKey{node.public_key.ed25519_value().raw()}, node.weight,
-                                                node.adnl_id.bits256_value()));
-      validators_.push_back(PeerValidator{.validator_id = tos::ValidatorId{node.node_id.bits256_value()},
+      const auto validator_id = tos::ValidatorId{node.node_id.bits256_value()};
+      const auto &consensus_key = node.pq_store->consensus_key();
+      tos::ConsensusKeyId key_id;
+      std::memcpy(key_id.value.data(), consensus_key.key_id.data(), 32);
+      validator_descrs.push_back(ValidatorDescr(validator_id, /*algorithm_id=*/1, key_id, consensus_key.public_key,
+                                                node.weight, node.adnl_id.bits256_value()));
+      validators_.push_back(PeerValidator{.validator_id = validator_id,
                                           .idx = PeerValidatorId((int)idx),
-                                          .key = node.public_key,
-                                          .short_id = node.node_id,
+                                          .consensus_key = consensus_key,
+                                          .transport_key_id = node.adnl_id.pubkey_hash(),
                                           .adnl_id = node.adnl_id,
                                           .weight = node.weight});
       total_weight_ += node.weight;
@@ -803,6 +814,7 @@ class TestConsensus : public td::actor::Actor {
     bus->shard = SHARD;
     bus->manager = inst.manager_facade.get();
     bus->keyring = keyring_.get();
+    bus->pq_signer = nodes_[node_idx].pq_store;
     bus->validator_opts = ValidatorManagerOptions::create(BlockIdExt{}, BlockIdExt{});
     bus->validator_set = validators_;
     for (const auto &validator : validators_) {
@@ -1307,6 +1319,9 @@ class TestConsensus : public td::actor::Actor {
     adnl::AdnlNodeIdFull adnl_id_full;
     adnl::AdnlNodeIdShort adnl_id;
     ValidatorWeight weight = 0;
+    // The node's post-quantum consensus key: what it signs Simplex messages with and what
+    // the set records for it. The Ed25519 keys above stay for the transport/overlay layer.
+    std::shared_ptr<const tos::pq::ValidatorPQKeyStore> pq_store;
     std::vector<Instance> instances;
   };
   std::vector<Node> nodes_;

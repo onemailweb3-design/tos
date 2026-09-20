@@ -277,7 +277,7 @@ struct BridgeCreationParams {
 
   td::Ref<block::ValidatorSet> validator_set;
   std::vector<adnl::AdnlNodeIdShort> all_validators;
-  std::optional<PublicKeyHash> local_id;
+  std::optional<tos::ValidatorId> local_id;
   adnl::AdnlNodeIdShort local_adnl_id;
   std::string db_suffix;
 
@@ -361,41 +361,52 @@ class BridgeImpl final : public IValidatorGroup {
     bus->all_validators = params_.all_validators;
 
     bool found = false;
+    bool refused = false;
     size_t idx = 0;
     ValidatorWeight total_weight = 0;
     for (const auto& el : params_.validator_set->export_vector()) {
-      // The transport/overlay identity, derived from the descriptor's ADNL address. For a
-      // classical descriptor this equals the old Ed25519 short id (validator_adnl_identity
-      // falls back to it), so migrating consumers from short_id to transport_key_id is a
-      // no-op for classical and correct for post-quantum.
-      auto adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(el)};
-      PublicKeyHash transport_key_id = adnl_id.pubkey_hash();
-
-      // The consensus key the set records. Post-quantum descriptors carry it directly; a
-      // classical descriptor still populates the legacy Ed25519 `key` during the
-      // expand-contract migration, and its consensus_key stays empty.
-      tos::pq::ConsensusPQKey consensus_key;
-      PublicKey key;
-      if (el.is_pq()) {
-        consensus_key.algorithm_id = static_cast<tos::pq::PQAlgorithmId>(el.algorithm_id);
-        std::memcpy(consensus_key.key_id.data(), el.key_id.value.data(), 32);
-        consensus_key.public_key = el.pq_public_key;
-      } else {
-        key = PublicKey{pubkeys::Ed25519{el.classical_key()}};
+      // The Simplex bus is post-quantum only. A classical descriptor's consensus key is
+      // Ed25519, which N4 does not verify, so refuse to start rather than Ed25519-verify,
+      // fall back, or abort -- the node stays a full node until the set is post-quantum.
+      if (!el.is_pq()) {
+        LOG(ERROR) << "consensus: refusing to start a Simplex group -- a validator descriptor is classical, and the "
+                      "post-quantum consensus path does not accept it";
+        refused = true;
+        break;
       }
+      // Validate the consensus key the set records: an admitted algorithm, the exact
+      // public-key length, and a key id that derives from that public key. A descriptor
+      // that fails this is refused, not signed against with a malformed key.
+      const auto algorithm_id = static_cast<tos::pq::PQAlgorithmId>(el.algorithm_id);
+      auto derived_key_id = tos::pq::derive_key_id(algorithm_id, el.pq_public_key);
+      if (!tos::pq::is_admitted(algorithm_id) || el.pq_public_key.size() != tos::pq::mldsa44_public_key_bytes ||
+          !derived_key_id || std::memcmp(derived_key_id->data(), el.key_id.value.data(), 32) != 0) {
+        LOG(ERROR) << "consensus: refusing to start a Simplex group -- a validator descriptor's post-quantum consensus "
+                      "key is malformed or its key id does not derive from its public key";
+        refused = true;
+        break;
+      }
+
+      // The transport/overlay identity, from the descriptor's explicit ADNL address, never
+      // from the consensus key.
+      auto adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(el)};
+
+      tos::pq::ConsensusPQKey consensus_key;
+      consensus_key.algorithm_id = algorithm_id;
+      std::memcpy(consensus_key.key_id.data(), el.key_id.value.data(), 32);
+      consensus_key.public_key = el.pq_public_key;
 
       bus->validator_set.push_back(PeerValidator{
           .validator_id = el.validator_id,
           .idx = PeerValidatorId{idx},
           .consensus_key = std::move(consensus_key),
-          .transport_key_id = transport_key_id,
-          .key = key,
-          .short_id = transport_key_id,
+          .transport_key_id = adnl_id.pubkey_hash(),
           .adnl_id = adnl_id,
           .weight = el.weight,
       });
 
-      if (params_.local_id && transport_key_id == *params_.local_id) {
+      // The local node is matched by its stable validator identity, not a key hash.
+      if (params_.local_id && el.validator_id == *params_.local_id) {
         found = true;
         bus->local_id = bus->validator_set.back();
         CHECK(bus->validator_set.back().adnl_id == params_.local_adnl_id);
@@ -405,6 +416,10 @@ class BridgeImpl final : public IValidatorGroup {
       // mirroring crypto/block/validator-set.cpp's ctor sum.
       CHECK(tos::checked_add_validator_weight(total_weight, el.weight));
       ++idx;
+    }
+    if (refused) {
+      stop();
+      return;
     }
     bus->total_weight = total_weight;
     bus->cc_seqno = params_.validator_set->get_catchain_seqno();
@@ -657,7 +672,7 @@ void CandidateBroadcastRelay::register_in(td::actor::Runtime& runtime) {
 }  // namespace consensus
 
 td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
-    td::Slice name, ShardIdFull shard, PublicKeyHash local_id,
+    td::Slice name, ShardIdFull shard, tos::ValidatorId local_id,
     std::shared_ptr<const tos::pq::ValidatorPQKeyStore> pq_signer, ValidatorSessionId session_id,
     td::Ref<block::ValidatorSet> validator_set, BlockSeqno last_key_block_seqno, NewConsensusConfig config,
     td::actor::ActorId<keyring::Keyring> keyring, td::actor::ActorId<adnl::Adnl> adnl,
@@ -671,7 +686,7 @@ td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
       << NewConsensusConfig::MAX_SUPPORTED_PROTOCOL_VERSION << ")";
   auto name_with_seqno =
       std::string(name.begin(), name.end()) + "." + std::to_string(validator_set->get_catchain_seqno());
-  auto descr = validator_set->get_validator(tos::ValidatorId{local_id.bits256_value()});
+  auto descr = validator_set->get_validator(local_id);
   CHECK(descr);
   // Only a classical descriptor may fall back to deriving an ADNL identity from its
   // key. A post-quantum one always carries an explicit address, precisely so that a

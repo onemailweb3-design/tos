@@ -19,4 +19,6 @@ crypto/block/validator-session-members.cpp	2	guarded	the classical session membe
 utils/show-validator-set.cpp	1	guarded	display fallback for a tooling-built classical descriptor that carries no identity
 validator/full-node.cpp	1	aborts-on-pq	shard overlay certificate authority and local validator detection; must be sourced from the transport identity, together with the signer side (N5)
 validator/full-node-fast-sync-overlays.cpp	1	aborts-on-pq	fast-sync overlay certificate roots; same transport-identity change, same pairing with the signer side (N5)
-validator/consensus/bridge.cpp	1	aborts-on-pq	Simplex peer verification key; becomes the post-quantum consensus key (N4)
+# validator/consensus/bridge.cpp closed in N4: the Simplex bus now reads the post-quantum
+# consensus key from the descriptor and refuses a classical one, so it no longer calls
+# classical_key(). Only the two N5 full-node/fast-sync sites remain.

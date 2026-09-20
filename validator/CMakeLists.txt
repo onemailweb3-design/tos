@@ -257,6 +257,9 @@ target_include_directories(full-node PUBLIC
   )
 
 target_link_libraries(validator PRIVATE validator-common validator-db tos_validator)
+# The consensus bus exposes the post-quantum consensus signer/key types and signs and
+# verifies with them (N4), so consumers linking `validator` need these transitively.
+target_link_libraries(validator PUBLIC tos_pq_consensus_signer tos_pq_consensus tos_mldsa44)
 
 target_link_libraries(validator-disk PRIVATE validator-common validator-db)
 

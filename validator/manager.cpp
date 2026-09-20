@@ -3408,7 +3408,7 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
     return {};
   }
 
-  return IValidatorGroup::create_bridge(PSTRING() << "valgroup" << shard.to_str(), shard, validator_id,
+  return IValidatorGroup::create_bridge(PSTRING() << "valgroup" << shard.to_str(), shard, local_vid,
                                         std::move(pq_signer), session_id, validator_set, key_seqno, config, keyring_,
                                         adnl_, quic_, overlays_, get_all_validator_adnl_ids(), db_root_, actor_id(this),
                                         get_collation_manager(adnl_id), init_session,
