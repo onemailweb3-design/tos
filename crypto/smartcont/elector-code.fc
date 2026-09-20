@@ -272,34 +272,43 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     return return_stake(s_addr, query_id, 14);
   }
 
+  ;; Everything this request is answered with goes to the account whose money it is, not
+  ;; to the account that carried it. A relay holds nothing and keeps nothing: were the
+  ;; refusal and the money to go back to it, a pool would be left waiting for an answer
+  ;; that stopped one account short of it, with its capital stranded at a contract that
+  ;; has no way to return it.
+  slice owner_addr = states_owner ? begin_cell().store_uint(4, 3).store_int(-1, 8)
+                                      .store_uint(stake_owner, 256).end_cell().begin_parse()
+                                  : s_addr;
+
   ;; Everything that can be decided without the key is decided first. Verifying a
   ;; post-quantum signature costs an order of magnitude more than the whole rest of this
   ;; function, and a request that is refused for its election, its factor or its address
   ;; must not be able to spend that on the way out.
   if (max_factor < 0x10000) {
     ;; factor must be >= 1. = 65536/65536
-    return return_stake(s_addr, query_id, 6);
+    return return_stake(owner_addr, query_id, 6);
   }
   if (adnl_addr == 0) {
     ;; a post-quantum validator is reachable at an address it states; a consensus key is
     ;; never a transport identity, so there is nothing to fall back to
-    return return_stake(s_addr, query_id, 7);
+    return return_stake(owner_addr, query_id, 7);
   }
 
   var (elect_at, elect_close, min_stake, total_stake, failed, finished, pq_members, pq_key_owner, pq_by_code) = elect.unpack_elect();
   msg_value -= 1000000000;   ;; deduct TM$1 for sending confirmation
   if (stake_at != elect_at) {
-    return return_stake(s_addr, query_id, 3);
+    return return_stake(owner_addr, query_id, 3);
   }
   if (finished) {
-    return return_stake(s_addr, query_id, 0);
+    return return_stake(owner_addr, query_id, 0);
   }
   ;; An election is closed from the moment it may be conducted, which is the condition
   ;; `conduct_elections` itself uses. Admitting a stake until the tick that happens to
   ;; run afterwards would make membership depend on when that tick lands rather than on
   ;; the election's own boundary, and a rotation is a membership change like any other.
   if (now() >= elect_close) {
-    return return_stake(s_addr, query_id, 0);
+    return return_stake(owner_addr, query_id, 0);
   }
   (_, cell key_chain) = pq::stored_key(algorithm_id, public_key);
   int key_id = pq::key_id(algorithm_id, public_key);
@@ -308,7 +317,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   int holder = pq::key_holder(pq_key_owner, key_id);
   if (holder) {
     if (holder != validator_id) {
-      return return_stake(s_addr, query_id, 4);
+      return return_stake(owner_addr, query_id, 4);
     }
   }
   ;; Whether this account may hold validator authority at all. The controller is the
@@ -319,7 +328,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   var (existing, registered) = pq_members.udict_get?(256, validator_id);
   (cell admitted_codes, int have_policy) = pq::controller_policy();
   ifnot (have_policy) {
-    return return_stake(s_addr, query_id, 11);
+    return return_stake(owner_addr, query_id, 11);
   }
   ;; The floor under a stake is measured against the stake this election actually
   ;; counts: what stands behind codes the configuration still admits. Classical stake
@@ -327,7 +336,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   int effective = pq::effective_stake(pq_by_code, admitted_codes);
   if ((msg_value << 12) < effective) {
     ;; stake smaller than 1/4096 of the post-quantum stake already placed, return
-    return return_stake(s_addr, query_id, 2);
+    return return_stake(owner_addr, query_id, 2);
   }
   total_stake += msg_value;
   int controller_code = 0;
@@ -336,14 +345,14 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     (int placed, _, _, _, _, _, _, _, int held_code) = pq::unpack_member(existing);
     placed_before = placed;
     ifnot (pq::controller_admitted?(admitted_codes, held_code)) {
-      return return_stake(s_addr, query_id, 12);
+      return return_stake(owner_addr, query_id, 12);
     }
     controller_code = held_code;
     ;; A controller topping up or rotating keeps the stake it already placed.
     msg_value += placed;
   } else {
     if (cell_null?(controller_birth_witness)) {
-      return return_stake(s_addr, query_id, 8);
+      return return_stake(owner_addr, query_id, 8);
     }
     (int proved_code, int witness_status) =
       pq::controller_code_hash?(controller_birth_witness, validator_id);
@@ -351,18 +360,18 @@ _ ~credit_to(credits, addr, amount) inline_ref {
     ;; not describe this account, and the sender is told which: the first is a malformed
     ;; request, the second is a claim about an account it was not deployed as.
     if (witness_status == pq::witness::bad_shape) {
-      return return_stake(s_addr, query_id, 9);
+      return return_stake(owner_addr, query_id, 9);
     }
     if (witness_status == pq::witness::bad_address) {
-      return return_stake(s_addr, query_id, 13);
+      return return_stake(owner_addr, query_id, 13);
     }
     ifnot (pq::controller_admitted?(admitted_codes, proved_code)) {
-      return return_stake(s_addr, query_id, 10);
+      return return_stake(owner_addr, query_id, 10);
     }
     controller_code = proved_code;
   }
   if (msg_value < min_stake) {
-    return return_stake(s_addr, query_id, 5);
+    return return_stake(owner_addr, query_id, 5);
   }
   throw_unless(44, msg_value);
 
@@ -372,7 +381,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   ifnot (pq_check_mldsa44(
       pq::stake_preimage(stake_at, max_factor, validator_id, stake_owner, algorithm_id, key_id, adnl_addr),
       pq::election_context(), signature_chain, key_chain)) {
-    return return_stake(s_addr, query_id, 1);
+    return return_stake(owner_addr, query_id, 1);
   }
   accept_message();
 
@@ -385,7 +394,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   elect = pack_elect(elect_at, elect_close, min_stake, total_stake, false, false, pq_members, pq_key_owner, pq_by_code);
   set_data(begin_cell().store_dict(elect).store_slice(ds).end_cell());
   if (query_id) {
-    return send_confirmation(s_addr, query_id, 0);
+    return send_confirmation(owner_addr, query_id, 0);
   }
   return ();
 }

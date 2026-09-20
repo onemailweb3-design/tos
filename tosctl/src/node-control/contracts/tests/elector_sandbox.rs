@@ -4158,6 +4158,79 @@ fn pq_stake(
     pq_stake_from(chain, from, &sender, validator, election, query_id, value)
 }
 
+/// Where the elector's first answer went, what it said, and what it carried.
+fn answered(result: &tos_sandbox::SendResult) -> (MsgAddressInt, u32, u32, u128) {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    let mut answer = None;
+    transaction
+        .iterate_out_msgs(|message| {
+            if answer.is_none() {
+                let destination = message.dst().expect("a destination");
+                let value = message.get_value().map(|v| v.coins.as_u128()).unwrap_or(0);
+                let mut body = message.body().expect("a body").clone();
+                let tag = body.get_next_u32().expect("a reply tag");
+                body.get_next_u64().expect("a query id");
+                let reason = body.get_next_u32().unwrap_or(0);
+                answer = Some((destination, tag, reason, value));
+            }
+            Ok(true)
+        })
+        .expect("out messages");
+    answer.expect("the elector always answers a stake")
+}
+
+/// Whatever the elector has to say about a relayed stake, it says to the account whose
+/// money it is.
+///
+/// A relay holds nothing and keeps nothing. An answer that stopped at it would leave the
+/// pool waiting for one that never came, and a refusal that returned the money there
+/// would strand the pool's capital at a contract with no way to give it back.
+#[test]
+fn a_relayed_stake_is_answered_to_its_owner_and_not_to_the_relay() {
+    let (mut chain, treasury, election) = open_election("relayed-answer", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let pool = chain_block::UInt256::from_slice(&[0x9f; 32]);
+    let pool_address =
+        MsgAddressInt::with_standart(None, -1, pool.as_slice().into()).expect("the pool address");
+    let relay = treasury.address().clone();
+
+    // Accepted: the confirmation goes to the pool.
+    let taken = pq_stake_relayed(
+        &mut chain,
+        &treasury,
+        &PqValidator::new(81),
+        election,
+        1,
+        11_000 * TOS,
+        &pool,
+        &pool,
+    );
+    let (to, tag, _, _) = answered(&taken);
+    assert_eq!(tag, STAKE_ACCEPTED, "the relayed stake was refused");
+    assert_eq!(to, pool_address, "the confirmation went to the relay rather than to the pool");
+    assert_ne!(to, relay, "the confirmation went to the relay");
+
+    // Refused: the refusal and the money both go to the pool.
+    let refused = pq_stake_relayed(
+        &mut chain,
+        &treasury,
+        &PqValidator::new(82),
+        election - 1,
+        2,
+        11_000 * TOS,
+        &pool,
+        &pool,
+    );
+    let (to, tag, reason, carried) = answered(&refused);
+    assert_eq!(tag, STAKE_RETURNED, "a stake for another election was taken");
+    assert_eq!(reason, REASON_WRONG_ELECTION, "refused for the wrong reason");
+    assert_eq!(to, pool_address, "the refusal went to the relay rather than to the pool");
+    assert!(
+        carried > u128::from(10_000 * TOS),
+        "the refusal carried {carried} nanotomis, so the stake did not go back"
+    );
+}
+
 /// A controller may stake money that is not its own, and the money goes back to whoever
 /// put it up.
 ///
