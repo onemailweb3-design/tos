@@ -1691,6 +1691,7 @@ dependencies = [
  "ark-serialize",
  "ark-snark",
  "ark-std",
+ "blst",
  "hex",
  "rand",
  "rand_chacha",

@@ -440,16 +440,19 @@ fn mode_predicates() {
     );
 }
 
-/// A public payout that is not an amount at all.
+/// A public payout that is not an amount at all: chosen as `r - 1000` so that
+/// conservation wraps and the outputs quietly exceed the inputs. The fee here
+/// is an ordinary small number, so this exploit belongs to the payout's width
+/// alone and to no other relation.
 #[test]
 fn public_amount_range() {
     let mut pool = Pool::new();
     let (first, pq0) = scenario::deposit(&mut pool, amount(5_000));
     let (second, pq1) = scenario::deposit(&mut pool, amount(1_000));
-    let outputs = [pool.real_output(amount(2_000)), pool.dummy_output(), pool.dummy_output()];
-    // Ask for 2^121 and let the fee absorb the difference by wrapping.
-    let payout = two_thousand_twenty_bits().double();
-    let fee = amount(6_000) - amount(2_000) - payout;
+    // 6,000 in; 6,990 out plus a 10 fee, balanced only by the payout wrapping.
+    let outputs = [pool.real_output(amount(6_990)), pool.dummy_output(), pool.dummy_output()];
+    let fee = amount(10);
+    let payout = -amount(1_000);
     let recipient = pool.fresh();
     let recovery = pool.fresh();
     let (public, witness) = scenario::transaction(
@@ -468,9 +471,49 @@ fn public_amount_range() {
     let mut weakened = Relations::ALL;
     weakened.public_amount_range = false;
     removal(
-        "section 11.3 public amount and fee widths",
-        "the circuit endorses a payout of 2^121 because an unbounded fee absorbs the difference \
-         by wrapping the field",
+        "section 11.3 public amount width",
+        "the circuit endorses 990 more in notes than were put in, because a payout of r-1000 \
+         wraps conservation back into balance",
+        Relations::ALL,
+        weakened,
+        &public,
+        &witness,
+    );
+}
+
+/// The same theft driven by the fee instead of the payout. The profile states
+/// only `withdrawal_fee > 0`; this is what the missing upper bound buys, and
+/// why the ruling put the fee under the same width as every other amount.
+#[test]
+fn withdrawal_fee_range() {
+    let mut pool = Pool::new();
+    let (first, pq0) = scenario::deposit(&mut pool, amount(5_000));
+    let (second, pq1) = scenario::deposit(&mut pool, amount(1_000));
+    // 6,000 in; 6,500 in notes and 500 paid out, balanced by a fee of r-1000.
+    let outputs = [pool.real_output(amount(6_500)), pool.dummy_output(), pool.dummy_output()];
+    let payout = amount(500);
+    let fee = -amount(1_000);
+    let recipient = pool.fresh();
+    let recovery = pool.fresh();
+    let (public, witness) = scenario::transaction(
+        &mut pool,
+        [first, second],
+        [pq0, pq1],
+        outputs,
+        scenario::PublicTerms {
+            public_amount_out: payout,
+            withdrawal_fee: fee,
+            public_recipient_hash: recipient,
+            recovery_template_hash: recovery,
+        },
+    );
+
+    let mut weakened = Relations::ALL;
+    weakened.withdrawal_fee_range = false;
+    removal(
+        "section 11.3 withdrawal fee width",
+        "a fee of r-1000 wraps conservation, so 1,000 more leaves the pool than entered it \
+         while every amount in sight still looks like an amount",
         Relations::ALL,
         weakened,
         &public,

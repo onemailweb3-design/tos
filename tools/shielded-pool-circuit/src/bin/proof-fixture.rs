@@ -67,9 +67,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     must never verify a real transaction.",
         "profile": "TOS Shielded Pool V1 implementation profile, sections 10 and 10.1",
         "public_input_order": ORDER,
-        "point_encoding": "compressed points as the arkworks 0.5 serializer emits them; \
-                           section 10.1 fixes the lengths (48/96) but names no byte order, so \
-                           the order is recorded here rather than assumed",
+        "point_encoding": "blst/IETF BLS12-381 compressed encoding: big-endian x with the \
+                           compression, infinity and sort flags in the first byte, 48 bytes for \
+                           G1 and 96 for G2. Every point here was produced by blst and round \
+                           trips through blst_*_uncompress and blst_*_affine_compress unchanged. \
+                           arkworks is the prover's curve implementation and not the wire format.",
         "verifying_key": {
             "ic_count": vk.ic_count,
             "bytes": vk.bytes.len(),

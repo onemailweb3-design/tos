@@ -101,6 +101,10 @@ pub struct Relations {
     pub conservation: bool,
     pub mode_predicates: bool,
     pub public_amount_range: bool,
+    /// Section 11.3, ruled in the V1 open-rulings register: the fee is a value
+    /// in the same conservation equation as every other amount, so it carries
+    /// the same width. Its own switch, so its own removal test.
+    pub withdrawal_fee_range: bool,
     pub intent_digest: bool,
     pub intent_nonce_non_zero: bool,
 }
@@ -127,6 +131,7 @@ impl Relations {
         conservation: true,
         mode_predicates: true,
         public_amount_range: true,
+        withdrawal_fee_range: true,
         intent_digest: true,
         intent_nonce_non_zero: true,
     };
@@ -332,9 +337,13 @@ impl ConstraintSynthesizer<Fr> for ShieldedTransactionCircuit {
         // --- Section 11.3: conservation and mode ----------------------------
         if r.public_amount_range {
             range::enforce_bit_width(&public_amount_out, AMOUNT_BITS)?;
-            // The profile does not state a width for the fee. Conservation is
-            // field arithmetic, so an unbounded fee would wrap and balance a
-            // theft; it is bounded exactly like every other amount.
+        }
+        if r.withdrawal_fee_range {
+            // Conservation is field arithmetic, so a fee left unbounded could
+            // be chosen as r - X and wrap the equation back into balance while
+            // X walks out. The contract's equality against the immutable config
+            // fee is a second line; a relation that depends on it is not a
+            // value-conservation relation on its own.
             range::enforce_bit_width(&withdrawal_fee, AMOUNT_BITS)?;
         }
         if r.conservation {

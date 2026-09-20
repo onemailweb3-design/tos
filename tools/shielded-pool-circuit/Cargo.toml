@@ -18,6 +18,14 @@ ark-std = "=0.5.0"
 sha2 = "=0.10.9"
 hex = "=0.4.3"
 rand_chacha = "=0.3.1"
+# The canonical wire encoder. Ruling A1 defines V1 proof/VK bytes as exactly
+# what this chain's own BLS primitives accept and produce, so the bytes are
+# produced by the same library the VM links rather than by a second one that
+# happens to agree.
+# Pinned to the exact version the chain's own workspace resolves, so that
+# "what this chain accepts" is literally the same code and not a
+# semver-compatible neighbour that happens to agree today.
+blst = { version = "=0.3.16", features = ["portable"] }
 rand = "=0.8.5"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"

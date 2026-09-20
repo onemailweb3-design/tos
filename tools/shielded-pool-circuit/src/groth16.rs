@@ -25,9 +25,8 @@
 use ark_bls12_381::{Bls12_381, G1Affine, G1Projective, G2Affine, G2Projective};
 use ark_ec::pairing::{Pairing, PairingOutput};
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::{PrimeField, Zero};
+use ark_ff::{BigInteger, PrimeField, Zero};
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
-use ark_serialize::CanonicalSerialize;
 use ark_snark::SNARK;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -252,24 +251,114 @@ pub struct CanonicalProof {
     pub c: [u8; 48],
 }
 
+/// A field element as the 48 big-endian bytes the IETF encoding uses. The
+/// modulus is 381 bits, so the top three bits of the first byte are free and
+/// carry the compression, infinity and sort flags.
+fn fp_be(value: &ark_bls12_381::Fq) -> [u8; 48] {
+    let digits = value.into_bigint().to_bytes_be();
+    let mut out = [0u8; 48];
+    out[48 - digits.len()..].copy_from_slice(&digits);
+    out
+}
+
+/// The uncompressed IETF serialization blst accepts: big-endian x then y, with
+/// the flag bits clear, or the infinity bit alone for the point at infinity.
+fn uncompressed_g1(point: &G1Affine) -> [u8; 96] {
+    let mut out = [0u8; 96];
+    if point.infinity {
+        out[0] = 0x40;
+        return out;
+    }
+    out[..48].copy_from_slice(&fp_be(&point.x));
+    out[48..].copy_from_slice(&fp_be(&point.y));
+    out
+}
+
+fn uncompressed_g2(point: &G2Affine) -> [u8; 192] {
+    let mut out = [0u8; 192];
+    if point.infinity {
+        out[0] = 0x40;
+        return out;
+    }
+    // An Fp2 coordinate is serialized with its c1 part first.
+    out[..48].copy_from_slice(&fp_be(&point.x.c1));
+    out[48..96].copy_from_slice(&fp_be(&point.x.c0));
+    out[96..144].copy_from_slice(&fp_be(&point.y.c1));
+    out[144..].copy_from_slice(&fp_be(&point.y.c0));
+    out
+}
+
+/// Ruling A1: V1 wire bytes are what this chain's blst primitives accept and
+/// produce, not what the proving library happens to emit. arkworks stays the
+/// curve implementation; this is the only place its points become bytes.
+///
+/// The bytes are defined by a round trip rather than by a description of the
+/// layout: deserialize them with blst, compress the result, and the same bytes
+/// must come back. Anything that survives that is canonical by construction.
 fn compress_g1(point: &G1Affine) -> Result<[u8; 48]> {
-    let mut bytes = Vec::with_capacity(48);
-    point
-        .serialize_compressed(&mut bytes)
-        .map_err(|error| Error::Backend(format!("G1 compression: {error}")))?;
-    bytes
-        .try_into()
-        .map_err(|_| Error::Backend("a compressed G1 point was not 48 bytes".to_string()))
+    let uncompressed = uncompressed_g1(point);
+    let mut affine = blst::blst_p1_affine::default();
+    // SAFETY: a 96-byte buffer, which is the width blst reads for an
+    // uncompressed G1, and an initialised output.
+    let status = unsafe { blst::blst_p1_deserialize(&mut affine, uncompressed.as_ptr()) };
+    if status != blst::BLST_ERROR::BLST_SUCCESS {
+        return Err(Error::Backend(format!("blst refused a G1 point: {status:?}")));
+    }
+    let mut out = [0u8; 48];
+    // SAFETY: a 48-byte output, the width blst writes for a compressed G1.
+    unsafe { blst::blst_p1_affine_compress(out.as_mut_ptr(), &affine) };
+    round_trip_g1(&out)?;
+    Ok(out)
 }
 
 fn compress_g2(point: &G2Affine) -> Result<[u8; 96]> {
-    let mut bytes = Vec::with_capacity(96);
-    point
-        .serialize_compressed(&mut bytes)
-        .map_err(|error| Error::Backend(format!("G2 compression: {error}")))?;
-    bytes
-        .try_into()
-        .map_err(|_| Error::Backend("a compressed G2 point was not 96 bytes".to_string()))
+    let uncompressed = uncompressed_g2(point);
+    let mut affine = blst::blst_p2_affine::default();
+    // SAFETY: a 192-byte buffer, the width blst reads for an uncompressed G2.
+    let status = unsafe { blst::blst_p2_deserialize(&mut affine, uncompressed.as_ptr()) };
+    if status != blst::BLST_ERROR::BLST_SUCCESS {
+        return Err(Error::Backend(format!("blst refused a G2 point: {status:?}")));
+    }
+    let mut out = [0u8; 96];
+    // SAFETY: a 96-byte output, the width blst writes for a compressed G2.
+    unsafe { blst::blst_p2_affine_compress(out.as_mut_ptr(), &affine) };
+    round_trip_g2(&out)?;
+    Ok(out)
+}
+
+/// The definition of canonical: bytes that blst reads back and re-emits
+/// unchanged. Checked at the moment of encoding, so a point can never reach a
+/// fixture or a digest without having passed it.
+pub fn round_trip_g1(bytes: &[u8; 48]) -> Result<()> {
+    let mut affine = blst::blst_p1_affine::default();
+    // SAFETY: a 48-byte compressed input and an initialised output.
+    let status = unsafe { blst::blst_p1_uncompress(&mut affine, bytes.as_ptr()) };
+    if status != blst::BLST_ERROR::BLST_SUCCESS {
+        return Err(Error::Backend(format!("blst refused compressed G1 bytes: {status:?}")));
+    }
+    let mut again = [0u8; 48];
+    // SAFETY: as above, in the other direction.
+    unsafe { blst::blst_p1_affine_compress(again.as_mut_ptr(), &affine) };
+    if again != *bytes {
+        return Err(Error::Backend("a compressed G1 point did not round trip".to_string()));
+    }
+    Ok(())
+}
+
+pub fn round_trip_g2(bytes: &[u8; 96]) -> Result<()> {
+    let mut affine = blst::blst_p2_affine::default();
+    // SAFETY: a 96-byte compressed input and an initialised output.
+    let status = unsafe { blst::blst_p2_uncompress(&mut affine, bytes.as_ptr()) };
+    if status != blst::BLST_ERROR::BLST_SUCCESS {
+        return Err(Error::Backend(format!("blst refused compressed G2 bytes: {status:?}")));
+    }
+    let mut again = [0u8; 96];
+    // SAFETY: as above, in the other direction.
+    unsafe { blst::blst_p2_affine_compress(again.as_mut_ptr(), &affine) };
+    if again != *bytes {
+        return Err(Error::Backend("a compressed G2 point did not round trip".to_string()));
+    }
+    Ok(())
 }
 
 impl CanonicalProof {

@@ -130,6 +130,87 @@ fn the_pairing_equation_is_measured_not_assumed() {
 }
 
 #[test]
+/// Ruling A1: the wire bytes are the blst/IETF encoding, not whatever the
+/// proving library happens to emit.
+///
+/// Worth recording plainly, because the migration changed no bytes: arkworks
+/// 0.5 already produced exactly these bytes for BLS12-381. That made the old
+/// encoding accidentally right, unverified and undocumented. What this test
+/// establishes is that it is now pinned -- every point is produced through
+/// blst, round trips through it unchanged, and carries its flags where the
+/// IETF layout puts them, so a future library change that moved to the
+/// flags-last layout would fail here instead of silently changing a hash that
+/// lives in chain state.
+#[test]
+fn every_point_is_canonical_in_the_chains_own_encoding() {
+    let (_pool, public, witness) = scenario::valid_withdrawal();
+    let keys = match groth16::development_keys(ShieldedTransactionCircuit::blank(public)) {
+        Ok(keys) => keys,
+        Err(error) => panic!("setup: {error}"),
+    };
+    let proof = match groth16::prove(&keys, ShieldedTransactionCircuit::new(public, witness), 1) {
+        Ok(proof) => proof,
+        Err(error) => panic!("prove: {error}"),
+    };
+    let canonical = match groth16::CanonicalProof::from_proof(&proof) {
+        Ok(canonical) => canonical,
+        Err(error) => panic!("proof encoding: {error}"),
+    };
+    let vk = match groth16::canonical_verifying_key(&keys.verifying) {
+        Ok(vk) => vk,
+        Err(error) => panic!("verifying key encoding: {error}"),
+    };
+
+    // Every G1 in the proof, and every 48-byte group in the VK stream that is
+    // one: alpha, then IC[0..18]. The G2s are checked by width below.
+    let mut g1s: Vec<[u8; 48]> = vec![canonical.a, canonical.c];
+    let mut g2s: Vec<[u8; 96]> = vec![canonical.b];
+    g1s.push(vk.bytes[..48].try_into().expect("alpha"));
+    for index in 0..3 {
+        let start = 48 + index * 96;
+        g2s.push(vk.bytes[start..start + 96].try_into().expect("a G2"));
+    }
+    for index in 0..vk.ic_count {
+        let start = 48 + 3 * 96 + index * 48;
+        g1s.push(vk.bytes[start..start + 48].try_into().expect("an IC point"));
+    }
+    assert_eq!(g1s.len(), 2 + 1 + vk.ic_count, "not every G1 was collected");
+    assert_eq!(g2s.len(), 4, "not every G2 was collected");
+
+    for (index, bytes) in g1s.iter().enumerate() {
+        assert_ne!(bytes[0] & 0x80, 0, "G1 {index}: the compression flag is not in the first byte");
+        if let Err(error) = groth16::round_trip_g1(bytes) {
+            panic!("G1 {index}: {error}");
+        }
+        // Clearing the compression flag makes it an uncompressed prefix, which
+        // is 48 bytes short: blst must refuse rather than guess.
+        let mut flagless = *bytes;
+        flagless[0] &= 0x7f;
+        assert!(
+            groth16::round_trip_g1(&flagless).is_err(),
+            "G1 {index}: blst accepted bytes whose compression flag was cleared, so the \
+             flag position is not actually being enforced"
+        );
+        // Claiming infinity while carrying a coordinate must also be refused.
+        let mut lying = *bytes;
+        lying[0] |= 0x40;
+        assert!(
+            groth16::round_trip_g1(&lying).is_err(),
+            "G1 {index}: blst accepted an infinity flag on a point with coordinates"
+        );
+    }
+    for (index, bytes) in g2s.iter().enumerate() {
+        assert_ne!(bytes[0] & 0x80, 0, "G2 {index}: the compression flag is not in the first byte");
+        if let Err(error) = groth16::round_trip_g2(bytes) {
+            panic!("G2 {index}: {error}");
+        }
+        let mut flagless = *bytes;
+        flagless[0] &= 0x7f;
+        assert!(groth16::round_trip_g2(&flagless).is_err(), "G2 {index}: flag position unenforced");
+    }
+}
+
+#[test]
 fn the_canonical_encodings_have_the_frozen_lengths() {
     let (_pool, public, witness) = scenario::valid_withdrawal();
     let keys = match groth16::development_keys(ShieldedTransactionCircuit::blank(public)) {
