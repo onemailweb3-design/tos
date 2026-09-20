@@ -22,7 +22,9 @@
 //! Each assertion below was chosen so that a specific mutation of the contract
 //! turns it red; the mutations are listed at the bottom and are meant to be run.
 
-use chain_block::{BuilderData, Cell, IBitstring, MsgAddressInt, Serializable, StateInit};
+use chain_block::{
+    BuilderData, Cell, IBitstring, MsgAddressInt, Serializable, StateInit, TrComputePhase,
+};
 use tos_sandbox::{Blockchain, GetMethodResult, MessageBuilder, compile_func_with_stdlib};
 use tos_vm::stack::StackItem;
 
@@ -32,6 +34,15 @@ const TOS: u64 = 1_000_000_000;
 const GAS_BUDGET: u64 = 50_000_000;
 const RESERVE_FLOOR: u64 = TOS;
 const OP_DEPOSIT: u32 = 1;
+/// A message value that is above the threshold below which the executor skips
+/// the compute phase outright, and below what the deposit path costs to run.
+/// Measured on this executor at 400 nanotos per gas unit: a message is ignored
+/// (compute skipped, `NoGas`) at 20,000 and buys the whole path at 520,000, so
+/// 400,000 buys 1,000 gas against a path that needs 1,259. Both ends matter:
+/// too low and the VM never runs, which would make the test vacuous.
+const GAS_STARVED_VALUE: u64 = 400_000;
+/// TVM's out-of-gas exit code.
+const EXIT_OUT_OF_GAS: i32 = -14;
 
 const PROBE_SRC: &str = r#"
 int op_deposit() asm "1 PUSHINT";
@@ -209,7 +220,11 @@ impl Pool {
             .expect("owner as integer");
         self.get(
             "expected_commitment",
-            vec![StackItem::int(principal as i64), StackItem::integer(owner_int), StackItem::int(idx as i64)],
+            vec![
+                StackItem::int(principal as i64),
+                StackItem::integer(owner_int),
+                StackItem::int(idx as i64),
+            ],
         )
         .last()
         .unwrap()
@@ -237,7 +252,10 @@ impl Pool {
             balance >= liability + reserve,
             "{at}: balance {balance} < liability {liability} + reserve {reserve}"
         );
-        assert!(self.backing_ok_in_vm(), "{at}: contract's own backing check disagrees with the account state");
+        assert!(
+            self.backing_ok_in_vm(),
+            "{at}: contract's own backing check disagrees with the account state"
+        );
     }
 
     fn send(&mut self, value: u64, body: Cell) -> tos_sandbox::SendResult {
@@ -268,10 +286,17 @@ fn deposit_binds_the_admitted_principal_and_ignores_a_claimed_commitment() {
     // Attacker: deposits 1 TOS, but appends exactly the commitment the contract
     // would produce for a 100 TOS note at the next index.
     let claimed = dec_to_u256(&p.expected_commitment(100 * TOS, &owner, 1));
-    assert_eq!(u256_dec(&claimed), p.expected_commitment(100 * TOS, &owner, 1),
-               "decimal <-> bytes round trip must be exact, or the claim is not what it says");
+    assert_eq!(
+        u256_dec(&claimed),
+        p.expected_commitment(100 * TOS, &owner, 1),
+        "decimal <-> bytes round trip must be exact, or the claim is not what it says"
+    );
     p.send(1 * TOS + GAS_BUDGET, deposit_body(1 * TOS, &owner, Some(&claimed))).expect_success();
-    assert_eq!(p.u64_of("liability"), 6 * TOS, "liability must grow by the admitted 1 TOS, not 100");
+    assert_eq!(
+        p.u64_of("liability"),
+        6 * TOS,
+        "liability must grow by the admitted 1 TOS, not 100"
+    );
     assert_eq!(p.u64_of("leaf_count"), 2);
     let expected1 = p.expected_commitment(1 * TOS, &owner, 1);
     let recorded = p.last_commitment();
@@ -322,6 +347,48 @@ fn a_declared_principal_larger_than_the_value_is_refused() {
     p.assert_backing("after oversized declaration");
 }
 
+#[test]
+fn a_message_that_cannot_pay_for_its_own_gas_never_reaches_the_pools_balance() {
+    let mut p = Pool::deploy();
+    let owner = [5u8; 32];
+    let before = p.pool_balance();
+
+    // Well-formed deposit, but carrying far less than its own execution costs.
+    // With no ACCEPT the VM may only spend what this message bought.
+    let r = p.send(GAS_STARVED_VALUE, deposit_body(3 * TOS, &owner, None));
+    let descr = r.read_primary_description();
+
+    let vm = match descr.compute_ph {
+        TrComputePhase::Vm(vm) => vm,
+        TrComputePhase::Skipped(s) => panic!(
+            "compute was skipped ({:?}), so the VM never ran and this test proved nothing; \
+             raise GAS_STARVED_VALUE above the skip threshold",
+            s.reason
+        ),
+    };
+    assert!(vm.gas_used > 0, "instrument check: the VM must have executed something");
+    assert_eq!(
+        vm.exit_code, EXIT_OUT_OF_GAS,
+        "the message must die on the gas it bought ({} used), not on any later check; \
+         an exit code from deeper in the contract means it was handed gas it did not pay for",
+        vm.gas_used
+    );
+
+    let after = p.pool_balance();
+    assert!(
+        after >= before,
+        "the pool funded a message that could not pay for itself: {before} -> {after}. \
+         That is precisely what ACCEPT buys an attacker, and this contract must never call it."
+    );
+    assert_eq!(
+        p.u64_of("liability"),
+        0,
+        "nothing may be credited by a message that ran out of gas"
+    );
+    assert_eq!(p.u64_of("leaf_count"), 0);
+    p.assert_backing("after a gas-starved deposit");
+}
+
 /// Exact inverse of `u256_dec`: decimal string -> big-endian 32 bytes.
 fn dec_to_u256(s: &str) -> [u8; 32] {
     let mut out = [0u8; 32]; // big-endian accumulator
@@ -343,7 +410,14 @@ fn dec_to_u256(s: &str) -> [u8; 32] {
 //      with `int final_cm = claimed_cm ? claimed_cm : h2(note_body, leaves);`
 //      -> deposit_binds_... fails (recorded == claimed).
 //  M2  insert `accept_message();` right after the op check
-//      -> an_underfunded_... fails (exit 0 instead of 40, and the pool's balance drops).
+//      -> a_message_that_cannot_pay_for_its_own_gas_... fails: the starved message
+//         is carried past its own gas (exit 40 instead of -14, 1,285 gas used where
+//         it bought 1,000) and the pool pays the difference out of its own balance
+//         (measured on a freshly deployed pool: -114,000 nanotos).
+//         Measured note: this mutation leaves an_underfunded_... green. That test's
+//         message carries 3 TOS, which buys the whole path either way, so it ends at
+//         the same exit 40 with the same untouched balance. A refusal that the
+//         message can afford says nothing about ACCEPT.
 //  M3  replace `liability + principal` with `liability + msg_value`
 //      -> deposit_binds_... fails on the liability assertion.
 //  M4  delete the `throw_unless(err_underfunded(), ...)` line
