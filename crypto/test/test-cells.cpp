@@ -241,8 +241,8 @@ TEST(Cells, pruned_branch_rebuilt_from_a_hash_and_a_depth) {
     auto mine = rebuilt(original);
     ASSERT_TRUE(native->get_hash() == mine->get_hash());
     ASSERT_EQ(native->get_depth(), mine->get_depth());
-    ASSERT_EQ(native->get_level(), 1);
-    ASSERT_EQ(mine->get_level(), 1);
+    ASSERT_EQ(native->get_level(), 1u);
+    ASSERT_EQ(mine->get_level(), 1u);
     // 8 + 8 + 256 + 16
     ASSERT_EQ(vm::CellSlice(vm::NoVm{}, mine).size(), 288u);
   }
