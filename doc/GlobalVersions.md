@@ -366,6 +366,38 @@ attempt looked for `>= 16` and `> 15`, found nothing outside the opcode table, a
 missed the transaction change because it is spelled `< 16`. Every other threshold in
 the transaction engine is `>= 15` or lower and is satisfied at both versions.
 
+## Version 17
+
+Not yet activated on any TOS network.
+
+### New TVM instructions
+- `POSEIDON2_PERM8` (`a0 a1 a2 a3 a4 a5 a6 a7 - b0 b1 b2 b3 b4 b5 b6 b7`) - the
+  Poseidon2 permutation over the BLS12-381 scalar field, `t=8`, S-box `x^5`,
+  `RF=8`, `RP=57`. Every input must already be a canonical field element:
+  a negative value, a value that does not fit in 256 unsigned bits, and a value
+  at or above the modulus are all rejected with a range check (exit 5). Nothing
+  is reduced, because a silent reduction would let two different stack values
+  hash the same.
+- `POSEIDON2_HASH7` (`domain x0 x1 x2 x3 x4 x5 x6 - h`) - the same permutation
+  with the domain constant in lane 0, returning lane 0 of the result. There is
+  no capacity element and no padding convention beyond that sentence.
+
+Both cost 3,000 gas under the current development tariff and are rejected as
+invalid (exit 6) at versions 0-16. `PQCHECKSIG_MLDSA44` keeps its own minimum of
+16 and is unaffected: the ceiling moves, the older gate does not.
+
+The parameters are frozen against a pinned upstream commit and are not loaded at
+runtime. Both VMs rebuild the same manifest byte stream from their own vendored
+tables and compare its SHA-256, so a constant that differs between them cannot
+pass unnoticed. See [../crypto/poseidon2/PROVENANCE.md](../crypto/poseidon2/PROVENANCE.md).
+
+Adding a permutation to the instruction set is a genesis-time decision in
+practice: doing it after a network starts is a hard fork, and the contracts that
+need it cannot be priced without it.
+
+### Transaction changes
+None. Version 17 adds instructions and changes nothing in the transaction engine.
+
 ## Capability flags versus version bumps
 
 Both are set in `ConfigParam 8`, and neither is enforced by refusing to run. A node
