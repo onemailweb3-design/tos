@@ -37,14 +37,22 @@ int imt_node(int c0, int c1, int c2, int c3, int c4, int c5, int c6) inline {
 
 ;; Section 7: the leaf tuple is (value, next_index, next_value); the four zero
 ;; lanes are part of the definition, not slack.
-int imt_leaf_hash(int value, int next_index, int next_value) inline {
-  int leaf = h7(domain_imt_leaf(), value, next_index, next_value, 0, 0, 0, 0);
-  ;; Section 7.0 states this as a MUST: an allocated leaf that hashed to field
-  ;; zero would be indistinguishable from an unallocated one and the tree would
-  ;; stop being sound. No input reaches it, because it is a property of the
-  ;; permutation rather than of the caller, so no mutation can make it fire.
+;; Section 7.0 states this as a MUST: an allocated leaf that hashed to field
+;; zero would be indistinguishable from an unallocated one, and the tree would
+;; stop being sound. Under the pinned permutation no caller input reaches it,
+;; but "unreachable" is not a reason to leave it untested, so the check is a
+;; function a test can call with zero rather than a line buried in a hash.
+;;
+;; It is also not a licence to skip work later: a new Poseidon profile still
+;; owes the full parameter, empty-root and sentinel vectors.
+int imt_require_allocated_leaf_hash(int leaf) inline {
   throw_if(121, leaf == imt_unallocated_leaf());
   return leaf;
+}
+
+int imt_leaf_hash(int value, int next_index, int next_value) inline {
+  return imt_require_allocated_leaf_hash(
+    h7(domain_imt_leaf(), value, next_index, next_value, 0, 0, 0, 0));
 }
 
 ;; Section 7.0: IMT_EMPTY[0] = 0, IMT_EMPTY[level+1] = IMT-NODE of seven copies.
@@ -184,11 +192,11 @@ int imt_root_from_path(cell path, int index, int leaf) inline_ref {
 
   ;; 4. the tree is not exhausted, and the new index is a uint32.
   throw_unless(118, nullifier_next_index < imt_capacity());
+  ;; Step 4 states the bound twice. Nothing between the check above and here
+  ;; truncates or casts the counter, so the second statement is implied by the
+  ;; first rather than defending anything, and a guard no input can reach is
+  ;; decoration. Restoring it would need a change that does truncate.
   int new_index = nullifier_next_index;
-  ;; Step 4 states the bound twice. Nothing here truncates the counter, so the
-  ;; second statement is implied by the first and no input can trip it; it is
-  ;; kept because a later change that does truncate would need it.
-  throw_unless(119, new_index < imt_capacity());
 
   ;; 5. the low leaf now points at the new leaf.
   int updated_low = imt_leaf_hash(low_value, new_index, nf);

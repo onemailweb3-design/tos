@@ -32,7 +32,9 @@ use std::collections::BTreeMap;
 
 use chain_block::poseidon2::permute;
 use chain_block::poseidon2_kat::{DOMAINS, EMPTY_ROOTS};
-use chain_block::{BuilderData, Cell, IBitstring, MsgAddressInt, Serializable, StateInit};
+use chain_block::{
+    BuilderData, Cell, CellType, IBitstring, MsgAddressInt, Serializable, StateInit,
+};
 use tos_sandbox::{Blockchain, MessageBuilder, compile_func_with_stdlib};
 use tos_vm::stack::StackItem;
 use tos_vm::stack::integer::IntegerData;
@@ -353,6 +355,76 @@ fn encode_witness(witness: &Witness) -> Cell {
     )
 }
 
+/// The two exotic cells worth trying. A pruned branch is refused by the VM
+/// before any contract code runs, with its own exception; a Merkle proof is one
+/// the VM will still load, so it reaches `begin_parse` and is refused there.
+/// Both are fail-closed, and the pair covers both sides of that boundary.
+#[derive(Clone, Copy, Debug)]
+enum Exotic {
+    PrunedBranch,
+    MerkleProof,
+}
+
+fn pruned_branch() -> Cell {
+    let mut builder = BuilderData::new();
+    builder.set_type(CellType::PrunedBranch);
+    builder.append_u8(u8::from(CellType::PrunedBranch)).expect("type byte");
+    builder.append_u8(1).expect("level mask");
+    builder.append_raw(&[0xab; 32], 256).expect("hash");
+    builder.append_u16(0).expect("depth");
+    builder.into_cell().expect("pruned branch cell")
+}
+
+fn merkle_proof_cell(inner: Cell) -> Cell {
+    let mut builder = BuilderData::new();
+    builder.set_type(CellType::MerkleProof);
+    builder.append_u8(u8::from(CellType::MerkleProof)).expect("type byte");
+    builder.append_raw(inner.hash(0).as_slice(), 256).expect("hash");
+    builder.append_u16(inner.depth(0)).expect("depth");
+    builder.checked_append_reference(inner).expect("proof reference");
+    builder.into_cell().expect("merkle proof cell")
+}
+
+fn exotic_cell(kind: Exotic, inner: Cell) -> Cell {
+    match kind {
+        Exotic::PrunedBranch => pruned_branch(),
+        Exotic::MerkleProof => merkle_proof_cell(inner),
+    }
+}
+
+/// The path chain from `from` onwards, built the canonical way.
+fn path_tail(fields: &[Field], from: usize) -> Option<Cell> {
+    let cells = fields.len() / 3;
+    let mut chain: Option<Cell> = None;
+    for index in (from..cells).rev() {
+        let mut builder = BuilderData::new();
+        for offset in 0..3 {
+            builder.append_raw(&fields[index * 3 + offset], 256).expect("a path field");
+        }
+        if let Some(next) = chain {
+            builder.checked_append_reference(next).expect("the chain reference");
+        }
+        chain = Some(builder.into_cell().expect("a path cell"));
+    }
+    chain
+}
+
+/// The same chain with the cell at `position` replaced by an exotic one, which
+/// takes over the rest of the chain as its own reference where it can.
+fn path_with_exotic(fields: &[Field], position: usize, kind: Exotic) -> Cell {
+    let tail = path_tail(fields, position + 1).unwrap_or_default();
+    let mut chain = exotic_cell(kind, tail);
+    for index in (0..position).rev() {
+        let mut builder = BuilderData::new();
+        for offset in 0..3 {
+            builder.append_raw(&fields[index * 3 + offset], 256).expect("a path field");
+        }
+        builder.checked_append_reference(chain).expect("the chain reference");
+        chain = builder.into_cell().expect("a path cell");
+    }
+    chain
+}
+
 /// The witness root of 7.2: 32 + 256 + 32 + 256 data bits and two references.
 fn encode_witness_parts(
     witness: &Witness,
@@ -384,6 +456,9 @@ int p_empty(int level) method_id { return imt_empty_at(level); }
 int p_genesis() method_id { return imt_genesis_root(); }
 int p_leaf(int value, int next_index, int next_value) method_id {
   return imt_leaf_hash(value, next_index, next_value);
+}
+int p_require_allocated(int leaf) method_id {
+  return imt_require_allocated_leaf_hash(leaf);
 }
 int p_node(int c0, int c1, int c2, int c3, int c4, int c5, int c6) method_id {
   return imt_node(c0, c1, c2, c3, c4, c5, c6);
@@ -526,6 +601,26 @@ impl Probe {
             result.stack[1].as_integer().expect("the next index is an integer").to_string();
         let next = counter.parse::<u64>().expect("the next index is a uint64");
         (new_root, next)
+    }
+
+    /// The sentinel guard, called directly. Returns the exit code and, when it
+    /// let the value through, the value it returned.
+    fn require_allocated(&self, leaf: &Field) -> (i32, Option<Field>) {
+        let result = self
+            .bc
+            .run_get_method(&self.addr, "p_require_allocated", vec![Self::field_arg(leaf)])
+            .expect("p_require_allocated should run");
+        if result.exit_code != 0 {
+            return (result.exit_code, None);
+        }
+        let text = result
+            .stack
+            .last()
+            .expect("a result")
+            .as_integer()
+            .expect("the result is an integer")
+            .to_string();
+        (0, Some(from_dec(&text)))
     }
 
     fn insert_exit(&self, root: &Field, next_index: u64, nf: &Field, witness: &Cell) -> i32 {
@@ -1057,6 +1152,90 @@ fn the_sibling_order_is_the_one_the_profile_froze() {
         sparse_root,
         "an unallocated leaf does not fold to the tree's root"
     );
+}
+
+/// Section 7.0's zero-leaf sentinel, hit directly. The permutation never
+/// produces zero for an allocated leaf, so this guard is unreachable through
+/// `imt_leaf_hash` and no mutation of that path could kill it -- which is why
+/// it is a function of its own, called here with the one value that fires it.
+#[test]
+fn an_allocated_leaf_hash_of_zero_is_refused_by_the_sentinel() {
+    let probe = Probe::deploy();
+
+    let (exit, returned) = probe.require_allocated(&ZERO);
+    assert_eq!(exit, 121, "field zero was accepted as an allocated leaf hash");
+    assert!(returned.is_none(), "a refused value still came back");
+
+    // And it is a guard, not a filter: everything else passes through unchanged.
+    for value in [small(1), small(2), domain("IMT-LEAF"), imt_leaf_hash(&Leaf::sentinel())] {
+        let (exit, returned) = probe.require_allocated(&value);
+        assert_eq!(exit, 0, "a non-zero leaf hash was refused");
+        assert_eq!(returned, Some(value), "the value was not returned unchanged");
+    }
+}
+
+/// Section 7.2 requires ordinary cells. This module deliberately does not
+/// reimplement "is this exotic": `begin_parse` is the real VM boundary, and a
+/// second cell-type check here would be a second set of cell semantics.
+///
+/// So the evidence is not "delete our guard and watch a test go red" -- there
+/// is no guard of ours to delete. It is that an exotic witness executed in a
+/// real TVM fails closed *before* this module's own field parsing, which is
+/// what the exit code proves: anything in 100..=122 is one of ours and would
+/// mean the cell got that far. If the VM's special-cell semantics ever change,
+/// this is the test that goes red first.
+#[test]
+fn an_exotic_cell_anywhere_in_the_witness_fails_closed_in_the_vm() {
+    let probe = Probe::deploy();
+    let state = RefState::genesis();
+    let nf = small(5);
+    let (witness, _, _, _) = state.witness_for(&nf);
+    let root = state.root();
+    let next = state.next_index;
+    assert_eq!(
+        probe.insert_exit(&root, next, &nf, &encode_witness(&witness)),
+        0,
+        "the canonical witness must pass, or nothing below means anything"
+    );
+
+    let cells = PATH_FIELDS / 3;
+    let positions = [("first", 0usize), ("middle", cells / 2), ("last", cells - 1)];
+    let mut cases: Vec<(String, Cell)> = Vec::new();
+    for kind in [Exotic::PrunedBranch, Exotic::MerkleProof] {
+        cases
+            .push((format!("witness root, {kind:?}"), exotic_cell(kind, encode_witness(&witness))));
+        for (where_, position) in positions {
+            cases.push((
+                format!("low_path {where_} cell, {kind:?}"),
+                encode_witness_parts(
+                    &witness,
+                    path_with_exotic(&witness.low_path, position, kind),
+                    encode_path(&witness.append_path),
+                    WitnessTweak::default(),
+                ),
+            ));
+            cases.push((
+                format!("append_path {where_} cell, {kind:?}"),
+                encode_witness_parts(
+                    &witness,
+                    encode_path(&witness.low_path),
+                    path_with_exotic(&witness.append_path, position, kind),
+                    WitnessTweak::default(),
+                ),
+            ));
+        }
+    }
+    assert_eq!(cases.len(), 14, "the exotic case list shrank");
+
+    for (what, cell) in cases {
+        let exit = probe.insert_exit(&root, next, &nf, &cell);
+        assert_ne!(exit, 0, "{what}: an exotic witness was accepted");
+        assert!(
+            !(100..=122).contains(&exit),
+            "{what}: exit {exit} is one of this module's own codes, so the cell reached \
+             field parsing; the VM was supposed to refuse it first"
+        );
+    }
 }
 
 #[test]

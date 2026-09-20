@@ -38,7 +38,9 @@ ENCODING = 'the_witness_encoding_is_rejected_unless_it_is_canonical'
 ORDER = 'the_sibling_order_is_the_one_the_profile_froze'
 CAPACITY = 'the_capacity_boundary_is_exactly_two_to_the_thirty_two'
 
-LEAF_CALL = '  int leaf = h7(domain_imt_leaf(), value, next_index, next_value, 0, 0, 0, 0);'
+LEAF_CALL = (
+    '    h7(domain_imt_leaf(), value, next_index, next_value, 0, 0, 0, 0));'
+)
 APPEND_CHECK = """  throw_unless(120,
     imt_root_from_path(append_path, new_index, imt_unallocated_leaf()) == root1);"""
 
@@ -54,18 +56,30 @@ class Case:
 
 
 CASES = [
+    # Section 7.0: the zero-leaf sentinel. Unreachable through imt_leaf_hash --
+    # which is exactly why it is a function of its own, and why these two
+    # mutations are the only evidence that the guard is real.
+    Case('sentinel-removed', 'the zero-leaf sentinel stops refusing zero', IMT,
+         '  throw_if(121, leaf == imt_unallocated_leaf());\n  return leaf;',
+         '  return leaf;',
+         'an_allocated_leaf_hash_of_zero_is_refused_by_the_sentinel'),
+    Case('sentinel-inverted', 'the zero-leaf sentinel refuses everything but zero', IMT,
+         '  throw_if(121, leaf == imt_unallocated_leaf());',
+         '  throw_if(121, leaf != imt_unallocated_leaf());',
+         'an_allocated_leaf_hash_of_zero_is_refused_by_the_sentinel'),
+
     # Section 7: the leaf and node hashes.
     Case('leaf-domain', 'the leaf hash borrows the node domain', IMT,
          LEAF_CALL,
-         '  int leaf = h7(domain_imt_node(), value, next_index, next_value, 0, 0, 0, 0);',
+         '    h7(domain_imt_node(), value, next_index, next_value, 0, 0, 0, 0));',
          LEAF),
     Case('leaf-padding', 'one padding lane of the leaf hash is no longer zero', IMT,
          LEAF_CALL,
-         '  int leaf = h7(domain_imt_leaf(), value, next_index, next_value, 1, 0, 0, 0);',
+         '    h7(domain_imt_leaf(), value, next_index, next_value, 1, 0, 0, 0));',
          LEAF),
     Case('leaf-tuple-order', 'the leaf tuple is absorbed value-last', IMT,
          LEAF_CALL,
-         '  int leaf = h7(domain_imt_leaf(), next_value, next_index, value, 0, 0, 0, 0);',
+         '    h7(domain_imt_leaf(), next_value, next_index, value, 0, 0, 0, 0));',
          LEAF),
     Case('node-domain', 'the IMT node borrows the commitment tree domain', IMT,
          'return h7(domain_imt_node(), c0, c1, c2, c3, c4, c5, c6);',
