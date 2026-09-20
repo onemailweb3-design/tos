@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""Remove one rule at a time from the pool contract's deposit path and require
+the sandbox suite to report it, by name.
+
+A mutation that turns the wrong test red is not evidence for the one it was
+aimed at, so each case names the test that must fail. A mutation that fails to
+compile is not evidence at all: every replacement below still compiles and
+still runs, it is simply wrong.
+
+Usage: mutations-pool.py [--only NAME ...]
+"""
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+# This repository, never another checkout: TOS_ROOT points at the built
+# toolchain, which may live somewhere else entirely.
+ROOT = Path(__file__).resolve().parents[2]
+POOL = ROOT / 'crypto/smartcont/tos-shielded-pool-v1.fc'
+CONTRACTS = ROOT / 'tosctl/src/node-control/contracts'
+SUITE = 'shielded_pool_sandbox'
+
+LEDGER_TEST = 'a_deposit_is_the_note_the_contract_computed_at_the_index_it_assigned'
+NOTE_TEST = 'the_depositor_cannot_choose_its_note'
+STARVED_TEST = 'a_message_that_cannot_pay_for_its_own_gas_never_reaches_the_pools_balance'
+FUNDING_TEST = 'a_deposit_must_fund_its_principal_and_its_execution'
+SHAPE_TEST = 'only_a_configured_denomination_and_the_frozen_body_shape_are_accepted'
+TOPUP_TEST = 'a_plain_top_up_and_a_bounce_change_no_shielded_state'
+
+
+@dataclass
+class Case:
+    name: str
+    why: str
+    path: Path
+    before: str
+    after: str
+    expect: str
+
+
+CASES = [
+    # The rule the whole backing argument rests on. Inserted where the threat
+    # actually is -- after the operation is known and before any work -- so the
+    # message is carried past the gas it paid for.
+    Case('accept', 'the contract accepts the message before looking at it', POOL,
+         '() recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {\n',
+         '() recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {\n  accept_message();\n',
+         STARVED_TEST),
+
+    # Section 14.1: message-local funding.
+    Case('funding-compute', 'the message need not pay for its own execution', POOL,
+         '    msg_value >= deposit_amount + get_compute_fee(0, deposit_gas_ceiling()));',
+         '    msg_value >= deposit_amount);', FUNDING_TEST),
+    Case('funding-principal', 'the message need not carry its own principal', POOL,
+         '    msg_value >= deposit_amount + get_compute_fee(0, deposit_gas_ceiling()));',
+         '    msg_value >= get_compute_fee(0, deposit_gas_ceiling()));', FUNDING_TEST),
+    Case('gas-ceiling-live', 'the ceiling is below what the path needs', POOL,
+         'int deposit_gas_ceiling() asm "500000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "5000 PUSHINT";', LEDGER_TEST),
+
+    # Section 12.1: the body, and what may be deposited.
+    Case('body-refs', 'a deposit body with no payload is not refused here', POOL,
+         '  throw_unless(200, body.slice_refs() == 1);',
+         '  throw_unless(200, body.slice_refs() >= 0);', SHAPE_TEST),
+    Case('body-trailing', 'trailing bits after the deposit fields are ignored', POOL,
+         '  throw_unless(200, body.slice_empty?());\n', '', SHAPE_TEST),
+    Case('denomination', 'any amount is a denomination', POOL,
+         '  throw_unless(202, config_has_denomination(config, deposit_amount));',
+         '  throw_unless(202, deposit_amount > 0);', SHAPE_TEST),
+    Case('unknown-op', 'an unknown operation is ignored instead of refused', POOL,
+         '  throw(201);\n}\n\n() recv_external', '  return ();\n}\n\n() recv_external',
+         SHAPE_TEST),
+
+    # Section 16.1: the note is the contract's, and so is the index.
+    Case('note-amount', 'the note is built for an amount the contract did not admit', POOL,
+         '  int note_body = note_body_commitment(owner_commitment, deposit_amount, data_hash);',
+         '  int note_body = note_body_commitment(owner_commitment, 0, data_hash);', NOTE_TEST),
+    Case('note-payload', 'the payload does not reach the note', POOL,
+         '  int note_body = note_body_commitment(owner_commitment, deposit_amount, data_hash);',
+         '  int note_body = note_body_commitment(owner_commitment, deposit_amount, 0);', NOTE_TEST),
+    Case('leaf-index', 'the leaf is committed at the wrong index', POOL,
+         '  int leaf_index = commitment_next_index;',
+         '  int leaf_index = commitment_next_index + 1;', LEDGER_TEST),
+    Case('leaf-counter', 'the counter does not advance with the tree', POOL,
+         '  set_data(state_build(commitment_root, leaf_index + 1,',
+         '  set_data(state_build(commitment_root, leaf_index,', LEDGER_TEST),
+
+    # Section 12.1 step 8: liability is the principal, and nothing else.
+    Case('liability-value', 'liability grows by what arrived, not by what was admitted', POOL,
+         '  int new_liability = native_liability + deposit_amount;',
+         '  int new_liability = native_liability + msg_value;', LEDGER_TEST),
+    Case('liability-none', 'a deposit adds no liability at all', POOL,
+         '  int new_liability = native_liability + deposit_amount;',
+         '  int new_liability = native_liability;', LEDGER_TEST),
+
+    # A message with no operation must not be mistaken for one.
+    Case('empty-body', 'a body too short to hold an operation is parsed anyway', POOL,
+         '  if (in_msg_body.slice_bits() < 32) {\n    return ();\n  }\n', '', TOPUP_TEST),
+]
+
+
+def run_suite() -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env['PATH'] = str(Path.home() / '.cargo/bin') + os.pathsep + env.get('PATH', '')
+    env['CARGO_TERM_COLOR'] = 'never'
+    # TOS_ROOT only locates the built func/fift toolchain and stdlib.fc; the
+    # library under test is found from the crate manifest, inside this tree.
+    env.setdefault('TOS_ROOT', str(Path.home() / 'tos-privacy'))
+    return subprocess.run(['cargo', 'test', '--test', SUITE, '--', '--test-threads=1'],
+                          cwd=CONTRACTS, capture_output=True, text=True, timeout=3600, env=env)
+
+
+def failed_tests(output: str) -> set[str]:
+    return set(re.findall(r'^test (\S+) \.\.\. FAILED$', output, flags=re.M))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--only', nargs='*', default=None)
+    options = parser.parse_args()
+    cases = CASES if options.only is None else [c for c in CASES if c.name in options.only]
+    if options.only and len(cases) != len(options.only):
+        raise SystemExit(f'unknown case name in {options.only}')
+
+    baseline = run_suite()
+    if baseline.returncode:
+        raise SystemExit('the suite is not green before any mutation:\n'
+                         + baseline.stdout + baseline.stderr)
+    print('baseline green', flush=True)
+
+    survivors = []
+    for case in cases:
+        original = case.path.read_text()
+        count = original.count(case.before)
+        if count != 1:
+            raise SystemExit(f'{case.name}: anchor appears {count} times, expected once')
+        try:
+            case.path.write_text(original.replace(case.before, case.after))
+            result = run_suite()
+            failures = failed_tests(result.stdout + result.stderr)
+            if result.returncode == 0:
+                survivors.append(f'{case.name}: the suite stayed green')
+                verdict = 'SURVIVED'
+            elif 'error[' in result.stderr or 'could not compile' in result.stderr:
+                survivors.append(f'{case.name}: no longer compiles, which is not evidence')
+                verdict = 'UNCOMPILED'
+            elif case.expect not in failures:
+                survivors.append(f'{case.name}: failed as {sorted(failures)}, not {case.expect}')
+                verdict = 'WRONG-TEST'
+            else:
+                verdict = 'killed'
+            print(f'{case.name:20} {case.why:58} {verdict}', flush=True)
+        finally:
+            case.path.write_text(original)
+
+    restored = run_suite()
+    if restored.returncode:
+        raise SystemExit('the suite did not come back green:\n' + restored.stdout + restored.stderr)
+    print('green again', flush=True)
+
+    if survivors:
+        print('\nSURVIVORS:', file=sys.stderr)
+        for line in survivors:
+            print('  ' + line, file=sys.stderr)
+        return 1
+    print(f'\n{len(cases)} mutations, all killed by the test they were aimed at')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
