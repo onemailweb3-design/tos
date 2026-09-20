@@ -347,6 +347,16 @@ class BridgeImpl final : public IValidatorGroup {
   }
 
   void start_up() override {
+    // Defense in depth. The manager runs this exact check before it creates this group, so
+    // reaching a set the post-quantum consensus path cannot run is an invariant break, not
+    // an expected input -- refuse before building the manager facade, the database, the
+    // runtime, the bus or the overlay, and stay a full node.
+    if (auto usable = block::validate_simplex_pq_validator_set(*params_.validator_set); usable.is_error()) {
+      LOG(ERROR) << "consensus: refusing to start a Simplex group -- " << usable.move_as_error();
+      stop();
+      return;
+    }
+
     manager_facade_ = td::actor::create_actor<ManagerFacadeImpl>(params_.name + ".ManagerFacade", params_.manager,
                                                                  params_.collation_manager, params_.validator_set,
                                                                  params_.validator_opts);
@@ -361,20 +371,9 @@ class BridgeImpl final : public IValidatorGroup {
     bus->all_validators = params_.all_validators;
 
     bool found = false;
-    bool refused = false;
     size_t idx = 0;
     ValidatorWeight total_weight = 0;
     for (const auto& el : params_.validator_set->export_vector()) {
-      // The Simplex bus is post-quantum only, and verifies with the key the set records.
-      // The manager validates the whole set before creating this group, so reaching a
-      // descriptor it cannot verify with is an invariant break rather than an expected
-      // input -- refuse to start rather than verify with a malformed key, and stay a full
-      // node. Both sides ask the same question through one helper so they cannot drift.
-      if (auto usable = block::validate_pq_consensus_descriptor(el); usable.is_error()) {
-        LOG(ERROR) << "consensus: refusing to start a Simplex group -- " << usable.move_as_error();
-        refused = true;
-        break;
-      }
       const auto algorithm_id = static_cast<tos::pq::PQAlgorithmId>(el.algorithm_id);
 
       // The transport/overlay identity, from the descriptor's explicit ADNL address, never
@@ -406,10 +405,6 @@ class BridgeImpl final : public IValidatorGroup {
       // mirroring crypto/block/validator-set.cpp's ctor sum.
       CHECK(tos::checked_add_validator_weight(total_weight, el.weight));
       ++idx;
-    }
-    if (refused) {
-      stop();
-      return;
     }
     bus->total_weight = total_weight;
     bus->cc_seqno = params_.validator_set->get_catchain_seqno();

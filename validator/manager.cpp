@@ -3123,6 +3123,13 @@ void ValidatorManagerImpl::update_shards() {
       if (val_set.is_null()) {
         continue;
       }
+      // An observer verifies peers with the same post-quantum keys a validator does, so a
+      // set it could not verify must not get an observer group either. Decided here, before
+      // any actor is created, for the same reason as the validator path.
+      if (auto usable = block::validate_simplex_pq_validator_set(*val_set); usable.is_error()) {
+        LOG(ERROR) << "refusing to create observer groups for " << shard.to_str() << ": " << usable.move_as_error();
+        continue;
+      }
       auto session_id = get_validator_set_id(shard, val_set, opts_hash, key_seqno, opts);
       for (auto local_adnl_id : get_observer_adnl_ids(val_set)) {
         ObserverGroupId observer_id{session_id, local_adnl_id};
@@ -3395,17 +3402,14 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
   auto config = new_consensus_config.value();
 
   // The consensus path is post-quantum only and verifies every peer with the key the set
-  // records, so each member must carry a usable one. Decide that here, before a group
-  // exists: if the bus discovered it asynchronously in start_up and stopped itself, this
-  // manager would be left holding a group it had already marked started, which it would
-  // neither run nor ever recreate.
-  for (const auto &el : validator_set->export_vector()) {
-    if (auto usable = block::validate_pq_consensus_descriptor(el); usable.is_error()) {
-      LOG(ERROR) << "refusing to create validator group for " << shard.to_str() << ": validator "
-                 << el.validator_id.value.to_hex() << ": " << usable.move_as_error()
-                 << "; validation for this shard is disabled until the set is post-quantum";
-      return {};
-    }
+  // records, so the whole set must be runnable. Decide that here, before a group exists:
+  // if the bus discovered it asynchronously in start_up and stopped itself, this manager
+  // would be left holding a group it had already marked started, which it would neither
+  // run nor ever recreate.
+  if (auto usable = block::validate_simplex_pq_validator_set(*validator_set); usable.is_error()) {
+    LOG(ERROR) << "refusing to create validator group for " << shard.to_str() << ": " << usable.move_as_error()
+               << "; validation for this shard is disabled until the set is post-quantum";
+    return {};
   }
 
   // The consensus signer for this node, resolved once from custody: the exact post-quantum

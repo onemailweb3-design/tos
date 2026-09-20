@@ -58,6 +58,12 @@ td::Status validate_pq_consensus_descriptor(const tos::ValidatorDescr& descr) {
   if (!derived || std::memcmp(derived->data(), descr.key_id.value.data(), 32) != 0) {
     return td::Status::Error("validator descriptor's consensus key id does not derive from its public key");
   }
+  // A post-quantum descriptor must state where it is reachable. It can never fall back to
+  // deriving a transport identity from its consensus key, which is the whole point of
+  // keeping the two apart, so an absent address leaves it unroutable.
+  if (descr.addr.is_zero()) {
+    return td::Status::Error("validator descriptor carries no transport address");
+  }
   return td::Status::OK();
 }
 
@@ -68,6 +74,24 @@ td::Bits256 validator_adnl_identity(const tos::ValidatorDescr& descr) {
   // Only a classical descriptor can leave it implicit; a post-quantum one is refused at
   // decode without an explicit address.
   return tos::PublicKey{tos::pubkeys::Ed25519{descr.classical_key()}}.compute_short_id().bits256_value();
+}
+
+td::Status validate_simplex_pq_validator_set(const ValidatorSet& set) {
+  auto nodes = set.export_vector();
+  if (nodes.empty()) {
+    return td::Status::Error("validator set is empty");
+  }
+  // Identity and consensus-key uniqueness are deliberately not re-checked here. A decoded
+  // set is refused outright if it repeats either, and ValidatorSet's own constructor holds
+  // the same line for sets built directly by tests and tooling, so a set that exists at all
+  // cannot repeat them. Restating the rule here would be a guard no input can reach.
+  for (const auto& descr : nodes) {
+    if (auto usable = validate_pq_consensus_descriptor(descr); usable.is_error()) {
+      return td::Status::Error(PSTRING() << "validator " << descr.validator_id.value.to_hex() << ": "
+                                         << usable.message());
+    }
+  }
+  return td::Status::OK();
 }
 
 td::Status authorise_collate_request(const ValidatorSet& validator_set, const tos::ValidatorId& creator,

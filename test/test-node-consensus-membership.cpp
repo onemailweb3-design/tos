@@ -210,6 +210,46 @@ int main() {
         pq_id, 1, held_key, other_store->consensus_key().public_key, 1, bits_with_first_byte(0xc0)};
     check("key_id_not_deriving_from_public_key_is_refused",
           block::validate_pq_consensus_descriptor(mismatched_id).is_error());
+
+    // A post-quantum descriptor must say where it is reachable; it can never derive a
+    // transport identity from its consensus key.
+    ValidatorDescr no_addr{pq_id, 1, held_key, held_pk, 1, td::Bits256::zero()};
+    check("descriptor_without_a_transport_address_is_refused",
+          block::validate_pq_consensus_descriptor(no_addr).is_error());
+
+    // validate_simplex_pq_validator_set: the whole-set preflight the manager runs before a
+    // group exists, and the bus repeats as defense-in-depth.
+    const auto second_id = tos::ValidatorId{bits_with_first_byte(0xb1)};
+    const auto other_key = key_id_of(*other_store);
+    const std::string other_pk = other_store->consensus_key().public_key;
+    auto set_of = [](std::vector<ValidatorDescr> descrs) {
+      return block::ValidatorSet{/*cc_seqno=*/0, ShardIdFull{masterchainId}, std::move(descrs)};
+    };
+
+    auto runnable = set_of({matched, ValidatorDescr{second_id, 1, other_key, other_pk, 1, bits_with_first_byte(0xc1)}});
+    check("a_post_quantum_set_is_runnable", block::validate_simplex_pq_validator_set(runnable).is_ok());
+
+    auto with_classical = set_of({matched, classical});
+    check("a_set_containing_a_classical_member_is_refused",
+          block::validate_simplex_pq_validator_set(with_classical).is_error());
+
+    // A second, distinct member that is well-formed except that it states no transport
+    // address. It needs its own identity and key: two members sharing either cannot be put
+    // in a ValidatorSet at all (its constructor CHECKs both).
+    ValidatorDescr unroutable_member{second_id, 1, other_key, other_pk, 1, td::Bits256::zero()};
+    auto with_no_addr = set_of({matched, unroutable_member});
+    check("a_set_with_an_unroutable_member_is_refused",
+          block::validate_simplex_pq_validator_set(with_no_addr).is_error());
+
+    // Identity and consensus-key uniqueness are deliberately NOT this helper's job, and
+    // there is no case for them here, because no such set can be built: ValidatorSet's
+    // constructor CHECKs both (crypto/block/validator-set.cpp:78-85) and a decoded set is
+    // refused outright. A duplicate case would abort in the constructor without ever
+    // reaching the helper -- a guard no input can trip is decoration, so the helper does
+    // not restate the rule.
+
+    auto empty = set_of({});
+    check("an_empty_set_is_refused", block::validate_simplex_pq_validator_set(empty).is_error());
   }
 
   if (failures == 0) {

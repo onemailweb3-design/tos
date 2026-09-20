@@ -65,6 +65,19 @@ td::Status validate_pq_consensus_descriptor(const tos::ValidatorDescr& descr);
 
 class ValidatorSet;
 
+// Whether a whole validator set can run a post-quantum Simplex session.
+//
+// This is the synchronous preflight the manager runs before a consensus group exists, for
+// validator and observer groups alike: every member must carry a usable post-quantum
+// consensus key and a transport address, and no identity or consensus key may be claimed
+// twice. Deciding it here, from the immutable set, is what keeps a group from being
+// registered and started only for the bus to discover the problem asynchronously and stop
+// itself, leaving the manager holding an entry it will never run or recreate.
+//
+// The consensus bus calls the same helper again as defense-in-depth. Two call sites, one
+// rule.
+td::Status validate_simplex_pq_validator_set(const ValidatorSet& set);
+
 // Whether a collate request may be served.
 //
 // Two separate facts have to line up: the creator a request names must be a member of
