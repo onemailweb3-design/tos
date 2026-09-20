@@ -161,6 +161,17 @@ if(TARGET tos_crypto)
   target_link_libraries(test-n3-stake-auth PRIVATE tos_block tos_crypto tos_mldsa44
     tos_pq_consensus_signer tos_pq_consensus)
   add_test(NAME n3-stake-auth COMMAND test-n3-stake-auth)
+  # N4.0 — what a post-quantum Simplex vote and certificate cost on the wire and the CPU,
+  # measured on the real signer and the real consensus TL before consensus is converted.
+  add_executable(n4-0-carrier-measure "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n4-0-carrier-measure.cpp")
+  set_target_properties(n4-0-carrier-measure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(n4-0-carrier-measure PRIVATE tos_block tos_crypto tos_mldsa44
+    tos_pq_consensus_signer tos_pq_consensus tl_api tl-utils)
+  # The frozen Simplex carrier hard bound and its max/max+1 gate.
+  add_executable(test-n4-0-carrier "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n4-0-carrier-test.cpp")
+  set_target_properties(test-n4-0-carrier PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-n4-0-carrier PRIVATE tos_block tos_crypto tos_mldsa44 tl_api tl-utils)
+  add_test(NAME n4-0-carrier COMMAND test-n4-0-carrier)
   # Configuration parameter 43 encodings both implementations must read identically.
   add_executable(config43-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors-gen.cpp")
   set_target_properties(config43-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
