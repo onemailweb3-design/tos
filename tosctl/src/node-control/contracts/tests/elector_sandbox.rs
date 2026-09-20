@@ -230,6 +230,9 @@ fn declared_total_stake(chain: &Chain) -> u128 {
     result.stack[3].as_integer().expect("an integer").to_string().parse().expect("a running total")
 }
 
+/// `return_stake` reason 14: a request stated the zero account as its funding account.
+const REASON_OWNER_IS_NOBODY: u32 = 14;
+
 /// `return_stake` reason 4: a key already staked from a different address.
 const REASON_ANOTHER_ADDRESS: u32 = 4;
 
@@ -3994,6 +3997,22 @@ fn pq_stake_body(
     signature: &[u8],
     witness: Option<chain_block::Cell>,
 ) -> chain_block::Cell {
+    pq_stake_body_owned(query_id, validator, stake_at, max_factor, signature, witness, None)
+}
+
+/// The same body with the funding account stated, which is what a controller relaying a
+/// pool's stake sends. A controller staking its own funds states nothing and is its own
+/// owner.
+#[allow(clippy::too_many_arguments)]
+fn pq_stake_body_owned(
+    query_id: u64,
+    validator: &PqValidator,
+    stake_at: u32,
+    max_factor: u32,
+    signature: &[u8],
+    witness: Option<chain_block::Cell>,
+    stake_owner: Option<chain_block::UInt256>,
+) -> chain_block::Cell {
     use chain_block::IBitstring;
     let mut body = chain_block::BuilderData::new();
     body.append_u32(PQ_STAKE_OP).expect("operation");
@@ -4011,6 +4030,15 @@ fn pq_stake_body(
         }
         None => {
             body.append_bit_zero().expect("no witness");
+        }
+    }
+    match stake_owner {
+        Some(owner) => {
+            body.append_bit_one().expect("an owner is stated");
+            body.append_raw(owner.as_slice(), 256).expect("the stake owner");
+        }
+        None => {
+            body.append_bit_zero().expect("no owner stated");
         }
     }
     body.into_cell().expect("stake body")
@@ -4123,6 +4151,193 @@ fn pq_stake(
 ) -> tos_sandbox::SendResult {
     let sender = from.clone();
     pq_stake_from(chain, from, &sender, validator, election, query_id, value)
+}
+
+/// A controller may stake money that is not its own, and the money goes back to whoever
+/// put it up.
+///
+/// This is the shape pooled staking takes: the pool holds nominators' funds and has no
+/// authority, the controller has authority and holds nothing. The controller is the
+/// member and the identity; the pool is the account the stake came from and the account
+/// everything returns to.
+#[test]
+fn a_controller_may_stake_for_an_account_that_is_not_itself() {
+    let (mut chain, treasury, election) = open_election("relayed-stake", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(71);
+    let pool = chain_block::UInt256::from_slice(&[0x9f; 32]);
+
+    let result = pq_stake_relayed(
+        &mut chain,
+        &treasury,
+        &validator,
+        election,
+        1,
+        11_000 * TOS,
+        &pool,
+        &pool,
+    );
+    assert_eq!(reply(&result), (STAKE_ACCEPTED, 0), "a relayed stake was refused");
+
+    // The controller is the member, not the pool.
+    assert_eq!(
+        pq_member_key_id(&chain, &treasury),
+        Some(validator.key_id()),
+        "the controller is not the member"
+    );
+
+    // Three more so the election has enough behind it to conduct. Every wallet here has
+    // the same code, so a profile cannot be retired for one of them and not the rest;
+    // the round is driven to its end instead, which is the path the held stake comes
+    // back through anyway.
+    for index in 0..3u8 {
+        let other = PqValidator::new(0x74 + index);
+        let account = chain
+            .blockchain
+            .treasury(&format!("relayed-peer-{index}"), 40_000 * TOS)
+            .expect("a funded account");
+        let placed =
+            pq_stake(&mut chain, &account, &other, election, 30 + u64::from(index), 11_000 * TOS);
+        assert_eq!(reply(&placed), (STAKE_ACCEPTED, 0), "peer {index} could not stake");
+    }
+
+    chain.blockchain.set_now(election - chain.elect_end_before);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain
+        .blockchain
+        .set_config(configuration_from_contract(&chain))
+        .expect("the chain adopts the installed set");
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+    chain.blockchain.set_now(chain.blockchain.now() + 10 * 365 * 24 * 3600);
+    chain
+        .blockchain
+        .tick_tock(&chain.elector, TransactionTickTock::Tick)
+        .expect("tick runs")
+        .expect_success();
+
+    let controller: [u8; 32] =
+        treasury.address().address().get_bytestring(0).try_into().expect("an address");
+    let owner: [u8; 32] = pool.as_slice().to_vec().try_into().expect("an address");
+    assert!(owed(&chain, &owner) > 0, "the pool was not repaid what it staked");
+    assert_eq!(owed(&chain, &controller), 0, "the controller was repaid money it never put up");
+}
+
+/// A controller may not state a funding account the authorisation was not issued for.
+///
+/// Stating the owner is what lets a pool's stake be relayed at all, and it is the
+/// controller that states it. What stops a controller stating somebody else's account is
+/// that the account is signed over: the bytes the elector rebuilds from what was stated
+/// are not the bytes that were signed.
+#[test]
+fn a_controller_cannot_state_a_funding_account_it_was_not_authorised_for() {
+    let (mut chain, treasury, election) = open_election("relayed-wrong", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(72);
+    let authorised = chain_block::UInt256::from_slice(&[0x9f; 32]);
+    let other = chain_block::UInt256::from_slice(&[0xa0; 32]);
+
+    let result = pq_stake_relayed(
+        &mut chain,
+        &treasury,
+        &validator,
+        election,
+        1,
+        11_000 * TOS,
+        &other,
+        &authorised,
+    );
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_BAD_SIGNATURE),
+        "a stake stating an account it was not authorised for was accepted"
+    );
+    assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered anyway");
+}
+
+/// Stating nobody is not the same as stating the zero account: the second would credit
+/// everything to an address no one holds.
+#[test]
+fn a_stake_stating_the_zero_account_as_its_owner_is_refused() {
+    let (mut chain, treasury, election) = open_election("relayed-zero", 60_000 * TOS);
+    raise_to_post_quantum_version(&mut chain);
+    let validator = PqValidator::new(73);
+    let zero = chain_block::UInt256::default();
+
+    let result = pq_stake_relayed(
+        &mut chain,
+        &treasury,
+        &validator,
+        election,
+        1,
+        11_000 * TOS,
+        &zero,
+        &zero,
+    );
+    assert_eq!(
+        reply(&result),
+        (STAKE_RETURNED, REASON_OWNER_IS_NOBODY),
+        "a stake owned by nobody was accepted"
+    );
+    assert_eq!(pq_member_key_id(&chain, &treasury), None, "the refused stake registered anyway");
+}
+
+/// A stake a controller relays for somebody else's money: sent by `from`, authorised for
+/// `owner`, and stating that account as whose funds these are.
+fn pq_stake_relayed(
+    chain: &mut Chain,
+    from: &tos_sandbox::Treasury,
+    validator: &PqValidator,
+    election: u32,
+    query_id: u64,
+    value: u64,
+    owner: &chain_block::UInt256,
+    sign_for_owner: &chain_block::UInt256,
+) -> tos_sandbox::SendResult {
+    let global_id = match chain.blockchain.config_params().config(19).expect("parameter 19") {
+        Some(chain_block::ConfigParamEnum::ConfigParam19(id)) => id as i32,
+        _ => panic!("the chain states no network id, so nothing can sign for it"),
+    };
+    let validator_id =
+        chain_block::UInt256::from_slice(&from.address().address().get_bytestring(0));
+    // The authorisation names one funding account; the message states another when the
+    // two arguments differ, which is the case that must not verify.
+    let preimage = pq_stake_preimage_for(
+        global_id,
+        election,
+        0x10000,
+        &validator_id,
+        sign_for_owner,
+        1,
+        &validator.key_id(),
+        &validator.adnl,
+    );
+    let signature = validator.sign(&preimage);
+    let witness = Some(controller_birth_witness(chain, from));
+    chain
+        .blockchain
+        .send_message(from.build_message(
+            &chain.elector,
+            value,
+            true,
+            Some(pq_stake_body_owned(
+                query_id,
+                validator,
+                election,
+                0x10000,
+                &signature,
+                witness,
+                Some(owner.clone()),
+            )),
+        ))
+        .expect("the stake is delivered")
 }
 
 /// The election's post-quantum book: members by controller, and the reverse index.
@@ -4705,9 +4920,22 @@ fn a_stake_request_is_the_size_the_design_was_sized_for() {
     let bare = pq_stake_body(1, &validator, 1_789_434_000, 0x10000, &vec![0u8; 2420], None);
     assert_eq!(
         tree_size(&bare),
-        (34, 30_353),
+        (34, 30_354),
         "a stake carrying no controller proof changed shape"
     );
+
+    // Stating the funding account costs the bit that says so plus the account: what a
+    // controller relaying a pool's stake pays over one staking its own funds.
+    let owned = pq_stake_body_owned(
+        1,
+        &validator,
+        1_789_434_000,
+        0x10000,
+        &vec![0u8; 2420],
+        None,
+        Some(chain_block::UInt256::from_slice(&[0x9f; 32])),
+    );
+    assert_eq!(tree_size(&owned), (34, 30_610), "stating the funding account changed shape");
 }
 
 /// The weight factor a member registered with, as its own record holds it.
@@ -4994,6 +5222,7 @@ fn a_stake_naming_an_unadmitted_suite_is_refused() {
     body.append_bit_one().expect("a witness is present");
     body.checked_append_reference(controller_birth_witness(&chain, &treasury))
         .expect("the controller proof");
+    body.append_bit_zero().expect("no owner stated");
 
     let result = chain
         .blockchain

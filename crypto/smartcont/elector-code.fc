@@ -248,12 +248,29 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   int adnl_addr = cs~load_uint(256);
   cell signature = cs~load_ref();
   cell controller_birth_witness = cs~load_maybe_ref();
+  int states_owner = cs~load_uint(1);
+  int stated_owner = states_owner ? cs~load_uint(256) : 0;
   cs.end_parse();
 
   ;; The validator identity is the contract's own: the account that sent this. The key
   ;; identity is derived from the key presented, below. Neither is read from the request,
   ;; so a request cannot name one validator while carrying another's key.
   int validator_id = src_addr;
+
+  ;; Whose money this is. A controller staking its own funds says nothing and is its own
+  ;; owner; a controller relaying a pool's stake states the account the funds came from,
+  ;; which it read from its own sender and this contract cannot see.
+  ;;
+  ;; That this may be stated rests on the same thing `validator_id` rests on: only code
+  ;; ConfigParam 47 admits can stake at all, and the admitted code is what reads its true
+  ;; sender. It is not believed for free either -- it is signed over, so a controller
+  ;; stating an account the authorisation was not issued for produces bytes that do not
+  ;; verify.
+  int stake_owner = states_owner ? stated_owner : validator_id;
+  if (states_owner & (stated_owner == 0)) {
+    ;; Zero is not an account, and crediting it would strand the money.
+    return return_stake(s_addr, query_id, 14);
+  }
 
   ;; Everything that can be decided without the key is decided first. Verifying a
   ;; post-quantum signature costs an order of magnitude more than the whole rest of this
@@ -353,7 +370,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   ;; only step whose cost an unauthorised sender could otherwise impose at will.
   cell signature_chain = pq::stored_signature(algorithm_id, signature);
   ifnot (pq_check_mldsa44(
-      pq::stake_preimage(stake_at, max_factor, validator_id, src_addr, algorithm_id, key_id, adnl_addr),
+      pq::stake_preimage(stake_at, max_factor, validator_id, stake_owner, algorithm_id, key_id, adnl_addr),
       pq::election_context(), signature_chain, key_chain)) {
     return return_stake(s_addr, query_id, 1);
   }
@@ -364,7 +381,7 @@ _ ~credit_to(credits, addr, amount) inline_ref {
   pq_by_code = pq::add_stake_by_code(pq_by_code, controller_code, msg_value - placed_before);
   (pq_members, pq_key_owner) = pq::register_member(pq_members, pq_key_owner, validator_id, msg_value,
                                                    now(), max_factor, algorithm_id, public_key, adnl_addr,
-                                                   src_addr, controller_code);
+                                                   stake_owner, controller_code);
   elect = pack_elect(elect_at, elect_close, min_stake, total_stake, false, false, pq_members, pq_key_owner, pq_by_code);
   set_data(begin_cell().store_dict(elect).store_slice(ds).end_cell());
   if (query_id) {
