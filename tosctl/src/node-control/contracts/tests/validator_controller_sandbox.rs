@@ -21,6 +21,12 @@ const CONTROLLER_OP: u32 = 0x5051_6361;
 const CONTROLLER_CONTEXT: &[u8] = b"TOS-VALIDATOR-CONTROLLER-v1";
 const KIND_SEND: u8 = 1;
 const KIND_ROTATE_ROOT: u8 = 2;
+const KIND_BIND_CONSENSUS: u8 = 3;
+
+/// `PQrl`: relay a stake for whoever sent the money.
+const RELAY_OP: u32 = 0x5051_726c;
+/// `PQst`: what the relay sends on.
+const STAKE_OP: u32 = 0x5051_7374;
 
 const ERROR_WRONG_NETWORK: i32 = 91;
 const ERROR_STALE_EPOCH: i32 = 92;
@@ -31,6 +37,9 @@ const ERROR_BAD_COSIGNATURE: i32 = 96;
 const ERROR_BAD_ACTION: i32 = 97;
 const ERROR_BAD_SIGNATURE: i32 = 98;
 const ERROR_NOT_INTERNAL: i32 = 99;
+const ERROR_NO_CONSENSUS_KEY: i32 = 100;
+const ERROR_WRONG_CONSENSUS_KEY: i32 = 101;
+const ERROR_RELAY_UNDERFUNDED: i32 = 102;
 
 fn repo_root() -> std::path::PathBuf {
     std::env::var("TOS_ROOT").map(std::path::PathBuf::from).unwrap_or_else(|_| {
@@ -106,10 +115,24 @@ fn controller_code() -> Cell {
 }
 
 fn controller_data(root: &RootKey, epoch: u64, nonce: u64) -> Cell {
+    controller_data_bound(root, epoch, nonce, 0, &[0u8; 32])
+}
+
+/// The same, with a consensus key already bound. Zero is no key: a controller that has
+/// never been bound relays nothing.
+fn controller_data_bound(
+    root: &RootKey,
+    epoch: u64,
+    nonce: u64,
+    consensus_algorithm: u16,
+    consensus_key_id: &[u8],
+) -> Cell {
     use chain_block::IBitstring;
     let mut data = chain_block::BuilderData::new();
     data.append_u64(epoch).expect("epoch");
     data.append_u64(nonce).expect("nonce");
+    data.append_u16(consensus_algorithm).expect("consensus algorithm");
+    data.append_raw(consensus_key_id, 256).expect("consensus key identity");
     data.checked_append_reference(stored(&root.public_key)).expect("root key");
     data.into_cell().expect("controller data")
 }
@@ -156,7 +179,7 @@ impl Controller {
         assert_eq!(result.exit_code, 0, "controller_state failed");
         let epoch = result.stack[0].as_integer().expect("epoch").to_string().parse().expect("u64");
         let nonce = result.stack[1].as_integer().expect("nonce").to_string().parse().expect("u64");
-        let key = result.stack[2].as_cell().expect("a key cell").clone();
+        let key = result.stack[4].as_cell().expect("a key cell").clone();
         let mut slice = chain_block::SliceData::load_cell(key).expect("key");
         slice.get_next_u32().expect("declared length");
         let mut chain_cell = slice.checked_drain_reference().expect("the chain");
@@ -557,6 +580,359 @@ fn a_root_rotation_needs_both_the_old_root_and_the_new_one() {
         ERROR_STALE_EPOCH,
         "an authorisation under the old epoch was accepted"
     );
+}
+
+/// What the controller says about itself, in full. The key identity comes back as an
+/// integer, so it is compared as one rather than converted back into bytes.
+fn bound(controller: &Controller) -> (u64, u64, u16, String) {
+    let result = controller
+        .chain
+        .run_get_method(&controller.address, "controller_state", vec![])
+        .expect("the controller answers");
+    assert_eq!(result.exit_code, 0, "controller_state failed");
+    let epoch = result.stack[0].as_integer().expect("epoch").to_string().parse().expect("u64");
+    let nonce = result.stack[1].as_integer().expect("nonce").to_string().parse().expect("u64");
+    let algorithm: u16 =
+        result.stack[2].as_integer().expect("algorithm").to_string().parse().expect("u16");
+    let key_id = result.stack[3].as_integer().expect("key identity").to_string();
+    (epoch, nonce, algorithm, key_id)
+}
+
+/// The identity a key derives, as the get-method reports it.
+fn key_identity(key: &[u8]) -> String {
+    tos_vm::stack::integer::IntegerData::from_unsigned_bytes_be(
+        chain_block::derive_consensus_key_id(1, key).as_slice(),
+    )
+    .to_string()
+}
+
+/// The payload that binds a consensus key: which suite, and the key itself.
+fn bind_payload(algorithm: u16, key: &[u8]) -> Cell {
+    use chain_block::IBitstring;
+    let mut payload = chain_block::BuilderData::new();
+    payload.append_u16(algorithm).expect("algorithm");
+    payload.checked_append_reference(stored(key)).expect("the key");
+    payload.into_cell().expect("a bind payload")
+}
+
+/// A controller binds the consensus key it will act through, and the key proves it exists.
+///
+/// The root does this once. Every election afterwards is authorised by the consensus key
+/// alone, which is the point: the offline root stops being part of a routine operation.
+#[test]
+fn binding_a_consensus_key_needs_the_root_and_the_key_itself() {
+    let root = RootKey::new(0xb0);
+    let consensus = RootKey::new(0xb1);
+    let mut controller = deploy(&root);
+    assert_eq!(bound(&controller).3, "0", "a fresh controller is bound to a key");
+
+    let payload = bind_payload(1, &consensus.public_key);
+    let until = valid_until(&controller);
+    let id = controller.id();
+    let global_id = controller.global_id;
+    let commitment = preimage(global_id, &id, 0, 0, until, KIND_BIND_CONSENSUS, &payload);
+
+    // Without the key's own signature there is no proof it exists, and a controller bound
+    // to a key nobody holds is a validator that cannot validate.
+    let alone = authorize(
+        &mut controller,
+        &root,
+        0,
+        0,
+        until,
+        KIND_BIND_CONSENSUS,
+        payload.clone(),
+        None,
+        global_id,
+    );
+    assert_eq!(exit_code(&alone), ERROR_BAD_COSIGNATURE, "a key bound itself without proving it");
+    assert_eq!(bound(&controller).3, "0", "a refused bind bound something anyway");
+
+    // Somebody else's signature is not that proof either.
+    let impostor = RootKey::new(0xb2);
+    let wrong = authorize(
+        &mut controller,
+        &root,
+        0,
+        0,
+        until,
+        KIND_BIND_CONSENSUS,
+        payload.clone(),
+        Some(impostor.sign(&commitment)),
+        global_id,
+    );
+    assert_eq!(exit_code(&wrong), ERROR_BAD_COSIGNATURE, "another key's signature bound this one");
+
+    // With both, it binds.
+    let done = authorize(
+        &mut controller,
+        &root,
+        0,
+        0,
+        until,
+        KIND_BIND_CONSENSUS,
+        payload,
+        Some(consensus.sign(&commitment)),
+        global_id,
+    );
+    assert_eq!(exit_code(&done), 0, "a correctly authorised bind was refused");
+    let (epoch, nonce, algorithm, key_id) = bound(&controller);
+    assert_eq!(epoch, 0, "binding a consensus key moved the root's epoch");
+    assert_eq!(nonce, 1, "binding a consensus key did not spend its nonce");
+    assert_eq!(algorithm, 1, "the suite was not recorded");
+    assert_eq!(
+        key_id,
+        key_identity(&consensus.public_key),
+        "the key recorded is not the key bound"
+    );
+}
+
+/// Name an elector in the chain's configuration, and return the address it names.
+fn name_an_elector(chain: &mut Blockchain) -> MsgAddressInt {
+    let id = chain_block::AccountId::from([0x33u8; 32]);
+    let mut config = chain.config_params().clone();
+    config
+        .set_config(chain_block::ConfigParamEnum::ConfigParam1(chain_block::ConfigParam1 {
+            elector_addr: id.clone(),
+        }))
+        .expect("the elector is named");
+    // Naming one parameter makes the configuration one the sandbox must build a whole
+    // blockchain configuration from, and that needs the fundamental-contract list too.
+    config
+        .set_config(chain_block::ConfigParamEnum::ConfigParam31(chain_block::ConfigParam31 {
+            fundamental_smc_addr: chain_block::FundamentalSmcAddresses::default(),
+        }))
+        .expect("the fundamental contracts are listed");
+    chain.set_config(config).expect("the chain adopts it");
+    MsgAddressInt::with_standart(None, -1, id).expect("the elector address")
+}
+
+/// A relay request: the terms of a stake and the key that authorised it.
+fn relay_body(algorithm: u16, key: &[u8], signature: &[u8]) -> Cell {
+    use chain_block::IBitstring;
+    let mut body = chain_block::BuilderData::new();
+    body.append_u32(RELAY_OP).expect("operation");
+    body.append_u64(7).expect("query id");
+    body.append_u32(1_789_434_000).expect("election");
+    body.append_u32(0x10000).expect("max factor");
+    body.append_raw(&[0xa5; 32], 256).expect("adnl address");
+    body.append_u16(algorithm).expect("algorithm");
+    body.checked_append_reference(stored(key)).expect("the key");
+    body.checked_append_reference(stored(signature)).expect("the signature");
+    body.append_bit_zero().expect("no birth witness");
+    body.into_cell().expect("a relay request")
+}
+
+/// What the controller sent on, if anything: where, carrying what, and stating whom.
+fn relayed(result: &tos_sandbox::SendResult) -> Option<(MsgAddressInt, u128, String)> {
+    let (_, transaction) = result.transactions.first().expect("a transaction");
+    let mut sent = None;
+    transaction
+        .iterate_out_msgs(|message| {
+            // A refused relay still produces an out-message: the inbound one, bounced.
+            // Only a stake is a relay, and reading a bounce as one would report the
+            // refusal as a relay to nowhere.
+            let Some(body) = message.body() else { return Ok(true) };
+            let mut body = body.clone();
+            let Ok(operation) = body.get_next_u32() else { return Ok(true) };
+            if operation != STAKE_OP || sent.is_some() {
+                return Ok(true);
+            }
+            let value = message.get_value().map(|v| v.coins.as_u128()).unwrap_or(0);
+            let destination = message.dst().expect("a destination");
+            body.get_next_u64().expect("query id");
+            body.get_next_u16().expect("algorithm");
+            body.get_next_u32().expect("election");
+            body.get_next_u32().expect("max factor");
+            body.get_next_bits(256).expect("adnl");
+            assert!(!body.get_next_bit().expect("witness bit"), "a witness appeared");
+            assert!(body.get_next_bit().expect("owner bit"), "the relay stated no owner");
+            let owner = hex::encode(body.get_next_bits(256).expect("the owner"));
+            sent = Some((destination, value, owner));
+            Ok(true)
+        })
+        .expect("out messages");
+    sent
+}
+
+/// The stake a pool sends goes to the elector, carrying the pool's money and naming the
+/// pool as whose money it is.
+///
+/// This is the whole of what a consensus key may make this account do. It is not a root
+/// authorisation: the key authorised the stake the elector will verify, and this account
+/// only checks that the key presented is the one it was bound to.
+#[test]
+fn a_bound_consensus_key_relays_a_stake_for_whoever_sent_the_money() {
+    let root = RootKey::new(0xb3);
+    let consensus = RootKey::new(0xb4);
+    let mut controller = Controller {
+        chain: Blockchain::with_global_version(16).expect("a chain"),
+        address: MsgAddressInt::default(),
+        global_id: 0,
+    };
+    controller.chain.set_workchain(-1);
+    // The elector this relay will send to. The bare sandbox configuration names none, and
+    // a relay reads the address from the configuration rather than from its request --
+    // which is what stops it being pointed anywhere else.
+    let elector = name_an_elector(&mut controller.chain);
+    let state = StateInit::with_code_and_data(
+        controller_code(),
+        controller_data_bound(
+            &root,
+            0,
+            0,
+            1,
+            chain_block::derive_consensus_key_id(1, &consensus.public_key).as_slice(),
+        ),
+    );
+    controller.address = MsgAddressInt::with_params(
+        -1,
+        state.write_to_new_cell().expect("state").into_cell().expect("state cell").hash(0),
+    )
+    .expect("address");
+    let funder = controller.chain.treasury("relay-deployer", 100_000 * TOS).expect("funding");
+    controller
+        .chain
+        .send_message(
+            MessageBuilder::internal(funder.address(), &controller.address, 10_000 * TOS)
+                .bounce(false)
+                .state_init(state)
+                .body(Cell::default())
+                .build(),
+        )
+        .expect("deployment")
+        .expect_success();
+
+    let pool = controller.chain.treasury("relay-pool", 100_000 * TOS).expect("a pool");
+    let before = controller
+        .chain
+        .get_account(&controller.address)
+        .and_then(|account| account.balance().and_then(|balance| balance.coins.as_u64()))
+        .expect("a balance");
+
+    let result = controller
+        .chain
+        .send_message(pool.build_message(
+            &controller.address,
+            5_000 * TOS,
+            true,
+            Some(relay_body(1, &consensus.public_key, &vec![0x5a; 2420])),
+        ))
+        .expect("the relay request is delivered");
+    assert_eq!(exit_code(&result), 0, "a relay from the bound key was refused");
+
+    let (destination, value, owner) = relayed(&result).expect("the controller sent nothing on");
+    assert_eq!(destination, elector, "the relay went somewhere that is not the elector");
+    assert_eq!(
+        owner,
+        hex::encode(pool.address().address().get_bytestring(0)),
+        "the relay stated an owner that is not the account that sent the money"
+    );
+    // Only what arrived. The account's own balance is not what a stake is made of.
+    assert!(value <= u128::from(5_000 * TOS), "the relay sent more than it was given");
+    assert!(value > u128::from(4_900 * TOS), "the relay kept the money it was given");
+    let after = controller
+        .chain
+        .get_account(&controller.address)
+        .and_then(|account| account.balance().and_then(|balance| balance.coins.as_u64()))
+        .expect("a balance");
+    assert!(after >= before, "the relay spent the controller's own balance: {before} -> {after}");
+}
+
+/// Everything the relay refuses, and the fact that it sends nothing when it does.
+#[test]
+fn a_relay_is_refused_unless_the_key_is_the_bound_one_and_the_money_is_enough() {
+    let root = RootKey::new(0xb5);
+    let consensus = RootKey::new(0xb6);
+    let stranger = RootKey::new(0xb7);
+
+    // Unbound: this controller has no consensus key, so nothing may relay through it.
+    let mut unbound = deploy(&root);
+    name_an_elector(&mut unbound.chain);
+    let pool = unbound.chain.treasury("relay-pool-a", 100_000 * TOS).expect("a pool");
+    let result = unbound
+        .chain
+        .send_message(pool.build_message(
+            &unbound.address,
+            5_000 * TOS,
+            true,
+            Some(relay_body(1, &consensus.public_key, &vec![0x5a; 2420])),
+        ))
+        .expect("delivered");
+    assert_eq!(exit_code(&result), ERROR_NO_CONSENSUS_KEY, "an unbound controller relayed a stake");
+    assert!(relayed(&result).is_none(), "a refused relay sent something anyway");
+
+    // Bound, but the request carries another key.
+    let mut controller = deploy(&root);
+    name_an_elector(&mut controller.chain);
+    let account = controller
+        .chain
+        .get_account(&controller.address)
+        .expect("the controller is deployed")
+        .clone();
+    let mut with_key = account;
+    with_key.set_data(controller_data_bound(
+        &root,
+        0,
+        0,
+        1,
+        chain_block::derive_consensus_key_id(1, &consensus.public_key).as_slice(),
+    ));
+    let address = controller.address.clone();
+    controller.chain.set_account(address, with_key);
+
+    let pool = controller.chain.treasury("relay-pool-b", 100_000 * TOS).expect("a pool");
+    let wrong = controller
+        .chain
+        .send_message(pool.build_message(
+            &controller.address,
+            5_000 * TOS,
+            true,
+            Some(relay_body(1, &stranger.public_key, &vec![0x5a; 2420])),
+        ))
+        .expect("delivered");
+    assert_eq!(
+        exit_code(&wrong),
+        ERROR_WRONG_CONSENSUS_KEY,
+        "a stake signed by another key was relayed"
+    );
+    assert!(relayed(&wrong).is_none(), "a refused relay sent something anyway");
+
+    // A suite this chain does not know. The identity would not match either, but the
+    // reason has to be that it is the wrong key and not whatever the key parser makes of
+    // a length it cannot know.
+    let unknown_suite = controller
+        .chain
+        .send_message(pool.build_message(
+            &controller.address,
+            5_000 * TOS,
+            true,
+            Some(relay_body(7, &consensus.public_key, &vec![0x5a; 2420])),
+        ))
+        .expect("delivered");
+    assert_eq!(
+        exit_code(&unknown_suite),
+        ERROR_WRONG_CONSENSUS_KEY,
+        "a request naming an unknown suite was refused for the wrong reason"
+    );
+    assert!(relayed(&unknown_suite).is_none(), "a refused relay sent something anyway");
+
+    // The right key, and not enough money to pay for what it asks the elector to do.
+    let poor = controller
+        .chain
+        .send_message(pool.build_message(
+            &controller.address,
+            TOS,
+            true,
+            Some(relay_body(1, &consensus.public_key, &vec![0x5a; 2420])),
+        ))
+        .expect("delivered");
+    assert_eq!(
+        exit_code(&poor),
+        ERROR_RELAY_UNDERFUNDED,
+        "a relay that cannot pay for its own stake was carried out"
+    );
+    assert!(relayed(&poor).is_none(), "a refused relay sent something anyway");
 }
 
 #[test]

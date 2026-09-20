@@ -1521,9 +1521,14 @@ fn deploy_rooted_validator(chain: &mut Chain, index: u8) -> RootedValidator {
     let root = PqValidator::new(0x80 + index);
     let consensus = PqValidator::new(0x90 + index);
 
+    // Deployed with its consensus key already bound, which is the state an operator
+    // reaches by authorising one bind with the offline root and is the state every
+    // election afterwards runs in.
     let mut data = chain_block::BuilderData::new();
     data.append_u64(0).expect("epoch");
     data.append_u64(0).expect("nonce");
+    data.append_u16(1).expect("consensus algorithm");
+    data.append_raw(consensus.key_id().as_slice(), 256).expect("consensus key identity");
     data.checked_append_reference(stored_bytes(&root.public_key)).expect("root key");
     let state = chain_block::StateInit::with_code_and_data(
         controller_code(),
