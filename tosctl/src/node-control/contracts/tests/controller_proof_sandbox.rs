@@ -38,7 +38,11 @@ fn repo_root() -> std::path::PathBuf {
 
 /// Both hashes of the same cell, so the two can be compared on identical input.
 fn probe_code() -> Cell {
-    let probe = std::env::temp_dir().join("tos_controller_proof_probe.fc");
+    let probe = std::env::temp_dir().join(format!(
+        "tos_controller_proof_probe-{}-{:?}.fc",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     std::fs::write(
         &probe,
         r#"

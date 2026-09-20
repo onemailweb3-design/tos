@@ -50,7 +50,11 @@ fn repo_root() -> std::path::PathBuf {
 /// A probe that exposes the library. The library itself is the production file, compiled
 /// as the contracts will compile it.
 fn probe_code() -> Cell {
-    let probe = std::env::temp_dir().join("tos_pq_validator_probe.fc");
+    let probe = std::env::temp_dir().join(format!(
+        "tos_pq_validator_probe-{}-{:?}.fc",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     std::fs::write(
         &probe,
         r#"

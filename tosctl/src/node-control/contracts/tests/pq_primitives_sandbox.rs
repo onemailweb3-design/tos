@@ -35,7 +35,11 @@ const MLDSA44_PUBLIC_KEY_BYTES: usize = 1312;
 /// The probe. Nothing here is elector or configuration logic: it is the two operations
 /// those contracts will perform, isolated so their cost is attributable.
 fn probe_code() -> Cell {
-    let src = std::env::temp_dir().join("tos_pq_primitives_probe.fc");
+    let src = std::env::temp_dir().join(format!(
+        "tos_pq_primitives_probe-{}-{:?}.fc",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     std::fs::write(
         &src,
         r#"

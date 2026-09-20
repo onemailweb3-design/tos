@@ -43,7 +43,11 @@ fn repo_root() -> std::path::PathBuf {
 }
 
 fn probe_code() -> Cell {
-    let probe = std::env::temp_dir().join("tos_pq_elector_state_probe.fc");
+    let probe = std::env::temp_dir().join(format!(
+        "tos_pq_elector_state_probe-{}-{:?}.fc",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     std::fs::write(
         &probe,
         r#"

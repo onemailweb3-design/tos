@@ -93,7 +93,11 @@ fn controller_code() -> Cell {
 /// field the controller underflows on at its first message. So the probe compiles that
 /// file and is asked for the cell.
 fn pool_written_controller_data(statics: Cell) -> Cell {
-    let probe = std::env::temp_dir().join("tos_liquid_init_probe.fc");
+    let probe = std::env::temp_dir().join(format!(
+        "tos_liquid_init_probe-{}-{:?}.fc",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     std::fs::write(
         &probe,
         r#"
