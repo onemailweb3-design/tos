@@ -16,16 +16,10 @@
 #include <string>
 
 #include "common/bitstring.h"
+#include "crypto/pq/pq-controller-domain.h"
 #include "crypto/pq/pq-elector.h"
 
 namespace tos::pq {
-
-// Internal message operation, lowercase; signed-preimage domain, uppercase.
-inline constexpr std::uint32_t controller_auth_op = 0x50516361;        // "PQca"
-inline constexpr std::uint32_t controller_auth_sign_tag = 0x50514341;  // "PQCA"
-
-// The signature context, distinct from every other authority in this system.
-inline constexpr std::string_view controller_auth_context = "TOS-VALIDATOR-CONTROLLER-v1";
 
 // What a controller root signs. Exactly 93 bytes.
 //

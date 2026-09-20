@@ -658,6 +658,14 @@ target_include_directories(tos-pq-vote PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>)
 target_link_libraries(tos-pq-vote PUBLIC tos_crypto tos_pq_consensus_signer)
 
+# The operator's root-authorisation tool. It links the offline root library and no node
+# code, which is the boundary itself rather than a note about one: the only program in
+# this build that can sign a controller authorisation is the one an operator runs.
+add_executable(tos-pq-controller pq/controller-tool.cpp)
+target_include_directories(tos-pq-controller PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>)
+target_link_libraries(tos-pq-controller PUBLIC tos_crypto tos_pq_controller_root)
+
 add_executable(dump-block block/dump-block.cpp)
 target_include_directories(dump-block PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>)

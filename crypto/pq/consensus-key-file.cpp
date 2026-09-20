@@ -11,63 +11,38 @@
 #include <unistd.h>
 
 #include "consensus-key-file.h"
+#include "seed-file.h"
 
 namespace tos::pq {
 namespace {
 
 constexpr std::size_t seed_bytes = consensus_seed_bytes;
+static_assert(seed_bytes == detail::seed_file_bytes, "a consensus seed is a seed file");
 
-// Closes on every path out, including the ones that throw nothing and return early.
-class Descriptor {
- public:
-  explicit Descriptor(int fd) noexcept : fd_(fd) {
-  }
-  ~Descriptor() {
-    if (fd_ >= 0) {
-      ::close(fd_);
-    }
-  }
-  Descriptor(const Descriptor&) = delete;
-  Descriptor& operator=(const Descriptor&) = delete;
-  int get() const noexcept {
-    return fd_;
-  }
-  bool valid() const noexcept {
-    return fd_ >= 0;
-  }
+using detail::Descriptor;
+using detail::directory_is_private;
+using detail::parent_directory;
+using detail::SeedBuffer;
 
- private:
-  int fd_;
-};
-
-// A buffer that is wiped when it goes out of scope, however it goes out of scope.
-class SeedBuffer {
- public:
-  ~SeedBuffer() {
-    OPENSSL_cleanse(bytes.data(), bytes.size());
+// The shared refusal, in the words this key's operator needs.
+ConsensusKeyFileError as_consensus_error(detail::SeedFileRefusal refusal) noexcept {
+  switch (refusal) {
+    case detail::SeedFileRefusal::cannot_open:
+      return ConsensusKeyFileError::cannot_open;
+    case detail::SeedFileRefusal::not_a_regular_file:
+      return ConsensusKeyFileError::not_a_regular_file;
+    case detail::SeedFileRefusal::wrong_owner:
+      return ConsensusKeyFileError::wrong_owner;
+    case detail::SeedFileRefusal::readable_by_others:
+      return ConsensusKeyFileError::readable_by_others;
+    case detail::SeedFileRefusal::directory_writable:
+      return ConsensusKeyFileError::directory_writable;
+    case detail::SeedFileRefusal::wrong_size:
+      return ConsensusKeyFileError::wrong_size;
+    case detail::SeedFileRefusal::read_failed:
+      return ConsensusKeyFileError::read_failed;
   }
-  std::array<unsigned char, seed_bytes> bytes{};
-};
-
-std::string parent_directory(std::string_view path) {
-  const auto slash = path.find_last_of('/');
-  if (slash == std::string_view::npos) {
-    return ".";
-  }
-  if (slash == 0) {
-    return "/";
-  }
-  return std::string(path.substr(0, slash));
-}
-
-// Anyone who can write the directory can replace the key in it, so the directory is part
-// of what protects the key and is checked with it.
-bool directory_is_private(std::string_view path) noexcept {
-  struct stat st {};
-  if (::stat(parent_directory(path).c_str(), &st) != 0) {
-    return false;
-  }
-  return (st.st_mode & (S_IWGRP | S_IWOTH)) == 0;
+  return ConsensusKeyFileError::read_failed;
 }
 
 }  // namespace
@@ -100,44 +75,10 @@ const char* describe(ConsensusKeyFileError error) noexcept {
 
 std::variant<ValidatorPQKeyStore, ConsensusKeyFileError> load_consensus_key(
     std::string_view path) noexcept {
-  const std::string name(path);
-  Descriptor fd(::open(name.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
-  if (!fd.valid()) {
-    return ConsensusKeyFileError::cannot_open;
-  }
-  struct stat st {};
-  if (::fstat(fd.get(), &st) != 0) {
-    return ConsensusKeyFileError::cannot_open;
-  }
-  if (!S_ISREG(st.st_mode)) {
-    return ConsensusKeyFileError::not_a_regular_file;
-  }
-  if (st.st_uid != ::geteuid()) {
-    return ConsensusKeyFileError::wrong_owner;
-  }
-  if ((st.st_mode & 077) != 0) {
-    return ConsensusKeyFileError::readable_by_others;
-  }
-  if (!directory_is_private(path)) {
-    return ConsensusKeyFileError::directory_writable;
-  }
-  if (st.st_size != static_cast<off_t>(seed_bytes)) {
-    return ConsensusKeyFileError::wrong_size;
-  }
-
   SeedBuffer seed;
-  std::size_t read_so_far = 0;
-  while (read_so_far < seed.bytes.size()) {
-    const auto n = ::read(fd.get(), seed.bytes.data() + read_so_far, seed.bytes.size() - read_so_far);
-    if (n < 0 && errno == EINTR) {
-      continue;
-    }
-    if (n <= 0) {
-      return ConsensusKeyFileError::read_failed;
-    }
-    read_so_far += static_cast<std::size_t>(n);
+  if (auto refused = detail::read_protected_seed(path, seed)) {
+    return as_consensus_error(*refused);
   }
-
   auto store = ValidatorPQKeyStore::from_seed(
       std::string_view(reinterpret_cast<const char*>(seed.bytes.data()), seed.bytes.size()));
   if (!store.has_value()) {

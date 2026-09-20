@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# A validator node must not be able to authorise a controller action.
+#
+# N3.3A separated two secrets so that compromising the machine that validates costs an
+# operator the key it can rotate and not the authority that rotates it. That separation
+# is only real while the node cannot sign a controller authorisation -- not "does not",
+# but cannot, because the code that would is not in it.
+#
+# So this checks the two things that would end it: the node linking the offline root
+# library, and the node's own sources reaching for the root's header, loader, signer or
+# signing context. A node that gains any of those has lost the boundary, and would have
+# lost it silently: nothing else in the tree fails when a library is added to a link
+# line.
+
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+status=0
+
+# The node's own code. validator-engine loads and installs the consensus key; everything
+# under validator/ runs on the validating host.
+NODE_PATHS=(validator-engine validator validator-session adnl overlay catchain)
+
+# What only the offline domain may name.
+ROOT_SYMBOLS=(
+  "ValidatorControllerRootKeyStore"
+  "controller-root-signer.h"
+  "controller-root-file.h"
+  "load_controller_root_key"
+  "sign_controller_authorization"
+  "controller_auth_context"
+  "tos_pq_controller_root"
+)
+
+for symbol in "${ROOT_SYMBOLS[@]}"; do
+  found=$(cd "$REPO_ROOT" && grep -rIl --fixed-strings "$symbol" "${NODE_PATHS[@]}" 2>/dev/null || true)
+  if [[ -n "$found" ]]; then
+    echo "a validator node names the controller root: $symbol" >&2
+    printf '  %s\n' $found >&2
+    status=1
+  fi
+done
+
+# The link line itself. A library reached transitively is still linked, so this reads
+# what CMake records rather than what a CMakeLists file appears to say.
+ENGINE_LINKS=$(cd "$REPO_ROOT" && grep -rn "target_link_libraries(validator-engine" -A 6 \
+  validator-engine/CMakeLists.txt CMakeLists.txt 2>/dev/null || true)
+if grep -q "tos_pq_controller_root" <<<"$ENGINE_LINKS"; then
+  echo "validator-engine links the offline controller-root library" >&2
+  status=1
+fi
+
+# And the reverse: the offline library must not drag node code in, or "offline" would
+# only describe where the file sits.
+OFFLINE_SOURCES=(crypto/pq/controller-root-signer.cpp crypto/pq/controller-root-file.cpp
+                 crypto/pq/controller-tool.cpp)
+for source in "${OFFLINE_SOURCES[@]}"; do
+  if [[ ! -f "$REPO_ROOT/$source" ]]; then
+    echo "the offline controller-root domain is missing $source" >&2
+    status=1
+    continue
+  fi
+  if grep -qE '#include "(validator|adnl|overlay|catchain)/' "$REPO_ROOT/$source"; then
+    echo "$source reaches into node code" >&2
+    status=1
+  fi
+done
+
+# The node must still be able to load its own consensus key: a boundary that removed
+# both halves would pass every check above and leave a validator unable to sign.
+if ! grep -q "load_consensus_key" "$REPO_ROOT/validator-engine/validator-engine.cpp"; then
+  echo "validator-engine no longer loads a consensus key at all" >&2
+  status=1
+fi
+
+if [[ "$status" -eq 0 ]]; then
+  echo "the node holds a consensus key and no way to authorise a controller"
+fi
+
+exit "$status"

@@ -52,6 +52,17 @@ target_include_directories(tos_pq_consensus_signer PUBLIC "${CMAKE_CURRENT_SOURC
 target_compile_definitions(tos_pq_consensus_signer PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
 target_link_libraries(tos_pq_consensus_signer PUBLIC tos_pq_consensus PRIVATE tos_pq_consensus_signer_backend OpenSSL::Crypto)
 
+# The offline controller-root domain. A separate library on purpose: the boundary N3.3A
+# created is between two machines, so it is a link boundary here. validator-engine links
+# tos_pq_consensus_signer and must never link this, which
+# scripts/check-root-authority-off-the-node.sh enforces.
+add_library(tos_pq_controller_root STATIC controller-root-signer.cpp controller-root-file.cpp)
+set_target_properties(tos_pq_controller_root PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(tos_pq_controller_root PUBLIC cxx_std_20)
+target_include_directories(tos_pq_controller_root PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
+target_compile_definitions(tos_pq_controller_root PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
+target_link_libraries(tos_pq_controller_root PUBLIC tos_pq_consensus PRIVATE tos_pq_consensus_signer_backend OpenSSL::Crypto)
+
 # Provisioning for the node's consensus key. It links the same library the node loads
 # the key with, so the two cannot disagree about what a valid key file is.
 add_executable(tos-pq-consensus-key "${CMAKE_CURRENT_SOURCE_DIR}/consensus-key-tool.cpp")
