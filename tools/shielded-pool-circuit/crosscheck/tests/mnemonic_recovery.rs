@@ -103,7 +103,7 @@ fn deposit(pool: &mut Pool, wallet: &PoolInstance, index: u64) -> Deposited {
 fn a_wallet_restored_from_the_mnemonic_finds_what_the_contract_minted() {
     let frontier = shielded_pool_circuit::tree::Frontier::new();
     let nullifiers = shielded_pool_circuit::imt::State::genesis();
-    let mut pool = Pool::deploy(frontier.empty_root(), nullifiers.root()).expect("deploy the pool");
+    let mut pool = Pool::deploy().expect("deploy the pool");
     let domain = wire::execution_domain(
         shielded_pool_circuit_crosscheck::wire::WireProbe::deploy()
             .expect("the wire probe")
@@ -179,7 +179,7 @@ fn a_wallet_restored_from_the_mnemonic_finds_what_the_contract_minted() {
 fn another_wallets_notes_are_invisible_and_silent() {
     let frontier = shielded_pool_circuit::tree::Frontier::new();
     let nullifiers = shielded_pool_circuit::imt::State::genesis();
-    let mut pool = Pool::deploy(frontier.empty_root(), nullifiers.root()).expect("deploy the pool");
+    let mut pool = Pool::deploy().expect("deploy the pool");
     let domain = wire::execution_domain(
         shielded_pool_circuit_crosscheck::wire::WireProbe::deploy()
             .expect("the wire probe")
@@ -223,7 +223,7 @@ fn another_wallets_notes_are_invisible_and_silent() {
 fn two_notes_sent_to_one_descriptor_are_both_recovered_and_the_index_is_burnt() {
     let frontier = shielded_pool_circuit::tree::Frontier::new();
     let nullifiers = shielded_pool_circuit::imt::State::genesis();
-    let mut pool = Pool::deploy(frontier.empty_root(), nullifiers.root()).expect("deploy the pool");
+    let mut pool = Pool::deploy().expect("deploy the pool");
     let domain = wire::execution_domain(
         shielded_pool_circuit_crosscheck::wire::WireProbe::deploy()
             .expect("the wire probe")

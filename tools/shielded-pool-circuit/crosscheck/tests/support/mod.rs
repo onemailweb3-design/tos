@@ -131,12 +131,8 @@ pub struct Withdrawal<'a> {
 pub fn run(withdrawal: &Withdrawal) -> Outcome {
     let mut frontier = shielded_pool_circuit::tree::Frontier::new();
     let nullifiers = imt::State::genesis();
-    let mut pool = Pool::deploy_with_denominations(
-        frontier.empty_root(),
-        nullifiers.root(),
-        withdrawal.denominations,
-    )
-    .expect("deploy the pool");
+    let mut pool =
+        Pool::deploy_with_denominations(withdrawal.denominations).expect("deploy the pool");
     let destination = deploy_destination(
         &mut pool.bc,
         withdrawal.destination_name,

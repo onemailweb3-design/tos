@@ -8,6 +8,7 @@ description = "Runs the shielded FunC library in the VM and compares it against 
 [dependencies]
 shielded-pool-circuit = { path = ".." }
 shielded-pool-wallet = { path = "../../shielded-pool-wallet" }
+shielded-pool-genesis = { path = "../../shielded-pool-genesis" }
 chain_block = { path = "../../../tosctl/src/block" }
 tos_sandbox = { path = "../../../tosctl/src/sandbox" }
 tos_vm = { path = "../../../tosctl/src/vm" }

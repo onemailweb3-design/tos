@@ -73,7 +73,7 @@ fn a_private_transfer_with_a_proof_that_verifies() {
     // The prover's view of the two trees, which start where the contract's do.
     let mut frontier = Frontier::new();
     let nullifiers = imt::State::genesis();
-    let mut pool = Pool::deploy(frontier.empty_root(), nullifiers.root()).expect("deploy the pool");
+    let mut pool = Pool::deploy().expect("deploy the pool");
     assert_eq!(
         pool.get("commitment_root").expect("commitment root"),
         dec(frontier.empty_root()),

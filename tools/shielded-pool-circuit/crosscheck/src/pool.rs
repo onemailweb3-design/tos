@@ -104,79 +104,33 @@ pub fn development_vk_bytes() -> Result<Vec<u8>> {
         .collect()
 }
 
-/// Section 13.1: the denominations are a strictly ascending chain, one value
-/// per cell, each carrying the next.
-fn denomination_chain(amounts: &[u64]) -> Result<Cell> {
-    if amounts.is_empty() {
-        return Err(CrossCheckError::Fixture("an empty denomination list".to_string()));
-    }
-    let mut chain: Option<Cell> = None;
-    for amount in amounts.iter().rev() {
-        let mut builder = BuilderData::new();
-        store_coins(&mut builder, u128::from(*amount))?;
-        if let Some(next) = chain {
-            builder
-                .checked_append_reference(next)
-                .map_err(|error| CrossCheckError::Sandbox(format!("denominations: {error}")))?;
-        }
-        chain = Some(cell_of(builder)?);
-    }
-    chain.ok_or_else(|| CrossCheckError::Fixture("an empty denomination list".to_string()))
+/// The parameters a test pool is deployed with.
+///
+/// This goes through `shielded-pool-genesis` rather than assembling a state
+/// cell here. A hand-built fixture agrees with itself; what has to be true is
+/// that the state these tests deploy and the state a deployment ships are the
+/// same object, built by the same code. `genesis_vs_vm.rs` holds that
+/// generator against the contract's own `state_genesis`.
+fn parameters(denominations: &[u64]) -> Result<shielded_pool_genesis::Parameters> {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let profile = std::fs::read(root.join("doc/shielded-pool-v1-profile.md"))
+        .map_err(|error| CrossCheckError::Fixture(format!("the profile copy: {error}")))?;
+    let poseidon = std::fs::read(root.join("crypto/poseidon2/manifest.bin"))
+        .map_err(|error| CrossCheckError::Fixture(format!("the Poseidon2 manifest: {error}")))?;
+    Ok(shielded_pool_genesis::Parameters {
+        profile_bytes: profile,
+        poseidon_manifest_bytes: poseidon,
+        verifying_key: development_vk_bytes()?,
+        reserve_floor: u128::from(RESERVE_FLOOR),
+        withdrawal_fee: u128::from(WITHDRAWAL_FEE),
+        denominations: denominations.iter().map(|amount| u128::from(*amount)).collect(),
+    })
 }
 
-fn config_store(denominations: &[u64]) -> Result<Cell> {
-    let mut builder = BuilderData::new();
-    for tag in [0x11u8, 0x22, 0x33] {
-        builder
-            .append_raw(&[tag; 32], 256)
-            .map_err(|error| CrossCheckError::Sandbox(format!("config hash: {error}")))?;
-    }
-    store_coins(&mut builder, u128::from(WITHDRAWAL_FEE))?;
-    builder
-        .append_u8(
-            u8::try_from(denominations.len())
-                .map_err(|_| CrossCheckError::Fixture("too many denominations".to_string()))?,
-        )
-        .map_err(|error| CrossCheckError::Sandbox(format!("denomination count: {error}")))?;
-    builder
-        .checked_append_reference(denomination_chain(denominations)?)
-        .map_err(|error| CrossCheckError::Sandbox(format!("denominations: {error}")))?;
-    cell_of(builder)
-}
-
-fn genesis_state(
-    commitment_root: Fr,
-    nullifier_root: Fr,
-    denominations: &[u64],
-) -> Result<Cell> {
-    let mut builder = BuilderData::new();
-    builder
-        .append_u32(MAGIC)
-        .and_then(|b| b.append_u16(VERSION))
-        .map_err(|error| CrossCheckError::Sandbox(format!("state header: {error}")))?;
-    builder
-        .append_raw(&be(commitment_root), 256)
-        .and_then(|b| b.append_u64(0))
-        .and_then(|b| b.append_raw(&be(nullifier_root), 256))
-        .and_then(|b| b.append_u64(1))
-        .and_then(|b| b.append_u32(EPOCH_NONE))
-        .map_err(|error| CrossCheckError::Sandbox(format!("state roots: {error}")))?;
-    store_coins(&mut builder, 0)?;
-    store_coins(&mut builder, u128::from(RESERVE_FLOOR))?;
-    let mut anchors = BuilderData::new();
-    anchors
-        .checked_append_reference(empty_ring_holder()?)
-        .and_then(|b| b.checked_append_reference(empty_ring_holder()?))
-        .map_err(|error| CrossCheckError::Sandbox(format!("anchors: {error}")))?;
-    builder
-        .checked_append_reference(empty_ring_holder()?)
-        .and_then(|b| b.checked_append_reference(cell_of(anchors)?))
-        .and_then(|b| b.checked_append_reference(config_store(denominations)?))
-        .and_then(|b| {
-            b.checked_append_reference(crate::wire::byte_chain(&development_vk_bytes()?)?)
-        })
-        .map_err(|error| CrossCheckError::Sandbox(format!("state refs: {error}")))?;
-    cell_of(builder)
+fn genesis_state(denominations: &[u64]) -> Result<Cell> {
+    let genesis = shielded_pool_genesis::build(parameters(denominations)?)
+        .map_err(|error| CrossCheckError::Fixture(format!("the genesis state: {error}")))?;
+    Ok(genesis.state)
 }
 
 /// The shielded pool, deployed.
@@ -187,7 +141,7 @@ pub struct Pool {
 }
 
 /// Every FunC source the pool is built from, in dependency order.
-fn pool_sources() -> Vec<std::path::PathBuf> {
+pub fn pool_sources() -> Vec<std::path::PathBuf> {
     let library = library_dir();
     let contract = library.join("../tos-shielded-pool-v1.fc");
     let mut sources = vec![stdlib_path()];
@@ -216,23 +170,21 @@ fn pool_sources() -> Vec<std::path::PathBuf> {
 impl Pool {
     /// The pool as every test but the dust measurement wants it: one
     /// denomination.
-    pub fn deploy(commitment_root: Fr, nullifier_root: Fr) -> Result<Self> {
-        Self::deploy_with_denominations(commitment_root, nullifier_root, &[DENOMINATION])
+    ///
+    /// The roots are not arguments. Section 13.2 derives both of them -- an
+    /// empty commitment tree and a nullifier tree holding only the head
+    /// sentinel -- so a caller that could choose them could deploy a pool that
+    /// no prover agrees with.
+    pub fn deploy() -> Result<Self> {
+        Self::deploy_with_denominations(&[DENOMINATION])
     }
 
-    pub fn deploy_with_denominations(
-        commitment_root: Fr,
-        nullifier_root: Fr,
-        denominations: &[u64],
-    ) -> Result<Self> {
+    pub fn deploy_with_denominations(denominations: &[u64]) -> Result<Self> {
         let mut bc = Blockchain::with_global_version_and_base_workchain(ACTIVE_VERSION)?;
         bc.set_workchain(0);
         let payer = bc.treasury("relay", 1_000_000 * TOS)?;
         let code = compile_func(&pool_sources())?;
-        let si = StateInit::with_code_and_data(
-            code,
-            genesis_state(commitment_root, nullifier_root, denominations)?,
-        );
+        let si = StateInit::with_code_and_data(code, genesis_state(denominations)?);
         let addr_hash = si
             .write_to_new_cell()
             .and_then(|builder| builder.into_cell())

@@ -96,12 +96,12 @@ pub struct Probe {
 }
 
 /// The directory holding the shielded FunC library in *this* checkout.
-pub(crate) fn library_dir() -> PathBuf {
+pub fn library_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../crypto/smartcont/shielded")
 }
 
 /// `stdlib.fc` from this checkout, not from wherever `TOS_ROOT` points.
-pub(crate) fn stdlib_path() -> PathBuf {
+pub fn stdlib_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../crypto/smartcont/stdlib.fc")
 }
 

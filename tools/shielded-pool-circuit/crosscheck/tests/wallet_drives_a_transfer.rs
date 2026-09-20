@@ -53,7 +53,7 @@ fn seal(wallet: &PoolInstance, plaintext: &Plaintext) -> Vec<u8> {
 fn a_wallet_builds_a_transfers_outputs_and_recovers_them() {
     let mut frontier = shielded_pool_circuit::tree::Frontier::new();
     let nullifiers = imt::State::genesis();
-    let mut pool = Pool::deploy(frontier.empty_root(), nullifiers.root()).expect("deploy the pool");
+    let mut pool = Pool::deploy().expect("deploy the pool");
     let domain = wire::execution_domain(
         shielded_pool_circuit_crosscheck::wire::WireProbe::deploy()
             .expect("the wire probe")
