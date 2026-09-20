@@ -812,8 +812,20 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
 
     auto vote_to_sign = serialize_tl_object(vote.to_tl(), true);
     auto data_to_sign = create_serialize_tl_object<consensus::tl::dataToSign>(bus.session_id, std::move(vote_to_sign));
-    auto signature = co_await td::actor::ask(bus.keyring, &keyring::Keyring::sign_message, bus.local_id->short_id,
-                                             std::move(data_to_sign));
+    // Signed by the node's custodied post-quantum consensus key, under the frozen
+    // simplex_sign_context, and never by the network keyring. Fail closed: with no signer,
+    // or a signing failure, produce no vote rather than a wrong or classical one.
+    if (bus.pq_signer == nullptr) {
+      LOG(ERROR) << "consensus: no post-quantum consensus signer; refusing to vote";
+      co_return td::Unit{};
+    }
+    const auto to_sign = data_to_sign.as_slice();
+    auto pq_signature = bus.pq_signer->sign_consensus(std::string_view(to_sign.data(), to_sign.size()));
+    if (!pq_signature.has_value()) {
+      LOG(ERROR) << "consensus: the post-quantum signer failed to sign a vote; not broadcasting it";
+      co_return td::Unit{};
+    }
+    td::BufferSlice signature(pq_signature->signature);
 
     Signed<Vote> signed_vote{bus.local_id->idx, vote, std::move(signature)};
     td::BufferSlice serialized = signed_vote.serialize();

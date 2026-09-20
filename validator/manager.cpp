@@ -3393,9 +3393,24 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
     return {};
   }
   auto config = new_consensus_config.value();
-  return IValidatorGroup::create_bridge(PSTRING() << "valgroup" << shard.to_str(), shard, validator_id, session_id,
-                                        validator_set, key_seqno, config, keyring_, adnl_, quic_, overlays_,
-                                        get_all_validator_adnl_ids(), db_root_, actor_id(this),
+
+  // The consensus signer for this node, resolved once from custody: the exact post-quantum
+  // key the set records for us, or nothing. If we are the post-quantum validator but do not
+  // custody that exact key, we must not start an active group with a key we cannot sign
+  // with -- refuse and stay a full node, never fall back to the network keyring.
+  const tos::ValidatorId local_vid{validator_id.bits256_value()};
+  auto pq_signer = pq_custody_.get_matching_store(local_vid, *descr);
+  if (descr->is_pq() && pq_signer == nullptr) {
+    LOG(ERROR) << "refusing to create validator group for " << shard.to_str()
+               << ": this node is post-quantum validator " << local_vid.value.to_hex()
+               << " but does not custody the exact consensus key the set records for it; validation for this shard is "
+                  "disabled until the key is provisioned";
+    return {};
+  }
+
+  return IValidatorGroup::create_bridge(PSTRING() << "valgroup" << shard.to_str(), shard, validator_id,
+                                        std::move(pq_signer), session_id, validator_set, key_seqno, config, keyring_,
+                                        adnl_, quic_, overlays_, get_all_validator_adnl_ids(), db_root_, actor_id(this),
                                         get_collation_manager(adnl_id), init_session,
                                         opts_->check_unsafe_resync_allowed(validator_set->get_catchain_seqno()), opts_,
                                         opts_->need_monitor(shard, last_masterchain_state_));

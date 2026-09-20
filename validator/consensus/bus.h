@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "consensus/misbehavior.h"
+#include "crypto/pq/consensus-pq-signer.h"
 #include "keyring/keyring.hpp"
 #include "overlay/overlays.h"
 #include "quic/quic-sender.h"
@@ -200,6 +201,11 @@ class Bus : public td::actor::Bus {
   ShardIdFull shard;
   td::actor::ActorId<ManagerFacade> manager;
   td::actor::ActorId<keyring::Keyring> keyring;
+  // The post-quantum consensus signer for the local validator, if this node is one. It is
+  // the exact key the set records for us (resolved by PqConsensusCustody::get_matching_store
+  // at group creation), and is the only key consensus signs with — never the keyring.
+  // Null for an observer, which produces nothing.
+  std::shared_ptr<const tos::pq::ValidatorPQKeyStore> pq_signer;
   td::Ref<ValidatorManagerOptions> validator_opts;
 
   std::vector<PeerValidator> validator_set;

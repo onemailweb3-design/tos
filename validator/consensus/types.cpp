@@ -7,6 +7,7 @@
 #include <limits>
 
 #include "auto/tl/tos_api.hpp"
+#include "crypto/pq/mldsa44.h"
 #include "keys/encryptor.h"
 #include "td/utils/overloaded.h"
 
@@ -27,13 +28,14 @@ td::StringBuilder& operator<<(td::StringBuilder& stream, const PeerValidatorId& 
 bool PeerValidator::check_signature(ValidatorSessionId session, td::Slice data, td::Slice signature) const {
   auto signed_data = create_serialize_tl_object<tl::dataToSign>(session, td::BufferSlice(data));
   TD_PERF_COUNTER(check_signature_consensus);
-  // A malformed validator public key must fail the signature check, not abort
-  // the process: treat encryptor-construction failure as an invalid signature.
-  auto enc = key.create_encryptor();
-  if (enc.is_error()) {
-    return false;
-  }
-  return enc.move_as_ok()->check_signature(signed_data, signature).is_ok();
+  // The post-quantum consensus key the set records for this validator verifies its Simplex
+  // messages, under the frozen simplex_sign_context and no other. verify_mldsa44 applies the
+  // context itself, and fails closed on a malformed key, wrong length or bad signature, so a
+  // key of the wrong shape is an invalid signature, not a crash.
+  const auto msg = signed_data.as_slice();
+  return tos::pq::verify_mldsa44(std::string_view(msg.data(), msg.size()), tos::pq::simplex_sign_context,
+                                 std::string_view(signature.data(), signature.size()),
+                                 consensus_key.public_key) == tos::pq::VerifyResult::valid;
 }
 
 td::StringBuilder& operator<<(td::StringBuilder& stream, const PeerValidator& peer_validator) {

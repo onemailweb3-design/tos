@@ -270,6 +270,9 @@ struct BridgeCreationParams {
   ShardIdFull shard;
   td::actor::ActorId<ValidatorManager> manager;
   td::actor::ActorId<keyring::Keyring> keyring;
+  // The exact post-quantum signer for the local validator, resolved from custody by the
+  // manager; null for an observer or a not-yet-custodied local validator.
+  std::shared_ptr<const tos::pq::ValidatorPQKeyStore> pq_signer;
   td::Ref<ValidatorManagerOptions> validator_opts;
 
   td::Ref<block::ValidatorSet> validator_set;
@@ -353,6 +356,7 @@ class BridgeImpl final : public IValidatorGroup {
     bus->shard = params_.shard;
     bus->manager = manager_facade_.get();
     bus->keyring = params_.keyring;
+    bus->pq_signer = params_.pq_signer;
     bus->validator_opts = params_.validator_opts;
     bus->all_validators = params_.all_validators;
 
@@ -653,7 +657,8 @@ void CandidateBroadcastRelay::register_in(td::actor::Runtime& runtime) {
 }  // namespace consensus
 
 td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
-    td::Slice name, ShardIdFull shard, PublicKeyHash local_id, ValidatorSessionId session_id,
+    td::Slice name, ShardIdFull shard, PublicKeyHash local_id,
+    std::shared_ptr<const tos::pq::ValidatorPQKeyStore> pq_signer, ValidatorSessionId session_id,
     td::Ref<block::ValidatorSet> validator_set, BlockSeqno last_key_block_seqno, NewConsensusConfig config,
     td::actor::ActorId<keyring::Keyring> keyring, td::actor::ActorId<adnl::Adnl> adnl,
     td::actor::ActorId<adnl::AdnlSenderEx> adnl_sender, td::actor::ActorId<overlay::Overlays> overlays,
@@ -679,6 +684,7 @@ td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge(
       .shard = shard,
       .manager = validator_manager,
       .keyring = keyring,
+      .pq_signer = std::move(pq_signer),
       .validator_opts = opts,
       .validator_set = std::move(validator_set),
       .all_validators = std::move(all_validators),
@@ -715,6 +721,7 @@ td::actor::ActorOwn<IValidatorGroup> IValidatorGroup::create_bridge_observer(
       .shard = shard,
       .manager = validator_manager,
       .keyring = keyring,
+      .pq_signer = nullptr,  // an observer produces nothing, so it holds no consensus signer
       .validator_opts = opts,
       .validator_set = std::move(validator_set),
       .all_validators = std::move(all_validators),
