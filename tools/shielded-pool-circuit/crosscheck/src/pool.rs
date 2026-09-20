@@ -257,6 +257,86 @@ impl Pool {
         }
     }
 
+    /// Move the pool to the state a mature one would hold: `index` leaves
+    /// appended, and both anchor rings at the given occupancy.
+    ///
+    /// Nothing else changes -- the same code, the same verifying key, the
+    /// same configuration and the same balance. What changes is the three
+    /// places whose cost depends on how long the pool has been running, and
+    /// the point is to send the contract a real message once they do.
+    ///
+    /// The commitment root is left as it was. A deposit does not read it, and
+    /// inventing one that matched the substituted frontier would mean
+    /// reimplementing the tree here to no purpose.
+    pub fn age_to(&mut self, index: u64, frontier: Cell, anchors: Cell) -> Result<()> {
+        let mut account = self
+            .bc
+            .get_account(&self.addr)
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no account".to_string()))?
+            .clone();
+        let data = account
+            .get_data()
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no data".to_string()))?;
+
+        let mut slice = chain_block::SliceData::load_cell(data.clone())
+            .map_err(|error| CrossCheckError::Sandbox(format!("state slice: {error}")))?;
+        if slice.remaining_references() != 4 {
+            return Err(CrossCheckError::Sandbox(
+                "the state cell does not have the four references section 13 fixes".to_string(),
+            ));
+        }
+        // magic, version, commitment root: copied. Then the index, replaced.
+        let head = slice
+            .get_next_bits(32 + 16 + 256)
+            .map_err(|error| CrossCheckError::Sandbox(format!("state head: {error}")))?;
+        let old_index = slice
+            .get_next_int(64)
+            .map_err(|error| CrossCheckError::Sandbox(format!("state index: {error}")))?;
+        if old_index >= index {
+            return Err(CrossCheckError::Fixture(format!(
+                "aging to {index} would move the pool backwards from {old_index}"
+            )));
+        }
+        let tail_bits = slice.remaining_bits();
+        let tail = slice
+            .get_next_bits(tail_bits)
+            .map_err(|error| CrossCheckError::Sandbox(format!("state tail: {error}")))?;
+
+        let mut builder = BuilderData::new();
+        builder
+            .append_raw(&head, 32 + 16 + 256)
+            .and_then(|b| b.append_u64(index))
+            .and_then(|b| b.append_raw(&tail, tail_bits))
+            .map_err(|error| CrossCheckError::Sandbox(format!("aged state bits: {error}")))?;
+
+        // The frontier store is section 13's maybe-ref holder, not the
+        // dictionary itself.
+        let mut holder = BuilderData::new();
+        holder
+            .append_bit_one()
+            .and_then(|b| b.checked_append_reference(frontier))
+            .map_err(|error| CrossCheckError::Sandbox(format!("frontier holder: {error}")))?;
+        let holder = cell_of(holder)?;
+
+        let config = data
+            .reference(2)
+            .map_err(|error| CrossCheckError::Sandbox(format!("config ref: {error}")))?;
+        let vk = data
+            .reference(3)
+            .map_err(|error| CrossCheckError::Sandbox(format!("vk ref: {error}")))?;
+        for reference in [holder, anchors, config, vk] {
+            builder
+                .checked_append_reference(reference)
+                .map_err(|error| CrossCheckError::Sandbox(format!("aged state ref: {error}")))?;
+        }
+
+        if !account.set_data(cell_of(builder)?) {
+            return Err(CrossCheckError::Sandbox("the pool refused new data".to_string()));
+        }
+        self.bc.set_account(self.addr.clone(), account);
+        Ok(())
+    }
+
     /// Section 12.1's deposit body.
     pub fn deposit_body(amount: u64, owner_commitment: Fr, payload: Cell) -> Result<Cell> {
         let mut builder = BuilderData::new();

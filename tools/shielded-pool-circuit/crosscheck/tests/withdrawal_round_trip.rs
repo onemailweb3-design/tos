@@ -29,6 +29,7 @@ fn withdraw_to(name: &'static str, source: &'static str) -> support::Outcome {
         amount: DENOMINATION,
         destination_name: name,
         destination_source: source,
+        age: None,
     })
 }
 
@@ -67,7 +68,7 @@ fn a_withdrawal_that_is_refused_comes_back_as_a_note() {
 
     /// Section 14.1. The recovery runs under this, bought by an ACCEPT that
     /// the withdrawal fee already paid for.
-    const BOUNCE_GAS_CEILING: i64 = 500_000;
+    const BOUNCE_GAS_CEILING: i64 = 290_000;
     assert_eq!(outcome.recovery_exit, 0, "the recovery itself failed");
     eprintln!(
         "the recovery: {} gas, {}% of the {BOUNCE_GAS_CEILING} bounce ceiling",

@@ -51,9 +51,15 @@ const OP_RESERVE_TOPUP: u32 = 0x5348_5003;
 const OP_UNKNOWN: u32 = 0x5348_50ff;
 
 /// Section 14.1, frozen by the production rule at the 3,500 Poseidon2
-/// tariff: a deposit measures 132,220 and the rule gives 170,000.
-const DEPOSIT_GAS_CEILING: i64 = 170_000;
-const DEPOSIT_MEASURED_MAX_GAS: i64 = 132_220;
+/// tariff: a deposit measures 224,043 and the rule gives 290,000.
+///
+/// The maximum is measured at the worst leaf index a pool can reach with both
+/// anchor rings full, not against a pool that has just been deployed. A fresh
+/// pool costs 147,595; the growth is the frontier slots an append reads and
+/// the ring a mutation writes into, and it is what
+/// `deposit_in_a_mature_pool.rs` in the crosscheck crate measures.
+const DEPOSIT_GAS_CEILING: i64 = 290_000;
+const DEPOSIT_MEASURED_MAX_GAS: i64 = 224_043;
 /// ConfigParam 21 of this chain's zero state, which
 /// `chain_gas_envelope_sandbox.rs` generates and holds against the
 /// executor's table.

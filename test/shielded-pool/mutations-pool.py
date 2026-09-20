@@ -24,8 +24,14 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 POOL = ROOT / 'crypto/smartcont/tos-shielded-pool-v1.fc'
 CONTRACTS = ROOT / 'tosctl/src/node-control/contracts'
+# The ceilings have to hold for a pool that has been running, and only the
+# crosscheck crate can age one: it owns the probes that build a worn frontier
+# and full anchor rings.
+CROSSCHECK = ROOT / 'tools/shielded-pool-circuit/crosscheck'
 SUITE = 'shielded_pool_sandbox'
 TRANSACT_SUITE = 'shielded_pool_transact_sandbox'
+MATURE_DEPOSIT_SUITE = 'deposit_in_a_mature_pool'
+MATURE_TRANSACT_SUITE = 'transact_in_a_mature_pool'
 
 LEDGER_TEST = 'a_deposit_is_the_note_the_contract_computed_at_the_index_it_assigned'
 NOTE_TEST = 'the_depositor_cannot_choose_its_note'
@@ -39,6 +45,8 @@ ATOMIC_TEST = 'a_failure_at_any_step_changes_nothing'
 COST_TEST = 'a_transact_fits_its_ceiling_and_the_gas_this_chain_grants'
 WITHDRAWAL_TEST = 'a_well_formed_withdrawal_reaches_the_proof_like_a_transfer_does'
 PROOF_TEST = 'a_proof_that_does_not_verify_stops_the_transaction'
+MATURE_DEPOSIT_TEST = 'a_deposit_fits_its_ceiling_at_every_age'
+MATURE_TRANSACT_TEST = 'a_withdrawal_and_its_bounce_in_a_pool_with_history'
 
 
 @dataclass
@@ -52,6 +60,7 @@ class Case:
     # The deposit path and the transact path have suites of their own; a
     # mutation is only evidence against the suite that can see it.
     suite: str = SUITE
+    crate: Path = CONTRACTS
 
 
 CASES = [
@@ -71,8 +80,20 @@ CASES = [
          '    msg_value >= deposit_amount + get_compute_fee(0, deposit_gas_ceiling()));',
          '    msg_value >= get_compute_fee(0, deposit_gas_ceiling()));', FUNDING_TEST),
     Case('gas-ceiling-live', 'the ceiling is below what the path needs', POOL,
-         'int deposit_gas_ceiling() asm "170000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "290000 PUSHINT";',
          'int deposit_gas_ceiling() asm "5000 PUSHINT";', LEDGER_TEST),
+    # The ceilings the first measurement gave, which a pool with any history
+    # refuses. A deposit ceiling of 170,000 stops a pool at its thirty-fifth
+    # note; a bounce ceiling of 210,000 leaves a payout that has already come
+    # back with no recovery note to replace it.
+    Case('gas-ceiling-fresh-pool', 'the deposit ceiling covers only a new pool', POOL,
+         'int deposit_gas_ceiling() asm "290000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "170000 PUSHINT";',
+         MATURE_DEPOSIT_TEST, MATURE_DEPOSIT_SUITE, CROSSCHECK),
+    Case('bounce-ceiling-fresh-pool', 'the bounce ceiling covers only a new pool', POOL,
+         'int bounce_gas_ceiling() asm "290000 PUSHINT";',
+         'int bounce_gas_ceiling() asm "210000 PUSHINT";',
+         MATURE_TRANSACT_TEST, MATURE_TRANSACT_SUITE, CROSSCHECK),
 
     # Section 12.1: the body, and what may be deposited.
     Case('body-refs', 'a deposit body with no payload is not refused here', POOL,
@@ -161,7 +182,7 @@ CASES = [
          '  groth16_require_valid(vk, proof_a, proof_b, proof_c, inputs);\n', '',
          PROOF_TEST, TRANSACT_SUITE),
     Case('transact-gas-ceiling', 'the ceiling is below what the path needs', POOL,
-         'int transact_gas_ceiling() asm "1960000 PUSHINT";',
+         'int transact_gas_ceiling() asm "2170000 PUSHINT";',
          'int transact_gas_ceiling() asm "5000 PUSHINT";', ORDER_TEST, TRANSACT_SUITE),
 
     # A message with no operation must not be mistaken for one.
@@ -170,15 +191,16 @@ CASES = [
 ]
 
 
-def run_suite(suite: str = SUITE) -> subprocess.CompletedProcess:
+def run_suite(suite: str = SUITE, crate: Path = CONTRACTS) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env['PATH'] = str(Path.home() / '.cargo/bin') + os.pathsep + env.get('PATH', '')
     env['CARGO_TERM_COLOR'] = 'never'
     # TOS_ROOT only locates the built func/fift toolchain and stdlib.fc; the
     # library under test is found from the crate manifest, inside this tree.
     env.setdefault('TOS_ROOT', str(Path.home() / 'tos-privacy'))
-    return subprocess.run(['cargo', 'test', '--test', suite, '--', '--test-threads=1'],
-                          cwd=CONTRACTS, capture_output=True, text=True, timeout=3600, env=env)
+    return subprocess.run(['cargo', 'test', '--release', '--test', suite, '--',
+                           '--test-threads=1'],
+                          cwd=crate, capture_output=True, text=True, timeout=3600, env=env)
 
 
 def failed_tests(output: str) -> set[str]:
@@ -193,9 +215,9 @@ def main() -> int:
     if options.only and len(cases) != len(options.only):
         raise SystemExit(f'unknown case name in {options.only}')
 
-    baseline_suites = sorted({c.suite for c in cases})
-    for suite in baseline_suites:
-        baseline = run_suite(suite)
+    baseline_suites = sorted({(c.suite, c.crate) for c in cases})
+    for suite, crate in baseline_suites:
+        baseline = run_suite(suite, crate)
         if baseline.returncode:
             raise SystemExit(f'{suite} is not green before any mutation:\n'
                              + baseline.stdout + baseline.stderr)
@@ -209,7 +231,7 @@ def main() -> int:
             raise SystemExit(f'{case.name}: anchor appears {count} times, expected once')
         try:
             case.path.write_text(original.replace(case.before, case.after))
-            result = run_suite(case.suite)
+            result = run_suite(case.suite, case.crate)
             failures = failed_tests(result.stdout + result.stderr)
             if result.returncode == 0:
                 survivors.append(f'{case.name}: the suite stayed green')
@@ -226,8 +248,8 @@ def main() -> int:
         finally:
             case.path.write_text(original)
 
-    for suite in baseline_suites:
-        again = run_suite(suite)
+    for suite, crate in baseline_suites:
+        again = run_suite(suite, crate)
         if again.returncode:
             raise SystemExit(f'{suite} did not come back green:\n'
                              + again.stdout + again.stderr)

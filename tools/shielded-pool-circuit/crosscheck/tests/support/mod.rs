@@ -106,6 +106,8 @@ pub struct Outcome {
     pub destination: String,
     pub transactions: usize,
     /// What the transact itself cost, payout included.
+    /// The transact's own exit code.
+    pub exit: i32,
     pub gas: i64,
     /// What the recovery cost, which is a transaction of its own. Zero when
     /// nothing bounced.
@@ -125,6 +127,24 @@ pub struct Withdrawal<'a> {
     pub amount: u64,
     pub destination_name: &'a str,
     pub destination_source: &'a str,
+    /// The leaf index and anchor-ring occupancy the pool is moved to after
+    /// its deposits and before the withdrawal, or `None` to leave the pool as
+    /// freshly deployed.
+    ///
+    /// None of the eighteen public inputs mentions a leaf index -- the proof
+    /// commits to note *bodies* and the contract pairs each with the index it
+    /// assigns -- so moving the index does not invalidate the proof, and the
+    /// anchor is the current root, which is left alone.
+    pub age: Option<Age>,
+}
+
+/// Where a pool is in its life: how many leaves it has taken, and how full
+/// the two anchor rings are.
+#[derive(Clone, Copy)]
+pub struct Age {
+    pub index: u64,
+    pub recent: u64,
+    pub epoch: u64,
 }
 
 /// Two deposits, then one proved withdrawal of `amount` to the destination.
@@ -293,6 +313,18 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         "two deposits did not leave the pool owing two denominations"
     );
 
+    if let Some(age) = withdrawal.age {
+        let frontier_store = shielded_pool_circuit_crosscheck::frontier_probe::FrontierProbe::deploy()
+            .expect("frontier probe")
+            .fill(age.index)
+            .expect("a frontier");
+        let anchors = shielded_pool_circuit_crosscheck::anchor_probe::AnchorProbe::deploy()
+            .expect("anchor probe")
+            .fill(age.recent, age.epoch)
+            .expect("anchor rings");
+        pool.age_to(age.index, frontier_store, anchors).expect("age the pool");
+    }
+
     let result = pool.send(COMPUTE_FEE * 4, body).expect("the withdrawal");
 
     // The transact itself succeeded.
@@ -303,12 +335,15 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         }
         chain_block::TrComputePhase::Skipped(s) => panic!("compute skipped: {:?}", s.reason),
     };
-    assert_eq!(exit, 0, "the withdrawal was refused with exit {exit}");
+    assert!(
+        exit == 0 || withdrawal.age.is_some(),
+        "the withdrawal was refused with exit {exit}"
+    );
 
     // At least the relay's message into the pool and the pool's payout out of
     // it. Whether a third follows is what the two tests below differ on.
     assert!(
-        result.transaction_count() >= 2,
+        result.transaction_count() >= 2 || withdrawal.age.is_some(),
         "the pool sent no payout at all: {} transactions",
         result.transaction_count()
     );
@@ -355,6 +390,7 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         bounced_from,
         destination: destination.to_string(),
         transactions,
+        exit,
         gas,
         recovery_gas,
         recovery_exit,

@@ -180,6 +180,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::args().nth(1).map(|value| value.parse()).transpose()?.unwrap_or(2_000);
     let repeats: usize =
         std::env::args().nth(2).map(|value| value.parse()).transpose()?.unwrap_or(7);
+    // The tariff the VMs currently carry, so the report can say whether it is
+    // still inside the bracket. Passed in rather than read from the VM: a tool
+    // that reads the number it is judging cannot judge it.
+    let current_price: u32 =
+        std::env::args().nth(3).map(|value| value.parse()).transpose()?.unwrap_or(3_500);
 
     let mut bc = Blockchain::with_global_version_and_base_workchain(ACTIVE_VERSION)?;
     bc.set_workchain(0);
@@ -373,7 +378,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         used_low / tightest
     );
 
-    println!("{:<18}{:>14}{:>14}{:>14}", "instruction", "low", "high", "current");
+    println!("{:<18}{:>14}{:>14}{:>10}  {}", "instruction", "low", "high", "current", "verdict");
     for (name, per_op) in &unpriced {
         let implied: Vec<f64> = usable
             .iter()
@@ -381,11 +386,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         let low = implied.iter().cloned().fold(f64::MAX, f64::min);
         let high = implied.iter().cloned().fold(0.0, f64::max);
-        let current = 3000.0;
-        println!(
-            "{name:<18}{low:>14.0}{high:>14.0}{:>14}",
-            if current >= low && current <= high { "3000, inside" } else { "3000, OUTSIDE" }
-        );
+        // Above the bracket is the safe side and is where a rounded-up tariff
+        // belongs; below it is the one that matters, because underpricing an
+        // instruction is a denial-of-service surface.
+        let current = f64::from(current_price);
+        let verdict = if current < low {
+            "BELOW the bracket"
+        } else if current > high {
+            "above, rounded up"
+        } else {
+            "inside"
+        };
+        println!("{name:<18}{low:>14.0}{high:>14.0}{current_price:>10}  {verdict}");
     }
     println!("\nThis is one host and one VM. The profile requires the target CPU,");
     println!("and a tariff must cover the slower of the two implementations, so");

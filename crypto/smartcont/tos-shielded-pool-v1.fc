@@ -46,26 +46,44 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 ;;       the final Poseidon2 tariff, on the exact candidate code and config
 ;;   C = max(10000, round_up_10000(ceil(M * 5 / 4)))
 ;;
-;; All four are now frozen, at the Poseidon2 tariff of 3,500 that measuring
-;; the instruction against already-priced ones settled. The measured maxima,
-;; on the deployed configuration, are:
+;; M is the maximum over the pool's whole life, not over a pool that has just
+;; been deployed. Three of the costs here grow with history and none of them
+;; is visible in a freshly deployed pool:
+;;
+;;   * an append reads `digit + 1` frontier slots at each level, and the
+;;     digits are the leaf index in base seven -- twelve reads in total near
+;;     genesis, up to seventy-nine at the index with the largest digit sum;
+;;   * the 4,096-slot recent-root ring and the 2,880-slot epoch ring are
+;;     empty at genesis and stay full for the rest of the pool's life, which
+;;     is worth about 14,000 gas per mutation;
+;;   * a proof against a recent or epoch root reads the ring, which a proof
+;;     against the current root does not.
+;;
+;; The maxima below are measured at the worst leaf index a pool can reach,
+;; with both rings full. A withdrawal and its bounce cannot both be at their
+;; worst in the same transaction -- the recovery note is appended after the
+;; three outputs -- so the two were measured separately.
 ;;
 ;;   reserve top-up     2,480    0 Poseidon2 operations
-;;   deposit          132,220   14
-;;   recovery         165,324   15
-;;   withdrawal     1,565,327  142   -- the worst legal transact
+;;   deposit          224,043   14
+;;   recovery         229,722   15
+;;   withdrawal     1,730,942  142   -- the worst legal transact
 ;;
-;; A transfer is 1,539,618, so a withdrawal is what sets the transact ceiling.
-;; The top-up's ceiling is the rule's floor rather than its measurement.
+;; A withdrawal is what sets the transact ceiling; a transfer is cheaper.
+;; The withdrawal figure varies by 282 gas between runs: a transact inserts
+;; two nullifiers, and whether the second one's predecessor is the head
+;; sentinel or the leaf just inserted depends on their order, which is the
+;; owner's to choose. The figure above is the more expensive branch.
+;; The top-up's ceiling is the rule's floor rather than its measurement: that
+;; path reads no state, so its cost does not move with the pool's age.
 ;;
-;; The transact figure is measured with an anchor of the current root, which
-;; is the cheapest of the three kinds; a recent or epoch anchor adds one
-;; dictionary lookup, on the order of hundreds of gas against 394,673 of
-;; headroom.
+;; The recovery ceiling is bounded above as well as below. The withdrawal fee
+;; has to cover the payout message plus a recovery at this ceiling, so raising
+;; it past what the fee affords fails every withdrawal at exit 243.
 int topup_gas_ceiling() asm "10000 PUSHINT";
-int deposit_gas_ceiling() asm "170000 PUSHINT";
-int transact_gas_ceiling() asm "1960000 PUSHINT";
-int bounce_gas_ceiling() asm "210000 PUSHINT";
+int deposit_gas_ceiling() asm "290000 PUSHINT";
+int transact_gas_ceiling() asm "2170000 PUSHINT";
+int bounce_gas_ceiling() asm "290000 PUSHINT";
 
 ;; Section 16.1, in its order.
 () handle_deposit(int msg_value, slice body) impure {
