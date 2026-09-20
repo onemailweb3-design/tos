@@ -64,6 +64,19 @@ tos::tl_object_ptr<tos::tos_api::consensus_simplex_notarizeVote> a_notarize_vote
       tos::create_tl_object<tos::tos_api::consensus_candidateId>(/*slot=*/1789434, fill(0x5a)));
 }
 
+// An empty candidate's authentication: consensus.empty carries the same 2420-byte
+// signature. A full candidate (consensus.block) additionally carries the block as a
+// `candidate:bytes` and rides the FEC broadcast path (max 16 MiB), not the direct
+// message carrier, so its size is not a carrier constraint; this is the signature-
+// carrying part measured for completeness.
+std::size_t empty_candidate_bytes(const td::BufferSlice& signature) {
+  auto empty = tos::create_tl_object<tos::tos_api::consensus_empty>(
+      /*slot=*/1789434, tos::create_tl_object<tos::tos_api::consensus_candidateId>(1789433, fill(0x5b)),
+      tos::create_tl_object<tos::tos_api::tosNode_blockIdExt>(-1, 0x8000000000000000LL, 42, fill(0x01), fill(0x02)),
+      signature.clone());
+  return tos::serialize_tl_object(empty, true).size();
+}
+
 std::size_t signed_vote_bytes(const td::BufferSlice& signature) {
   return tos::serialize_tl_object(
              tos::create_tl_object<tos::tos_api::consensus_simplex_vote>(a_notarize_vote(), signature.clone()), true)
@@ -145,6 +158,7 @@ int main() {
 
   // Sizes, exact.
   const std::size_t vote_sz = signed_vote_bytes(signature);
+  const std::size_t empty_candidate_sz = empty_candidate_bytes(signature);
   const std::size_t cert21 = certificate_bytes(21, signature);
   const std::size_t cert100 = certificate_bytes(100, signature);
   const std::size_t cert400 = certificate_bytes(400, signature);
@@ -156,6 +170,8 @@ int main() {
   std::printf("verify_mldsa44      median=%.1f us over %d samples\n", median_micros(verify_us), kVerifyIters);
   std::printf("\n");
   std::printf("signed vote         %zu bytes\n", vote_sz);
+  std::printf("empty candidate     %zu bytes  (auth only; full candidate rides FEC, not this carrier)\n",
+              empty_candidate_sz);
   std::printf("certificate  21     %zu bytes\n", cert21);
   std::printf("certificate 100     %zu bytes\n", cert100);
   std::printf("certificate 400     %zu bytes\n", cert400);
