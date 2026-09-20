@@ -1225,6 +1225,27 @@ class TestConsensus : public td::actor::Actor {
     return total - journal.size();
   }
 
+  // Records that hold a signature now and did not before. Each one cost exactly one call to
+  // the signer, which is what makes the signer count comparable to the journal.
+  static size_t count_newly_signed(const std::vector<JournalledVote>& before,
+                                   const std::vector<JournalledVote>& after) {
+    std::map<td::Slice, bool> signed_before;
+    for (const auto& entry : before) {
+      signed_before.emplace(entry.key.as_slice(), entry.is_signed);
+    }
+    size_t newly_signed = 0;
+    for (const auto& entry : after) {
+      if (!entry.is_signed) {
+        continue;
+      }
+      auto it = signed_before.find(entry.key.as_slice());
+      if (it == signed_before.end() || !it->second) {
+        ++newly_signed;
+      }
+    }
+    return newly_signed;
+  }
+
   void arm_write_failures(const Instance& instance, td::uint32 tl_constructor_id, size_t count) const {
     std::scoped_lock lock(instance.db_inner->mutex);
     instance.db_inner->fail_writes_of[tl_constructor_id] = count;
@@ -1240,6 +1261,16 @@ class TestConsensus : public td::actor::Actor {
     auto it = instance.db_inner->map.find(td::BufferSlice{key});
     CHECK(it != instance.db_inner->map.end());
     it->second = std::move(value);
+  }
+
+  void put_journal_record(const Instance& instance, td::BufferSlice key, td::BufferSlice value) const {
+    std::scoped_lock lock(instance.db_inner->mutex);
+    instance.db_inner->map[std::move(key)] = std::move(value);
+  }
+
+  void erase_journal_record(const Instance& instance, td::Slice key) const {
+    std::scoped_lock lock(instance.db_inner->mutex);
+    instance.db_inner->map.erase(td::BufferSlice{key});
   }
 
   td::actor::Task<> run_vote_journal_test() {
@@ -1290,13 +1321,19 @@ class TestConsensus : public td::actor::Actor {
     }
 
     // --- Phase 2: a restart replays the stored bytes and signs nothing again ---
+    //
+    // New votes are blocked for the duration by rejecting every intent write, so that the
+    // signer count over this window belongs to the replay and nothing else. Without that,
+    // a vote signed just before the stop with its signed-record write still pending is a
+    // legitimate outcome that is indistinguishable from a stray signature, and the count
+    // would have to be loosened until it stopped proving anything. Phase 4 is what
+    // establishes that a rejected intent really does stop a vote from being signed.
+    arm_write_failures(instance, tos_api::consensus_simplex_db_ourVoteIntent::ID, 1000);
     auto signatures_before = store.consensus_signatures_produced();
     start_instance(0, 0);
-    auto replay_deadline = td::Timestamp::in(DURATION * 0.2);
-    while (own_vote_journal(instance).size() <= before.size() && !replay_deadline.is_in_past()) {
-      co_await td::actor::coro_sleep(td::Timestamp::in(0.01));
-    }
+    co_await td::actor::coro_sleep(td::Timestamp::in(std::min(DURATION * 0.2, 1.0)));
     co_await stop_instance(0, 0);
+    arm_write_failures(instance, tos_api::consensus_simplex_db_ourVoteIntent::ID, 0);
 
     auto after = own_vote_journal(instance);
     std::map<td::Slice, const JournalledVote*> after_by_key;
@@ -1315,30 +1352,17 @@ class TestConsensus : public td::actor::Actor {
         co_return td::Unit{};
       }
     }
-    // Replaying an already-signed vote must not reach the signer at all. Every signature
-    // this run produced must therefore account for a record that is signed now and was not
-    // signed before -- a vote newly cast, or an intent the previous stop left behind. A
-    // record already signed before the restart accounts for nothing, so re-signing one
-    // pushes the count past the bound. Counting merely "new records" would not: a vote left
-    // as an intent by this stop would pay for the stray signature.
-    std::map<td::Slice, bool> signed_before;
-    for (const auto& entry : before) {
-      signed_before.emplace(entry.key.as_slice(), entry.is_signed);
-    }
-    size_t newly_signed = 0;
-    for (const auto& entry : after) {
-      if (!entry.is_signed) {
-        continue;
-      }
-      auto it = signed_before.find(entry.key.as_slice());
-      if (it == signed_before.end() || !it->second) {
-        ++newly_signed;
-      }
-    }
+    // Replaying an already-signed vote must not reach the signer at all. With no new vote
+    // able to start, every signature this window produced must have turned some record from
+    // an intent into a signed one, and every such record must have cost exactly one
+    // signature. An equality, not a bound: a record that was already signed accounts for
+    // nothing, so re-signing one breaks it in one direction and a lost signature breaks it
+    // in the other.
+    auto newly_signed = count_newly_signed(before, after);
     auto signatures_made = store.consensus_signatures_produced() - signatures_before;
-    if (signatures_made > newly_signed) {
-      fail(PSTRING() << "the restart produced " << signatures_made << " signatures but only " << newly_signed
-                     << " records became signed; replay re-signed votes it already held");
+    if (signatures_made != newly_signed) {
+      fail(PSTRING() << "the restart produced " << signatures_made << " signatures while " << newly_signed
+                     << " records became signed; replay must sign exactly the intents it recovered");
       co_return td::Unit{};
     }
 
@@ -1347,12 +1371,9 @@ class TestConsensus : public td::actor::Actor {
     // have been left in: the decision committed, the signature not. Nothing could have
     // observed that vote, so signing it again introduces no second object.
     const JournalledVote* newest_signed = nullptr;
-    size_t after_intents = 0;
     for (const auto& entry : after) {
       if (entry.is_signed) {
         newest_signed = &entry;
-      } else {
-        ++after_intents;
       }
     }
     if (newest_signed == nullptr) {
@@ -1367,10 +1388,14 @@ class TestConsensus : public td::actor::Actor {
                              create_serialize_tl_object<tos_api::consensus_simplex_db_ourVoteIntent>(
                                  take_unsigned_vote(original_record), downgraded_seqno));
 
+    // New votes are blocked here for the same reason as in phase 2: the signer count is
+    // only evidence while nothing else can reach the signer.
+    arm_write_failures(instance, tos_api::consensus_simplex_db_ourVoteIntent::ID, 1000);
+    auto before_resign = own_vote_journal(instance);
     signatures_before = store.consensus_signatures_produced();
-    auto journalled_before = own_vote_journal(instance).size();
+    auto journalled_before = before_resign.size();
     start_instance(0, 0);
-    auto resign_deadline = td::Timestamp::in(DURATION * 0.2);
+    auto resign_deadline = td::Timestamp::in(std::min(DURATION * 0.2, 1.0));
     while (!resign_deadline.is_in_past()) {
       auto current = own_vote_journal(instance);
       auto it = std::find_if(current.begin(), current.end(),
@@ -1381,6 +1406,7 @@ class TestConsensus : public td::actor::Actor {
       co_await td::actor::coro_sleep(td::Timestamp::in(0.01));
     }
     co_await stop_instance(0, 0);
+    arm_write_failures(instance, tos_api::consensus_simplex_db_ourVoteIntent::ID, 0);
 
     auto resigned = own_vote_journal(instance);
     auto resigned_it = std::find_if(resigned.begin(), resigned.end(), [&](const JournalledVote& v) {
@@ -1401,14 +1427,18 @@ class TestConsensus : public td::actor::Actor {
       fail("the re-signed vote reproduced the original signature byte for byte");
       co_return td::Unit{};
     }
-    auto resign_new_votes = resigned.size() - journalled_before;
+    if (resigned.size() != journalled_before) {
+      fail(PSTRING() << "the journal changed size while only recovering an intent: " << journalled_before << " -> "
+                     << resigned.size() << " records");
+      co_return td::Unit{};
+    }
+    auto resign_newly_signed = count_newly_signed(before_resign, resigned);
     auto resign_signatures = store.consensus_signatures_produced() - signatures_before;
-    // One signature for the downgraded vote, plus at most one per newly journalled vote and
-    // per intent the previous stop had left behind. Anything more means replay signed votes
-    // it already held.
-    if (resign_signatures < 1 || resign_signatures > resign_new_votes + after_intents + 1) {
-      fail(PSTRING() << "recovering one intent-only vote produced " << resign_signatures << " signatures for "
-                     << resign_new_votes << " new votes and " << after_intents << " carried-over intents");
+    // Exactly the intents that were recovered, no more and no fewer. The downgraded record
+    // is one of them, so this is at least one.
+    if (resign_signatures != resign_newly_signed || resign_signatures < 1) {
+      fail(PSTRING() << "recovering intents produced " << resign_signatures << " signatures while "
+                     << resign_newly_signed << " records became signed");
       co_return td::Unit{};
     }
 
@@ -1474,8 +1504,9 @@ class TestConsensus : public td::actor::Actor {
     // The signature inside is genuine, so verifying it proves nothing; what is broken is
     // the key/value binding. Skipping such a record would drop the vote out of the dedup
     // set and let the node decide and sign it again, which is the same failure as accepting
-    // a signature it cannot verify. Two shapes are checked: a valid record filed under
-    // another vote's key, and a record whose body cannot be read at all.
+    // a signature it cannot verify. Three shapes are checked: a valid record filed under
+    // another vote's key, a record whose body cannot be read at all, and an intact record
+    // under a key that cannot be read.
     auto journal_before_binding = own_vote_journal(instance);
     std::vector<const JournalledVote*> binding_signed;
     for (const auto& entry : journal_before_binding) {
@@ -1491,17 +1522,30 @@ class TestConsensus : public td::actor::Actor {
     auto misfiled_original = binding_signed[0]->value.clone();
     auto other_record = binding_signed[1]->value.clone();
 
-    for (int shape = 0; shape < 2; ++shape) {
+    // A key that carries the vote-record prefix, so it is still enumerated, but cannot be
+    // parsed. It is added alongside the real records rather than replacing one.
+    td::BufferSlice unreadable_key(4 + 32 + 1);
+    const td::uint32 key_prefix = tos_api::consensus_simplex_db_key_vote::ID;
+    std::memcpy(unreadable_key.as_slice().data(), &key_prefix, sizeof(key_prefix));
+    std::memset(unreadable_key.as_slice().data() + sizeof(key_prefix), 0x5a,
+                unreadable_key.size() - sizeof(key_prefix));
+
+    for (int shape = 0; shape < 3; ++shape) {
       if (shape == 0) {
         // A valid signed record, filed under a different vote's key.
         overwrite_journal_record(instance, misfiled_key.as_slice(), other_record.clone());
-      } else {
+      } else if (shape == 1) {
         // The constructor tag says this is one of ours; the body is unreadable.
         td::BufferSlice unreadable(8);
         const td::uint32 tag = tos_api::consensus_simplex_db_ourSignedVote::ID;
         std::memcpy(unreadable.as_slice().data(), &tag, sizeof(tag));
         std::memset(unreadable.as_slice().data() + sizeof(tag), 0xff, unreadable.size() - sizeof(tag));
         overwrite_journal_record(instance, misfiled_key.as_slice(), std::move(unreadable));
+      } else {
+        // A perfectly good record of our own, under a key that cannot be read. The record
+        // is intact, so only the key says it is lost.
+        overwrite_journal_record(instance, misfiled_key.as_slice(), misfiled_original.clone());
+        put_journal_record(instance, unreadable_key.clone(), other_record.clone());
       }
 
       signatures_before = store.consensus_signatures_produced();
@@ -1522,6 +1566,7 @@ class TestConsensus : public td::actor::Actor {
       }
     }
     overwrite_journal_record(instance, misfiled_key.as_slice(), std::move(misfiled_original));
+    erase_journal_record(instance, unreadable_key.as_slice());
 
     // --- Phase 7: a signature this node cannot verify as its own stops the group ---
     // The node must not paper over it by signing again: it cannot know what it already

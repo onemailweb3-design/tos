@@ -42,6 +42,19 @@ using db_candidateResolver_notarCertRef = tl_object_ptr<db_candidateResolver_not
 
 namespace {
 
+// What a stored record claims to be, readable even when the rest of it -- or the key it is
+// filed under -- cannot be parsed. The leading constructor tag is the last thing to go, and
+// it is enough to tell a record of this node's own vote, which must never be silently
+// dropped, from a cached certificate, which can be obtained again.
+bool claims_to_be_our_vote(td::Slice serialized) {
+  td::uint32 tag = 0;
+  if (serialized.size() < sizeof(tag)) {
+    return false;
+  }
+  std::memcpy(&tag, serialized.data(), sizeof(tag));
+  return tag == tl::db_ourVoteIntent::ID || tag == tl::db_ourSignedVote::ID;
+}
+
 class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<Bus> {
  public:
   TOS_RUNTIME_DEFINE_EVENT_HANDLER();
@@ -197,6 +210,15 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
       // (candidate-resolver DB resume).
       auto key_r = fetch_tl_object<tl::db_key_vote>(key_str, true);
       if (key_r.is_error()) {
+        // The record can still say whose it is. A damaged key under which one of this
+        // node's own votes is filed loses that vote from recovery exactly as a damaged
+        // value would, so it stops the session rather than being skipped.
+        if (claims_to_be_our_vote(value_str)) {
+          bus.vote_journal_failure = PSTRING() << "a journalled vote is filed under an unreadable key: "
+                                               << key_r.error().message();
+          LOG(ERROR) << "Simplex db init_votes: " << bus.vote_journal_failure;
+          continue;
+        }
         LOG(WARNING) << "Simplex db init_votes: malformed vote key: " << key_r.error().message();
         continue;
       }
@@ -204,15 +226,9 @@ class DbImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo<B
 
       auto value_r = fetch_tl_object<tl::db_Vote>(value_str, true);
       if (value_r.is_error()) {
-        // The leading constructor tag survives a body this node cannot parse, and it is
-        // what says whether the record claims to be one of ours. A damaged record of our
-        // own vote is a reason to stop rather than to decide that vote again; a damaged
-        // certificate is peers' data and can be obtained again.
-        td::uint32 claimed_tag = 0;
-        if (value_str.size() >= sizeof(claimed_tag)) {
-          std::memcpy(&claimed_tag, value_str.data(), sizeof(claimed_tag));
-        }
-        if (claimed_tag == tl::db_ourVoteIntent::ID || claimed_tag == tl::db_ourSignedVote::ID) {
+        // A damaged record of our own vote is a reason to stop rather than to decide that
+        // vote again; a damaged certificate is peers' data and can be obtained again.
+        if (claims_to_be_our_vote(value_str)) {
           bus.vote_journal_failure = PSTRING() << "a journalled vote under key 0x" << key->vote_hash_.to_hex()
                                                << " cannot be read: " << value_r.error().message();
           LOG(ERROR) << "Simplex db init_votes: " << bus.vote_journal_failure;
