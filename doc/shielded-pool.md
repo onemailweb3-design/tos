@@ -79,7 +79,29 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   The hash here is a placeholder (`cell_hash`). Nothing in this file depends on
   which hash is used, and nothing in it says anything about gas per transfer.
 
-**Nothing else.** No pool contract, no circuit, no instruction, no wallet.
+**The Poseidon2 instruction pair**
+
+- `POSEIDON2_PERM8` (`0xF93200`) and `POSEIDON2_HASH7` (`0xF93201`), implemented
+  in both VMs at global version 17, with the earlier signature instruction left
+  on its own minimum of 16. The frozen t=8 parameters are generated from a
+  pinned upstream commit by `crypto/poseidon2/manifest-gen`, which also emits
+  the known-answer vectors — that reference publishes vectors only for narrower
+  widths, so the t=8 ones had to be produced by running it. Each VM rebuilds the
+  same manifest byte stream from its own tables and compares the digest.
+
+  Seventeen mutations (`test/poseidon2/mutations.py`) are run against both VMs
+  and each is killed by the assertion it was aimed at, with the other VM left
+  green. Two are worth remembering: perturbing the internal matrix changes no
+  output, because the permutation reads only the diagonal, so the manifest
+  digest is the only thing standing behind that table; and running one fewer
+  partial round leaves the manifest intact, so only the vectors catch it.
+
+  The gas price is a **development tariff** of 3,000. It is not a measurement
+  and not a production claim: benchmarking the pinned implementation on target
+  CPUs and choosing a price with a stated margin still has to happen before
+  activation, in both VMs at once.
+
+**Nothing else.** No pool contract, no circuit, no wallet.
 
 ## What gates this branch
 
@@ -96,16 +118,16 @@ Two things do not wait, because their windows close earlier than their
 urgency suggests:
 
 - the Poseidon2 instruction is a genesis-time decision (adding it afterwards is
-  a hard fork), even though the pool can run without it at roughly 45 times the
-  hashing cost;
-- the hash parameters are now frozen by the implementation profile — t=8,
-  `RF=8`, `RP=57`, against a pinned upstream commit — so what remains is
-  implementing them with vectors generated from that pin, not choosing them.
-  The earlier claim on this branch that `RP` matched no published reference,
-  and the `RP=22` figure behind it, were wrong and have been withdrawn
-  upstream. Every gas figure still rests on these parameters, and the
-  throughput numbers in the older documents were measured against a different
-  shape.
+  a hard fork) — **done**: both VMs implement it at version 17. What has not
+  been done is pricing it against measured cost;
+- the hash parameters are frozen by the implementation profile — t=8, `RF=8`,
+  `RP=57`, against a pinned upstream commit — and are now **implemented**, with
+  vectors generated from that pin. The earlier claim on this branch that `RP`
+  matched no published reference, and the `RP=22` figure behind it, were wrong
+  and have been withdrawn upstream. Every gas figure still rests on these
+  parameters, and the throughput numbers in the older documents were measured
+  against a different shape, so they stay historical until a whole transaction
+  is measured.
 
 ## Working rules here
 
