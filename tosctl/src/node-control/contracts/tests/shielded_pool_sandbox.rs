@@ -55,8 +55,13 @@ const DEPOSIT_GAS_CEILING: i64 = 500_000;
 /// `chain_gas_envelope_sandbox.rs` generates and holds against the
 /// executor's table.
 const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
-/// Section 14.1.
-const TOPUP_GAS_CEILING: i64 = 50_000;
+/// Section 14.1, frozen by the production rule: a top-up executes no
+/// Poseidon2, so the tariff cannot move it, and 10,000 is the rule's floor.
+const TOPUP_GAS_CEILING: i64 = 10_000;
+/// Measured. The ceiling has to stay above it with the ruled 25% headroom.
+const TOPUP_MEASURED_MAX_GAS: i64 = 2_458;
+/// ConfigParam 21 of this chain's zero state, beyond the flat segment.
+const NANOTOS_PER_GAS: u64 = 400;
 const RESERVE_FLOOR: u64 = 5 * TOS;
 /// What a deposit must carry beyond its principal. 500,000 gas at the sandbox's
 /// 400 nanotos per gas unit, which the suite re-derives rather than assumes.
@@ -500,6 +505,15 @@ fn the_gas_ceiling_does_not_depend_on_how_much_money_arrived() {
         TOPUP_GAS_CEILING <= BASECHAIN_GAS_LIMIT,
         "the top-up ceiling is above what this chain grants a transaction"
     );
+    // And the frozen ceiling still satisfies the rule it was frozen by:
+    // C = max(10,000, round_up_10,000(ceil(M * 5 / 4))). A top-up's measured
+    // maximum is far below the floor, so the floor is what binds.
+    let with_headroom = (TOPUP_MEASURED_MAX_GAS * 5 + 3) / 4;
+    let by_rule = 10_000.max((with_headroom + 9_999) / 10_000 * 10_000);
+    assert_eq!(
+        TOPUP_GAS_CEILING, by_rule,
+        "the top-up ceiling is no longer the one the production rule gives"
+    );
 
     // What this does NOT establish, stated so it is not mistaken for evidence:
     // the transaction description records the admission limit, which is the
@@ -620,8 +634,12 @@ fn a_reserve_top_up_adds_balance_and_nothing_else() {
     assert_eq!(pool.get("commitment_next_index"), index, "a top-up assigned a leaf");
     pool.assert_backed("after a top-up");
 
-    // It still has to pay for its own bounded compute.
-    let fee = 50_000 * 400;
+    // It still has to pay for its own bounded compute. The funding rule is
+    // msg_value >= get_compute_fee(0, ceiling); on this chain's schedule the
+    // flat segment costs exactly its own gas at the same price, so that comes
+    // to the ceiling times the price per gas. The pair of sends below is what
+    // checks that identity: if it were wrong, one of them would not behave.
+    let fee = TOPUP_GAS_CEILING as u64 * NANOTOS_PER_GAS;
     pool.send(fee - 1, top_up.clone()).expect_exit_code(203);
     pool.send(fee, top_up).expect_success();
 

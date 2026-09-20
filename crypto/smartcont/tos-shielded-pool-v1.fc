@@ -33,10 +33,30 @@ int op_deposit() asm "1397248001 PUSHINT";          ;; 0x53485001
 int op_transact() asm "1397248002 PUSHINT";         ;; 0x53485002
 int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 
-;; Section 14.1 development ceilings. Fail-closed coding constants, not a
-;; production tariff.
+;; Section 14.1. A ceiling is the contract's own hard compute budget and the
+;; sender's cost cap at once: the funding rule makes a sender pay
+;; get_compute_fee(ceiling) rather than what the path costs, and what is not
+;; spent stays as the pool's unencumbered reserve. A ceiling far above what a
+;; legal path needs is therefore not spare safety, it is a charge on the
+;; sender unrelated to the compute they bought.
+;;
+;; Production values come from one rule, so that nobody picks a margin:
+;;
+;;   M = the measured maximum gas of the worst legal successful path, under
+;;       the final Poseidon2 tariff, on the exact candidate code and config
+;;   C = max(10000, round_up_10000(ceil(M * 5 / 4)))
+;;
+;; Only the top-up ceiling can be frozen by that rule today. It executes no
+;; Poseidon2 at all, so the tariff cannot move it: 2,458 gas measured, and
+;; 10,000 is the rule's floor.
+int topup_gas_ceiling() asm "10000 PUSHINT";
+
+;; The other three are still development ceilings, and deliberately generous.
+;; Each runs Poseidon2 -- 14 times for a deposit, 15 for a recovery, 142 for a
+;; transact -- so the tariff moves every one of them, and a ceiling frozen
+;; before it is known would make a legal path run out of gas. A deposit
+;; measured at 125,220 would not fit 160,000 once the instruction cost 5,484.
 int deposit_gas_ceiling() asm "500000 PUSHINT";
-int topup_gas_ceiling() asm "50000 PUSHINT";
 int transact_gas_ceiling() asm "2000000 PUSHINT";
 int bounce_gas_ceiling() asm "500000 PUSHINT";
 
