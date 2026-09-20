@@ -191,12 +191,77 @@ add_test(
     COMMAND test-consensus --duration 40 --n-nodes 4 --target-rate-ms 100
             --net-ping 0.005:0.02 --pq-finality-e2e-test
 )
-# The end-to-end gate can see that no block was accepted and no marker was written, but
-# not an object that was built and thrown away. "No legacy carrier is constructed" is a
-# structural property, so it is checked structurally.
+# The structural scales N4.5 asks for, at the two this harness can carry. Measured on one
+# developer machine: 21 nodes in 0.4s, 100 in 2.5s. The measurements and the boundary above
+# them are recorded in the plan document; N6 runs the launch measurement set on real hosts.
+add_test(
+    NAME test-consensus-simplex2-pq-finality-e2e-21
+    COMMAND test-consensus --duration 120 --n-nodes 21 --target-rate-ms 100
+            --net-ping 0.005:0.02 --pq-finality-e2e-test
+)
+add_test(
+    NAME test-consensus-simplex2-pq-finality-e2e-100
+    COMMAND test-consensus --duration 300 --n-nodes 100 --target-rate-ms 100
+            --net-ping 0.005:0.02 --pq-finality-e2e-test
+)
+# The same gate, with the adversarial scenarios turned on. Their attack machinery was never
+# the part that needed N5 -- only their `--min-finalized-blocks` assertion was -- so running
+# them against the post-quantum gate restores what N4.5's own checklist asks for at the
+# end-to-end level: that a wrong source or index does not become authority merely because
+# the transport is valid, that certificate gossip deduplicates, that role/session/slot
+# substitution fails, and that the round still reaches an agreed certificate under packet
+# loss, node churn and partition.
+add_test(
+    NAME test-consensus-simplex2-pq-malicious-observer
+    COMMAND test-consensus --duration 40 --n-nodes 5 --target-rate-ms 100
+            --net-ping 0.005:0.02 --malicious-observer-attack --pq-finality-e2e-test
+)
+add_test(
+    NAME test-consensus-simplex2-pq-relay-loop
+    COMMAND test-consensus --duration 40 --n-nodes 5 --target-rate-ms 100
+            --net-ping 0.005:0.02 --relay-loop-test --pq-finality-e2e-test
+)
+add_test(
+    NAME test-consensus-simplex2-pq-adaptive-byzantine
+    COMMAND test-consensus --duration 40 --n-nodes 7 --target-rate-ms 100
+            --net-ping 0.005:0.02 --adaptive-byzantine-n 2
+            --adaptive-byzantine-period 0.35 --pq-finality-e2e-test
+)
+add_test(
+    NAME test-consensus-simplex2-pq-manager-ingress-adversarial
+    COMMAND test-consensus --duration 40 --n-nodes 7 --target-rate-ms 100
+            --net-ping 0.005:0.02 --malicious-observer-attack --relay-loop-test
+            --adaptive-byzantine-n 2 --adaptive-byzantine-period 0.35 --pq-finality-e2e-test
+)
+add_test(
+    NAME test-consensus-simplex2-pq-query-abuse
+    COMMAND test-consensus --duration 40 --n-nodes 5 --target-rate-ms 100
+            --net-ping 0.005:0.02 --query-abuse-test --pq-finality-e2e-test
+)
+add_test(
+    NAME test-consensus-simplex2-pq-loss
+    COMMAND test-consensus --duration 40 --n-nodes 5 --target-rate-ms 100
+            --net-ping 0.005:0.02 --net-loss 0.15 --pq-finality-e2e-test
+)
+add_test(
+    NAME test-consensus-simplex2-pq-restart
+    COMMAND test-consensus --duration 40 --n-nodes 5 --target-rate-ms 100
+            --net-ping 0.005:0.02 --gremlin-period 0.5:0.8
+            --gremlin-downtime 0.1:0.2 --gremlin-times 4 --pq-finality-e2e-test
+)
+add_test(
+    NAME test-consensus-simplex2-pq-partition
+    COMMAND test-consensus --duration 40 --n-nodes 5 --target-rate-ms 100
+            --net-ping 0.005:0.02 --net-gremlin-period 0.5:0.8
+            --net-gremlin-downtime 0.1:0.2 --net-gremlin-times 4 --pq-finality-e2e-test
+)
+
+# Two of the no-fallback invariants are properties of the source that no run can observe:
+# a legacy carrier built and thrown away, and a keyring signature produced and discarded.
+# They are checked where they exist, in the code.
 if(Python3_Interpreter_FOUND)
-    add_test(NAME n4-no-legacy-carrier
-             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check-no-legacy-carrier.py)
+    add_test(NAME n4-no-fallback
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check-no-fallback.py)
 endif()
 
 # N4.4 — the two-phase own-vote journal: signed records replay byte for byte, an
@@ -231,12 +296,16 @@ add_test(
             -s ${CMAKE_CURRENT_SOURCE_DIR}/simplex2-genesis-config.fif
 )
 
-# These scenarios all assert that blocks are finalized and accepted, which an N4-only
-# build cannot do: the N4/N5 seam refuses to turn a post-quantum finality certificate
-# into a block signature set, so the chain agrees on its first slot and stops there.
-# They are legacy regression tests for behaviour that only exists once N5 provides the
-# post-quantum carrier, and they are not evidence about N4 -- that is what the two
-# pq-finality-e2e tests above are for.
+# These scenarios assert that blocks are finalized and accepted, which an N4-only build
+# cannot do: the N4/N5 seam refuses to turn a post-quantum finality certificate into a
+# block signature set, so no block is ever accepted. They are legacy regression tests for
+# behaviour that only exists once N5 provides the post-quantum carrier.
+#
+# Eight of the ten originally disabled here have come back as pq- variants above: their
+# attack machinery never needed N5, only their `--min-finalized-blocks` assertion did, and
+# the post-quantum gate gives them a liveness floor in its place. What is left are the two
+# whose subject really is the accepted chain -- catching up to a finalized height, and
+# rebuilding after thousands of empty blocks.
 #
 # They are disabled rather than deleted, and disabled rather than left failing: ctest
 # reports a disabled test as disabled, so the gap stays visible instead of turning the

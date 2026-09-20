@@ -130,6 +130,13 @@ bool EMPTY_CHAIN_RESTART_TEST = false;
 bool VOTE_JOURNAL_TEST = false;
 bool PQ_FINALITY_E2E_TEST = false;
 std::atomic<bool> EMPTY_CHAIN_MANAGER_ANCHOR_UNAVAILABLE = false;
+
+// Adversity that was configured but never fired turns a scenario into a quiet no-op: the
+// post-quantum gate finishes in well under a second, sooner than a gremlin period. These
+// count what actually happened so the gate can wait for it and refuse to pass without it.
+std::atomic<size_t> INJECTED_PACKET_LOSSES = 0;
+std::atomic<size_t> INJECTED_NODE_KILLS = 0;
+std::atomic<size_t> INJECTED_NETWORK_CUTS = 0;
 std::atomic<size_t> EMPTY_CHAIN_MANAGER_ANCHOR_FAILURES = 0;
 double CATCH_UP_DOWNTIME = -1.0;
 
@@ -201,6 +208,7 @@ class TestOverlay : public td::actor::Actor {
       co_return td::Status::Error("src is disabled");
     }
     if (!no_loss && td::Random::fast(0.0, 1.0) < NET_LOSS) {
+      ++INJECTED_PACKET_LOSSES;
       co_return td::Status::Error("packet lost");
     }
     co_await td::actor::coro_sleep(td::Timestamp::in(td::Random::fast(NET_PING.first, NET_PING.second)));
@@ -1008,6 +1016,7 @@ class TestConsensus : public td::actor::Actor {
     if (cnt == 0) {
       co_return td::Unit{};
     }
+    ++INJECTED_NODE_KILLS;
     co_await stop_instance(kill_node_idx, kill_inst_idx);
     co_await td::actor::coro_sleep(
         td::Timestamp::in(td::Random::fast(GREMLIN_DOWNTIME.first, GREMLIN_DOWNTIME.second)));
@@ -1055,6 +1064,7 @@ class TestConsensus : public td::actor::Actor {
       co_return td::Unit{};
     }
     nodes_[selected_node_idx].instances[selected_inst_idx].net_gremlin_active = true;
+    ++INJECTED_NETWORK_CUTS;
     co_await td::actor::ask(test_overlay, &TestOverlay::set_instance_disabled, selected_node_idx, selected_inst_idx,
                             true);
     co_await td::actor::coro_sleep(
@@ -1347,96 +1357,116 @@ class TestConsensus : public td::actor::Actor {
     // it -- and the signature it contributes must be the one its journal kept. Had replay
     // signed again, the certificate would still verify, and nothing outside the journal
     // would ever reveal that this node now holds different bytes than the peers do.
-    auto& restarted = nodes_[0].instances[0];
-    auto signed_before = own_vote_journal(restarted);
-    std::erase_if(signed_before, [](const JournalledVote& v) { return !v.is_signed; });
-    if (signed_before.empty()) {
-      fail("the node to restart had journalled no signed votes");
-      co_return td::Unit{};
-    }
-    auto observations_before_restart = read_finality_log().size();
-    co_await stop_instance(0, 0);
-    start_instance(0, 0);
-
-    auto rejoin_deadline = td::Timestamp::in(DURATION * 0.4);
-    auto observed_again = [&]() {
-      auto log = read_finality_log();
-      return std::any_of(log.begin() + static_cast<long>(observations_before_restart), log.end(),
-                         [](const ObservedFinalization& o) { return o.node_idx == 0; });
-    };
-    while (!observed_again() && !rejoin_deadline.is_in_past()) {
-      co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
-    }
-    if (!observed_again()) {
-      fail("the restarted node did not rebuild a finality certificate from its persisted records");
-      co_return td::Unit{};
-    }
-
-    auto signed_after = own_vote_journal(restarted);
-    std::map<td::Slice, td::Slice> after_by_key;
-    for (const auto& entry : signed_after) {
-      after_by_key.emplace(entry.key.as_slice(), entry.value.as_slice());
-    }
-    for (const auto& entry : signed_before) {
-      auto it = after_by_key.find(entry.key.as_slice());
-      if (it == after_by_key.end() || it->second != entry.value.as_slice()) {
-        fail(PSTRING() << "the restarted node's journalled vote at seqno " << entry.seqno
-                       << " did not survive the restart byte for byte");
-        co_return td::Unit{};
-      }
-    }
-
-    // The certificate the restarted node rebuilt must carry this node's journalled bytes.
-    auto rebuilt_log = read_finality_log();
-    const ObservedFinalization* rebuilt = nullptr;
-    for (size_t i = observations_before_restart; i < rebuilt_log.size(); ++i) {
-      if (rebuilt_log[i].node_idx == 0) {
-        rebuilt = &rebuilt_log[i];
-        break;
-      }
-    }
-    CHECK(rebuilt != nullptr);
-    if (auto defect = certificate_defect(rebuilt->cert); !defect.empty()) {
-      fail(PSTRING() << "the certificate rebuilt after the restart is defective: " << defect);
-      co_return td::Unit{};
-    }
-    // Every signature in that certificate must be the one its signer journalled. A quorum
-    // certificate need not contain any particular node's signature -- four nodes reach a
-    // quorum with three -- so this checks whichever signers are in it against their own
-    // journals rather than singling one out. It is also the end-to-end form of the
-    // ordering rule: a signature cannot become observable before its record is committed,
-    // so a signature a peer holds must exist, byte for byte, in its signer's journal.
-    auto wanted_vote = serialize_tl_object(simplex::Vote{rebuilt->cert->vote}.to_tl(), true);
+    // A scenario that is already stopping and starting nodes of its own owns node 0's
+    // lifecycle, and racing it would only produce a harness crash. Those scenarios are
+    // here for agreement under churn, and the replay evidence comes from the variants that
+    // do not churn; the closing line says which of the two this run was.
+    const bool node_churn_active = GREMLIN_PERIOD.first >= 0.0 || NET_GREMLIN_PERIOD.first >= 0.0;
     size_t checked_against_journals = 0;
-    for (const auto& [validator, signature] : rebuilt->cert->signatures) {
-      auto signer = validator.value();
-      if (signer >= N_NODES) {
-        fail(PSTRING() << "the rebuilt certificate names signer " << signer << ", which is not a node");
-        co_return td::Unit{};
-      }
-      // The journal is held in a named local: own_vote_journal returns by value, and a
-      // slice into the temporary would outlive the buffers it points at.
-      auto signer_journal = own_vote_journal(nodes_[signer].instances[0]);
-      td::Slice journalled;
-      for (const auto& entry : signer_journal) {
-        if (entry.is_signed && serialize_tl_object(entry.vote, true).as_slice() == wanted_vote.as_slice()) {
-          journalled = entry.signature.as_slice();
+    if (!node_churn_active) {
+      // A companion scenario that drives node 0 has to finish before node 0 is taken away
+      // from under it. Waiting is not optional politeness: restarting mid-flight makes its
+      // requests fail for the wrong reason and it reports a rate limit that was never tested.
+      if (QUERY_ABUSE_TEST) {
+        auto companion_deadline = td::Timestamp::in(DURATION * 0.2);
+        while (!query_abuse_completed_ && !companion_deadline.is_in_past()) {
+          co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
+        }
+        if (!query_abuse_completed_) {
+          fail("the candidate-query rate-limit probe did not finish before the restart phase");
+          co_return td::Unit{};
         }
       }
-      if (journalled.empty()) {
-        fail(PSTRING() << "node " << signer << " contributed a finalize signature it never journalled");
+      auto& restarted = nodes_[0].instances[0];
+      auto signed_before = own_vote_journal(restarted);
+      std::erase_if(signed_before, [](const JournalledVote& v) { return !v.is_signed; });
+      if (signed_before.empty()) {
+        fail("the node to restart had journalled no signed votes");
         co_return td::Unit{};
       }
-      if (journalled != signature.as_slice()) {
-        fail(PSTRING() << "node " << signer << " is holding a different signature than the one in the certificate");
+      auto observations_before_restart = read_finality_log().size();
+      co_await stop_instance(0, 0);
+      start_instance(0, 0);
+
+      auto rejoin_deadline = td::Timestamp::in(DURATION * 0.4);
+      auto observed_again = [&]() {
+        auto log = read_finality_log();
+        return std::any_of(log.begin() + static_cast<long>(observations_before_restart), log.end(),
+                           [](const ObservedFinalization& o) { return o.node_idx == 0; });
+      };
+      while (!observed_again() && !rejoin_deadline.is_in_past()) {
+        co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+      }
+      if (!observed_again()) {
+        fail("the restarted node did not rebuild a finality certificate from its persisted records");
         co_return td::Unit{};
       }
-      ++checked_against_journals;
-    }
-    if (checked_against_journals == 0) {
-      fail("the rebuilt certificate carried no signatures to check against a journal");
-      co_return td::Unit{};
-    }
+
+      auto signed_after = own_vote_journal(restarted);
+      std::map<td::Slice, td::Slice> after_by_key;
+      for (const auto& entry : signed_after) {
+        after_by_key.emplace(entry.key.as_slice(), entry.value.as_slice());
+      }
+      for (const auto& entry : signed_before) {
+        auto it = after_by_key.find(entry.key.as_slice());
+        if (it == after_by_key.end() || it->second != entry.value.as_slice()) {
+          fail(PSTRING() << "the restarted node's journalled vote at seqno " << entry.seqno
+                         << " did not survive the restart byte for byte");
+          co_return td::Unit{};
+        }
+      }
+
+      // The certificate the restarted node rebuilt must carry this node's journalled bytes.
+      auto rebuilt_log = read_finality_log();
+      const ObservedFinalization* rebuilt = nullptr;
+      for (size_t i = observations_before_restart; i < rebuilt_log.size(); ++i) {
+        if (rebuilt_log[i].node_idx == 0) {
+          rebuilt = &rebuilt_log[i];
+          break;
+        }
+      }
+      CHECK(rebuilt != nullptr);
+      if (auto defect = certificate_defect(rebuilt->cert); !defect.empty()) {
+        fail(PSTRING() << "the certificate rebuilt after the restart is defective: " << defect);
+        co_return td::Unit{};
+      }
+      // Every signature in that certificate must be the one its signer journalled. A quorum
+      // certificate need not contain any particular node's signature -- four nodes reach a
+      // quorum with three -- so this checks whichever signers are in it against their own
+      // journals rather than singling one out. It is also the end-to-end form of the
+      // ordering rule: a signature cannot become observable before its record is committed,
+      // so a signature a peer holds must exist, byte for byte, in its signer's journal.
+      auto wanted_vote = serialize_tl_object(simplex::Vote{rebuilt->cert->vote}.to_tl(), true);
+      for (const auto& [validator, signature] : rebuilt->cert->signatures) {
+        auto signer = validator.value();
+        if (signer >= N_NODES) {
+          fail(PSTRING() << "the rebuilt certificate names signer " << signer << ", which is not a node");
+          co_return td::Unit{};
+        }
+        // The journal is held in a named local: own_vote_journal returns by value, and a
+        // slice into the temporary would outlive the buffers it points at.
+        auto signer_journal = own_vote_journal(nodes_[signer].instances[0]);
+        td::Slice journalled;
+        for (const auto& entry : signer_journal) {
+          if (entry.is_signed && serialize_tl_object(entry.vote, true).as_slice() == wanted_vote.as_slice()) {
+            journalled = entry.signature.as_slice();
+          }
+        }
+        if (journalled.empty()) {
+          fail(PSTRING() << "node " << signer << " contributed a finalize signature it never journalled");
+          co_return td::Unit{};
+        }
+        if (journalled != signature.as_slice()) {
+          fail(PSTRING() << "node " << signer << " is holding a different signature than the one in the certificate");
+          co_return td::Unit{};
+        }
+        ++checked_against_journals;
+      }
+      if (checked_against_journals == 0) {
+        fail("the rebuilt certificate carried no signatures to check against a journal");
+        co_return td::Unit{};
+      }
+    }  // !node_churn_active
 
     // --- And none of it crossed into N5 ---
     //
@@ -1492,6 +1522,37 @@ class TestConsensus : public td::actor::Actor {
     // the harness's own verification before arriving here. It is kept because N5 is what
     // makes acceptance possible, and this is the line that should start being able to fail
     // then -- for the right reason.
+    // --- The adversity this scenario was configured with has to have happened ---
+    //
+    // The gate reaches its verdict in well under a second, sooner than a gremlin's first
+    // period, so a scenario could otherwise pass having injected nothing at all. Each
+    // configured adversity is waited for and then required; the ones with their own
+    // injection assertions in finalize() -- the malicious observer, the adaptive Byzantine
+    // rotation, the relay loop, the query flood -- are left to those.
+    struct ConfiguredAdversity {
+      bool configured;
+      const std::atomic<size_t>* counter;
+      const char* name;
+    };
+    const ConfiguredAdversity adversities[] = {
+        {NET_LOSS > 0.0, &INJECTED_PACKET_LOSSES, "packet loss"},
+        {GREMLIN_PERIOD.first >= 0.0, &INJECTED_NODE_KILLS, "node restarts"},
+        {NET_GREMLIN_PERIOD.first >= 0.0, &INJECTED_NETWORK_CUTS, "network partitions"},
+    };
+    auto adversity_deadline = td::Timestamp::in(DURATION * 0.3);
+    for (const auto& adversity : adversities) {
+      if (!adversity.configured) {
+        continue;
+      }
+      while (adversity.counter->load() == 0 && !adversity_deadline.is_in_past()) {
+        co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+      }
+      if (adversity.counter->load() == 0) {
+        fail(PSTRING() << "this scenario configures " << adversity.name << " but none was injected before it finished");
+        co_return td::Unit{};
+      }
+    }
+
     if (accepted_block_count_ != 0) {
       fail(PSTRING() << "the network accepted " << accepted_block_count_
                      << " blocks; an N4-only build has no carrier to accept one with");
@@ -1502,10 +1563,15 @@ class TestConsensus : public td::actor::Actor {
       co_return td::Unit{};
     }
 
-    LOG(WARNING) << "PQ finality: " << N_NODES << " nodes agreed on one finality certificate and verified every "
-                 << "signature in it, a restart rebuilt that certificate from persisted records and its "
-                 << checked_against_journals << " signatures matched their signers' journals byte for byte, and "
-                 << "every node stopped at the N4/N5 boundary with no block accepted and no finalized marker written";
+    LOG(WARNING) << "PQ finality: " << N_NODES << " nodes agreed on the certificate for slot " << *common_slot
+                 << " and verified every signature in it; "
+                 << (node_churn_active ? "the restart phase was skipped because this scenario churns nodes itself"
+                                       : PSTRING() << "a restart rebuilt that certificate from persisted records and "
+                                                      "its "
+                                                   << checked_against_journals
+                                                   << " signatures matched their signers' journals byte for byte")
+                 << "; every node stopped at the N4/N5 boundary with no block accepted and no finalized marker "
+                 << "written";
     pq_finality_completed_ = true;
     co_return td::Unit{};
   }
