@@ -608,11 +608,11 @@ impl Pool {
         Self::deploy_with_gas_limit(nullifier_root, None)
     }
 
-    /// `limit` raises the network's per-transaction gas ceiling, which the
-    /// default configuration puts at 1,000,000. It is a measurement harness
-    /// and not a claim: SETGASLIMIT cannot raise a transaction above the
-    /// network's own limit, so on a network configured this way the profile's
-    /// TRANSACT_GAS_CEILING of 2,000,000 would never take effect.
+    /// `limit` replaces the network's per-transaction gas ceiling. This chain
+    /// grants 30,000,000, so the only use left for this is the opposite of
+    /// what it was built for: starving a transaction on a network configured
+    /// like TON's basechain, to show what the contract's own ceiling is
+    /// protecting against.
     fn deploy_with_gas_limit(nullifier_root: Field, limit: Option<u64>) -> Self {
         let mut bc = match limit {
             None => Blockchain::with_global_version_and_base_workchain(ACTIVE_VERSION)
@@ -923,7 +923,7 @@ fn a_proof_that_does_not_verify_stops_the_transaction() {
     let state = RefState::genesis();
     let keys = [Key::generate(), Key::generate()];
     let digest = small(0x1234_5678_9abc_def0);
-    let mut pool = Pool::deploy_with_gas_limit(state.root(), Some(10_000_000));
+    let mut pool = Pool::deploy(state.root());
     let now = pool.bc.now();
     let before = pool.snapshot();
 
@@ -932,7 +932,7 @@ fn a_proof_that_does_not_verify_stops_the_transaction() {
     let mut message = well_formed(&state, &keys, digest);
     message.valid_until = now + 60;
     assert_eq!(
-        pool.exit_of(10_000_000 * 400, message.body()),
+        pool.exit_of(TRANSACT_FEE * 8, message.body()),
         262,
         "a message with an unverifiable proof was not stopped by the proof"
     );
@@ -954,14 +954,14 @@ fn a_well_formed_withdrawal_reaches_the_proof_like_a_transfer_does() {
     let state = RefState::genesis();
     let keys = [Key::generate(), Key::generate()];
     let digest = small(0x7777_8888_9999_aaaa);
-    let mut pool = Pool::deploy_with_gas_limit(state.root(), Some(10_000_000));
+    let mut pool = Pool::deploy(state.root());
     let now = pool.bc.now();
     let before = pool.snapshot();
 
     let mut message = withdrawing(well_formed(&state, &keys, digest), small(0x4242));
     message.valid_until = now + 60;
 
-    let (exit, used) = pool.run(10_000_000 * 400, message.body());
+    let (exit, used) = pool.run(TRANSACT_FEE * 8, message.body());
     assert_eq!(exit, 262, "a well-formed withdrawal was stopped before the proof");
     assert_eq!(pool.snapshot(), before, "a withdrawal that failed at the proof moved the state");
     eprintln!("a withdrawal, up to and including the proof: {used} gas");
@@ -977,9 +977,9 @@ fn what_a_transact_spends_and_where() {
     let state = RefState::genesis();
     let keys = [Key::generate(), Key::generate()];
     let digest = small(0x2222_3333_4444_5555);
-    let mut pool = Pool::deploy_with_gas_limit(state.root(), Some(10_000_000));
+    let mut pool = Pool::deploy(state.root());
     let now = pool.bc.now();
-    let value = 10_000_000 * 400;
+    let value = TRANSACT_FEE * 8;
 
     let good = || {
         let mut message = well_formed(&state, &keys, digest);
@@ -1036,58 +1036,73 @@ fn what_a_transact_spends_and_where() {
     );
 }
 
-/// What a transact costs, measured rather than estimated, and the ceiling
-/// question it raises.
+/// What a transact costs, measured rather than estimated, against the two
+/// limits that actually bound it.
 ///
-/// The default network configuration puts the per-transaction gas limit at
-/// 1,000,000. The profile's TRANSACT_GAS_CEILING is 2,000,000, and SETGASLIMIT
-/// cannot raise a transaction above the network's own limit -- so on a network
-/// configured this way the ceiling never takes effect and the real cap is the
-/// network's. This test therefore raises the network limit, purely so the path
-/// can be measured, and records what it costs.
+/// This test used to assert that the path did not fit "the network", having
+/// measured it against the executor's default table -- which carried TON's
+/// basechain limit of 1,000,000 while this chain's zero state grants
+/// 30,000,000. The claim was false for this chain by a factor of twenty-seven.
+/// `chain_gas_envelope_sandbox.rs` now generates the zero state and holds the
+/// two tables together, and what is left to say here is what the path costs
+/// and how much room it has.
 #[test]
-fn a_transact_costs_more_than_the_default_network_gas_limit_allows() {
+fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
+    /// Section 14.1. Unlike the network limit, this one the contract sets on
+    /// itself, and it is the binding one: it is far below what the chain
+    /// grants, which is the point of having it.
+    const TRANSACT_GAS_CEILING: i64 = 2_000_000;
+    /// ConfigParam 21 of this chain's zero state.
+    const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
+
     let state = RefState::genesis();
     let keys = [Key::generate(), Key::generate()];
     let digest = small(0x0f0f_0f0f_0f0f_0f0f);
-    let mut pool = Pool::deploy_with_gas_limit(state.root(), Some(10_000_000));
+    let mut pool = Pool::deploy(state.root());
     let now = pool.bc.now();
     let mut message = well_formed(&state, &keys, digest);
     message.valid_until = now + 60;
 
-    let result = pool.send(10_000_000 * 400, message.body());
-    let vm = match result.read_primary_description().compute_ph {
-        chain_block::TrComputePhase::Vm(vm) => vm,
-        chain_block::TrComputePhase::Skipped(s) => panic!("compute skipped: {:?}", s.reason),
-    };
-    let used: i64 = vm.gas_used.to_string().parse().expect("gas used");
-    assert_eq!(
-        vm.exit_code, 262,
-        "with room to run, the message must reach the proof and fail there"
-    );
-    eprintln!("a transact, up to and including the proof: {used} gas");
-
-    // The finding, asserted rather than left in a comment: this path does not
-    // fit the limit an ordinary account gets by default.
-    assert!(
-        used > 1_000_000,
-        "the path now fits the default 1,000,000 limit ({used}); the ceiling question below \
-         may have resolved itself and this test should be revisited"
-    );
-    assert!(
-        used < 2_000_000,
-        "the path uses {used} gas and does not fit the profile's own ceiling of 2,000,000 either"
+    let (exit, used) = pool.run(TRANSACT_FEE * 8, message.body());
+    assert_eq!(exit, 262, "the message did not reach the proof on an ordinary network");
+    eprintln!(
+        "a transact, up to and including the proof: {used} gas          ({}% of the ceiling, {}% of what the chain grants)",
+        used * 100 / TRANSACT_GAS_CEILING,
+        used * 100 / BASECHAIN_GAS_LIMIT
     );
 
-    // And the same message on a default network runs out, which is what a
-    // ceiling above the network's limit buys: nothing.
-    let mut ordinary = Pool::deploy(RefState::genesis().root());
-    let now = ordinary.bc.now();
+    assert!(
+        used < TRANSACT_GAS_CEILING,
+        "the path uses {used} gas and no longer fits the profile's own ceiling of          {TRANSACT_GAS_CEILING}"
+    );
+    assert!(
+        used < BASECHAIN_GAS_LIMIT,
+        "the path uses {used} gas and no longer fits what this chain grants a transaction"
+    );
+
+    // Section 14's deployment invariant, in full:
+    //
+    //     MEASURED_MAX_VALID_GAS < operation_gas_ceiling <= workchain gas_limit
+    //
+    // Both halves matter and for opposite reasons. A ceiling above what the
+    // chain grants buys nothing, because SETGASLIMIT cannot raise a
+    // transaction above the network's own limit. A ceiling below what the path
+    // needs stops the path. The transact ceiling is the binding one here: it
+    // is far below what the chain grants, which is the point of having it.
+    assert!(
+        TRANSACT_GAS_CEILING <= BASECHAIN_GAS_LIMIT,
+        "the contract's ceiling is above what the chain grants, so it can never take effect"
+    );
+
+    // And a network that grants less than the path needs stops it, which is
+    // what the ceiling is protecting against on a chain configured otherwise.
+    let mut starved = Pool::deploy_with_gas_limit(RefState::genesis().root(), Some(1_000_000));
+    let now = starved.bc.now();
     let mut same = well_formed(&RefState::genesis(), &keys, digest);
     same.valid_until = now + 60;
     assert_eq!(
-        ordinary.exit_of(TRANSACT_FEE, same.body()),
+        starved.exit_of(TRANSACT_FEE * 8, same.body()),
         -14,
-        "the default network ran the whole path after all"
+        "a network granting 1,000,000 gas ran the whole path after all"
     );
 }

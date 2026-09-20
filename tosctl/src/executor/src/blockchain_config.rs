@@ -116,13 +116,15 @@ impl AccStoragePrices {
 impl DefaultConfig for GasLimitsPrices {
     fn default_mc() -> Self {
         GasLimitsPrices {
+            // ConfigParam 20 from the same zero state, which keeps the
+            // masterchain aligned with production.
             gas_price: 655360000,
             flat_gas_limit: 100,
             flat_gas_price: 1000000,
             gas_limit: 1000000,
-            special_gas_limit: 10000000,
+            special_gas_limit: 70000000,
             gas_credit: 10000,
-            block_gas_limit: 10000000,
+            block_gas_limit: 2500000,
             freeze_due_limit: 100000000,
             delete_due_limit: 1000000000,
             max_gas_threshold: 10000000000,
@@ -131,16 +133,26 @@ impl DefaultConfig for GasLimitsPrices {
 
     fn default_wc() -> Self {
         GasLimitsPrices {
-            // ConfigParam 21 from the canonical basechain zero state. This
-            // yields 400 nanotomi/gas beyond the flat segment, not the
+            // ConfigParam 21 from the canonical basechain zero state
+            // (`crypto/smartcont/gen-zerostate.fif`). This yields 400
+            // nanotomi/gas beyond the flat segment, not the
             // masterchain-derived 1,000 nanotomi/gas sandbox value.
+            //
+            // The three limits used to carry TON's basechain values -- a
+            // 1,000,000 gas transaction inside a 10,000,000 gas block -- while
+            // this chain's zero state grants thirty times that. A measurement
+            // taken against the old table said a path "does not fit the
+            // network" when it fits this network twenty-seven times over.
+            // `chain_gas_envelope_sandbox.rs` now generates the zero state and
+            // compares it against this table field by field, so the two cannot
+            // drift apart again without a named test going red.
             gas_price: 26214400,
             flat_gas_limit: 100,
             flat_gas_price: 40000,
-            gas_limit: 1000000,
-            special_gas_limit: 1000000,
+            gas_limit: 30000000,
+            special_gas_limit: 30000000,
             gas_credit: 10000,
-            block_gas_limit: 10000000,
+            block_gas_limit: 60000000,
             freeze_due_limit: 100000000,
             delete_due_limit: 1000000000,
             max_gas_threshold: 1000000000,

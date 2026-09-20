@@ -51,6 +51,12 @@ const OP_RESERVE_TOPUP: u32 = 0x5348_5003;
 const OP_UNKNOWN: u32 = 0x5348_50ff;
 
 const DEPOSIT_GAS_CEILING: i64 = 500_000;
+/// ConfigParam 21 of this chain's zero state, which
+/// `chain_gas_envelope_sandbox.rs` generates and holds against the
+/// executor's table.
+const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
+/// Section 14.1.
+const TOPUP_GAS_CEILING: i64 = 50_000;
 const RESERVE_FLOOR: u64 = 5 * TOS;
 /// What a deposit must carry beyond its principal. 500,000 gas at the sandbox's
 /// 400 nanotos per gas unit, which the suite re-derives rather than assumes.
@@ -474,6 +480,25 @@ fn the_gas_ceiling_does_not_depend_on_how_much_money_arrived() {
     assert!(
         used < DEPOSIT_GAS_CEILING,
         "the largest legal deposit uses {used} gas and does not fit its own ceiling"
+    );
+
+    // Section 14's deployment invariant, in full:
+    //
+    //     MEASURED_MAX_VALID_GAS < operation_gas_ceiling <= workchain gas_limit
+    //
+    // The middle term is the contract's own and the right one is the chain's.
+    // A ceiling above what the chain grants buys nothing, because SETGASLIMIT
+    // cannot raise a transaction above the network's limit; a ceiling below
+    // what the path needs stops the path. Both halves are asserted here rather
+    // than left to whoever next changes one of the three numbers.
+    assert!(
+        DEPOSIT_GAS_CEILING <= BASECHAIN_GAS_LIMIT,
+        "the deposit ceiling ({DEPOSIT_GAS_CEILING}) is above what this chain grants a \
+         transaction ({BASECHAIN_GAS_LIMIT}), so it can never take effect"
+    );
+    assert!(
+        TOPUP_GAS_CEILING <= BASECHAIN_GAS_LIMIT,
+        "the top-up ceiling is above what this chain grants a transaction"
     );
 
     // What this does NOT establish, stated so it is not mistaken for evidence:

@@ -36,7 +36,7 @@ TOPUP_TEST = 'a_plain_top_up_and_a_bounce_change_no_shielded_state'
 RESERVE_TEST = 'a_reserve_top_up_adds_balance_and_nothing_else'
 ORDER_TEST = 'each_step_fails_with_its_own_code_and_in_its_own_place'
 ATOMIC_TEST = 'a_failure_at_any_step_changes_nothing'
-COST_TEST = 'a_transact_costs_more_than_the_default_network_gas_limit_allows'
+COST_TEST = 'a_transact_fits_its_ceiling_and_the_gas_this_chain_grants'
 WITHDRAWAL_TEST = 'a_well_formed_withdrawal_reaches_the_proof_like_a_transfer_does'
 PROOF_TEST = 'a_proof_that_does_not_verify_stops_the_transaction'
 
@@ -102,8 +102,12 @@ CASES = [
   int leaf_index = commitment_next_index;""",
          """;; 9. the leaf index is the contract's, not the sender's.
   int leaf_index = commitment_next_index + 1;""", LEDGER_TEST),
+    # The recovery handler writes the counter the same way, so this anchor
+    # carries the deposit path's own comment with it.
     Case('leaf-counter', 'the counter does not advance with the tree', POOL,
+         ';; 10, 11. one write, at the end. No COMMIT and no outbound action.\n'
          '  set_data(state_build(commitment_root, leaf_index + 1,',
+         ';; 10, 11. one write, at the end. No COMMIT and no outbound action.\n'
          '  set_data(state_build(commitment_root, leaf_index,', LEDGER_TEST),
 
     # Section 12.1 step 8: liability is the principal, and nothing else.
