@@ -104,9 +104,27 @@ pub fn development_vk_bytes() -> Result<Vec<u8>> {
         .collect()
 }
 
-fn config_store() -> Result<Cell> {
-    let mut chain = BuilderData::new();
-    store_coins(&mut chain, u128::from(DENOMINATION))?;
+/// Section 13.1: the denominations are a strictly ascending chain, one value
+/// per cell, each carrying the next.
+fn denomination_chain(amounts: &[u64]) -> Result<Cell> {
+    if amounts.is_empty() {
+        return Err(CrossCheckError::Fixture("an empty denomination list".to_string()));
+    }
+    let mut chain: Option<Cell> = None;
+    for amount in amounts.iter().rev() {
+        let mut builder = BuilderData::new();
+        store_coins(&mut builder, u128::from(*amount))?;
+        if let Some(next) = chain {
+            builder
+                .checked_append_reference(next)
+                .map_err(|error| CrossCheckError::Sandbox(format!("denominations: {error}")))?;
+        }
+        chain = Some(cell_of(builder)?);
+    }
+    chain.ok_or_else(|| CrossCheckError::Fixture("an empty denomination list".to_string()))
+}
+
+fn config_store(denominations: &[u64]) -> Result<Cell> {
     let mut builder = BuilderData::new();
     for tag in [0x11u8, 0x22, 0x33] {
         builder
@@ -115,15 +133,22 @@ fn config_store() -> Result<Cell> {
     }
     store_coins(&mut builder, u128::from(WITHDRAWAL_FEE))?;
     builder
-        .append_u8(1)
+        .append_u8(
+            u8::try_from(denominations.len())
+                .map_err(|_| CrossCheckError::Fixture("too many denominations".to_string()))?,
+        )
         .map_err(|error| CrossCheckError::Sandbox(format!("denomination count: {error}")))?;
     builder
-        .checked_append_reference(cell_of(chain)?)
+        .checked_append_reference(denomination_chain(denominations)?)
         .map_err(|error| CrossCheckError::Sandbox(format!("denominations: {error}")))?;
     cell_of(builder)
 }
 
-fn genesis_state(commitment_root: Fr, nullifier_root: Fr) -> Result<Cell> {
+fn genesis_state(
+    commitment_root: Fr,
+    nullifier_root: Fr,
+    denominations: &[u64],
+) -> Result<Cell> {
     let mut builder = BuilderData::new();
     builder
         .append_u32(MAGIC)
@@ -146,7 +171,7 @@ fn genesis_state(commitment_root: Fr, nullifier_root: Fr) -> Result<Cell> {
     builder
         .checked_append_reference(empty_ring_holder()?)
         .and_then(|b| b.checked_append_reference(cell_of(anchors)?))
-        .and_then(|b| b.checked_append_reference(config_store()?))
+        .and_then(|b| b.checked_append_reference(config_store(denominations)?))
         .and_then(|b| {
             b.checked_append_reference(crate::wire::byte_chain(&development_vk_bytes()?)?)
         })
@@ -189,13 +214,25 @@ fn pool_sources() -> Vec<std::path::PathBuf> {
 }
 
 impl Pool {
+    /// The pool as every test but the dust measurement wants it: one
+    /// denomination.
     pub fn deploy(commitment_root: Fr, nullifier_root: Fr) -> Result<Self> {
+        Self::deploy_with_denominations(commitment_root, nullifier_root, &[DENOMINATION])
+    }
+
+    pub fn deploy_with_denominations(
+        commitment_root: Fr,
+        nullifier_root: Fr,
+        denominations: &[u64],
+    ) -> Result<Self> {
         let mut bc = Blockchain::with_global_version_and_base_workchain(ACTIVE_VERSION)?;
         bc.set_workchain(0);
         let payer = bc.treasury("relay", 1_000_000 * TOS)?;
         let code = compile_func(&pool_sources())?;
-        let si =
-            StateInit::with_code_and_data(code, genesis_state(commitment_root, nullifier_root)?);
+        let si = StateInit::with_code_and_data(
+            code,
+            genesis_state(commitment_root, nullifier_root, denominations)?,
+        );
         let addr_hash = si
             .write_to_new_cell()
             .and_then(|builder| builder.into_cell())
