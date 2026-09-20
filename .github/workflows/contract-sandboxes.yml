@@ -105,6 +105,17 @@ jobs:
           cmake --build build --target test-fift test-cells test-vm test-smartcont -j2
           ./scripts/check-regression-db.sh . build
 
+      # The shared vector files. Their readers compare against the file, so a generator
+      # that drifts away from what it once produced is invisible until someone tries to
+      # regenerate and cannot explain the diff.
+      - name: Vector files match their generators
+        run: |
+          cmake --build build --target n3-preimage-vectors-gen n3-carrier-vectors-gen \
+            n3-controller-auth-vectors-gen n3-descriptor-vectors-gen config43-vectors-gen \
+            validator-descr-vectors-gen pq-bytes-vectors-gen validator-set-hash-vectors-gen \
+            validator-session-vectors-gen validator-set-cases-gen -j2
+          ./scripts/check-vector-files.sh . build
+
       - name: Build the post-quantum key tool
         run: |
           cmake -S crypto/pq/tools -B build-pq-key -G Ninja -DCMAKE_BUILD_TYPE=Release

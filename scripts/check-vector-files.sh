@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Runs each vector generator and requires the checked-in file to be what it produced.
+#
+# The tests that read these files build their inputs a second time and compare. That
+# catches an implementation that drifts. It does not catch a generator that drifts: the
+# file stays as it was, the readers keep agreeing with it, and the program that is
+# supposed to be able to produce the file no longer can. The next person to regenerate
+# then gets a diff nobody can explain.
+#
+# Two rows are pinned rather than generated: a real ML-DSA-44 root public key and a
+# signature over the base preimage. The node's libraries deliberately cannot sign with a
+# controller root -- that key lives on an operator machine -- so no program in this build
+# can reproduce them. They are named here, one by one, and a row that is neither generated
+# nor named fails.
+set -euo pipefail
+
+root="${1:-.}"
+build="${2:-$root/build}"
+failed=0
+
+# generator<TAB>file
+generators=$(cat <<'PAIRS'
+n3-preimage-vectors-gen	test/pq-native/n3-preimage-vectors.tsv
+n3-carrier-vectors-gen	test/pq-native/n3-carrier-vectors.tsv
+n3-controller-auth-vectors-gen	test/pq-native/n3-controller-auth-vectors.tsv
+n3-descriptor-vectors-gen	test/pq-native/n3-descriptor-vectors.tsv
+config43-vectors-gen	test/pq-native/config43-vectors.tsv
+validator-descr-vectors-gen	test/pq-native/validator-descr-vectors.txt
+pq-bytes-vectors-gen	test/pq-mldsa44/pq-bytes-vectors.txt
+validator-set-hash-vectors-gen	test/pq-native/validator-set-hash-vectors.txt
+validator-session-vectors-gen	test/pq-native/validator-session-vectors.txt
+validator-set-cases-gen	test/pq-native/validator-set-cases.txt
+PAIRS
+)
+
+# The rows no program in this build can produce, and why.
+pinned=$(cat <<'PINNED'
+test/pq-native/n3-controller-auth-vectors.tsv	root-public-key	a real controller root key, generated outside this build
+test/pq-native/n3-controller-auth-vectors.tsv	root-signature	signed by that key, which nothing here can hold
+PINNED
+)
+
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+
+while IFS=$'\t' read -r generator file; do
+  [ -n "$generator" ] || continue
+  program="$build/crypto/pq/$generator"
+  if [ ! -x "$program" ]; then
+    echo "vector check failed: $generator is not built" >&2
+    failed=1
+    continue
+  fi
+  if [ ! -f "$root/$file" ]; then
+    echo "vector check failed: $file is missing" >&2
+    failed=1
+    continue
+  fi
+  if ! "$program" >"$scratch/produced" 2>"$scratch/stderr"; then
+    echo "vector check failed: $generator did not run" >&2
+    cat "$scratch/stderr" >&2
+    failed=1
+    continue
+  fi
+
+  # Everything the generator produced must be in the file, unchanged.
+  missing=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if ! grep -qxF -- "$line" "$root/$file"; then
+      echo "vector check failed: $file does not hold a line $generator produced" >&2
+      echo "  ${line:0:120}" >&2
+      missing=1
+    fi
+  done <"$scratch/produced"
+  [ "$missing" -eq 0 ] || failed=1
+
+  # And everything in the file must be either produced or named above.
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in '#'*) continue ;; esac
+    if grep -qxF -- "$line" "$scratch/produced"; then
+      continue
+    fi
+    name="${line%%	*}"
+    if printf '%s\n' "$pinned" | grep -qF "$file	$name	"; then
+      continue
+    fi
+    echo "vector check failed: $file holds '$name', which $generator does not produce" >&2
+    failed=1
+  done <"$root/$file"
+done <<<"$generators"
+
+# A pinned row that disappeared is a row nothing checks any more.
+while IFS=$'\t' read -r file name _; do
+  [ -n "$file" ] || continue
+  if ! grep -q "^$name	" "$root/$file"; then
+    echo "vector check failed: $file no longer holds the pinned row '$name'" >&2
+    failed=1
+  fi
+done <<<"$pinned"
+
+if [ "$failed" -eq 0 ]; then
+  echo "every vector file is what its generator produces, plus the rows named as pinned"
+fi
+exit "$failed"
