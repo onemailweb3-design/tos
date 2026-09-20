@@ -12,6 +12,24 @@
 
 namespace tos::validator::consensus::simplex {
 
+// The N4/N5 boundary, expressed as one distinguishable status code.
+//
+// A verified post-quantum Simplex certificate stops at the conversion into a
+// block::BlockSignatureSet: that carrier is N5's, and the legacy one is a fixed 64-byte
+// Ed25519 encoding whose serializer refuses anything else and whose verification refuses a
+// post-quantum validator outright. So the conversion fails, permanently and by design.
+//
+// It must not be mistaken for `timeout`/`notready`. Those mean "try again"; this means
+// "this build cannot do it at all", and the finalization sequencer has to tell them apart
+// so it latches the slot instead of retrying the same refusal forever. The value is
+// deliberately outside the ErrorCode 6xx band. N5 removes the refusal by installing the
+// post-quantum carrier.
+inline constexpr int n5_carrier_required_error_code = 4501;
+
+inline bool is_n5_carrier_required(const td::Status& status) {
+  return status.code() == n5_carrier_required_error_code;
+}
+
 namespace tl {
 
 using voteSignature = tos_api::consensus_simplex_voteSignature;
@@ -41,7 +59,11 @@ struct Certificate : td::CntObject {
 
   CntObject* make_copy() const override;
 
-  td::Ref<block::BlockSignatureSet> to_signature_set(const CandidateRef& candidate, const Bus& bus) const
+  // Convert this certificate into the block-finality carrier. Fallible on purpose: in N4
+  // this always refuses with `n5_carrier_required_error_code`, because the carrier is N5's
+  // and the legacy one cannot hold a post-quantum signature. The caller must handle the
+  // refusal; it must not be able to get a legacy set by ignoring a status.
+  td::Result<td::Ref<block::BlockSignatureSet>> to_signature_set(const CandidateRef& candidate, const Bus& bus) const
     requires td::OneOf<T, NotarizeVote, FinalizeVote>;
 
   tl::VoteSignatureSetRef to_tl_vote_signature_set() const;

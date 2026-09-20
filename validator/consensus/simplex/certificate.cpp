@@ -90,22 +90,31 @@ td::BufferSlice Certificate<T>::serialize() const {
 }
 
 template <ValidVote T>
-td::Ref<block::BlockSignatureSet> Certificate<T>::to_signature_set(const CandidateRef& candidate, const Bus& bus) const
+td::Result<td::Ref<block::BlockSignatureSet>> Certificate<T>::to_signature_set(const CandidateRef& candidate,
+                                                                               const Bus& bus) const
   requires td::OneOf<T, NotarizeVote, FinalizeVote>
 {
   CHECK(candidate->id == vote.id);
 
-  std::vector<tos::BlockSignature> block_signatures;
-  for (const auto& [validator, signature] : signatures) {
-    block_signatures.emplace_back(validator.get_using(bus).validator_id.value, signature.clone());
-  }
-
-  auto fn = block::BlockSignatureSet::create_simplex_approve;
-  if constexpr (std::same_as<T, FinalizeVote>) {
-    fn = block::BlockSignatureSet::create_simplex;
-  }
-  return fn(std::move(block_signatures), bus.cc_seqno, bus.validator_set_hash, bus.session_id, vote.id.slot,
-            candidate->hash_data().to_tl());
+  // The N4/N5 seam.
+  //
+  // Everything up to here is N4's: the votes are post-quantum, the quorum is weighted, and
+  // every signature in this certificate has been verified against the key the validator set
+  // records. Turning that certificate into a block::BlockSignatureSet is where N5 begins,
+  // and the only carrier that exists today is the legacy one: its serializer writes
+  // `ed25519_signature#5` and takes exactly 64 bytes per signature, and its verification
+  // refuses a post-quantum validator outright. A 2420-byte signature cannot enter it.
+  //
+  // So this refuses, and it refuses *here* -- before any legacy object is constructed. The
+  // construction is not skipped behind a condition, it is absent: there is no branch, flag
+  // or build option in this function that can produce a legacy set from a post-quantum
+  // certificate. N5 replaces this refusal with the post-quantum carrier; until then a node
+  // can agree on finality and cannot persist it, which is exactly what an N4-only build is.
+  return td::Status::Error(
+      n5_carrier_required_error_code,
+      PSTRING() << "N5 carrier not implemented: a post-quantum Simplex certificate (session " << bus.session_id.to_hex()
+                << ", slot " << vote.id.slot
+                << ") cannot be converted into a block signature set until N5 provides the post-quantum carrier");
 }
 
 template <ValidVote T>

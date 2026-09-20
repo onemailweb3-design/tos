@@ -311,12 +311,25 @@ void proofs(Fixture& f) {
   auto candidate = td::make_ref<c::Candidate>(f.candidate_id, f.candidate_data.parent, c::PeerValidatorId{0}, f.block_id, td::BufferSlice());
   sx::FinalizeVote final_vote{f.candidate_id};
   auto final_cert = sx::FinalCert::from_tl(std::move(*f.signatures(final_vote, {0, 1})), final_vote, f.bus).move_as_ok();
-  auto simplex = final_cert->to_signature_set(candidate, f.bus);
+  // The N4/N5 seam: converting a Simplex certificate into a block signature set is refused
+  // until N5 provides the post-quantum carrier. The legacy-carrier assertions below are
+  // legacy regression, not evidence about N4, so they build the set directly.
+  auto refused_final = final_cert->to_signature_set(candidate, f.bus);
+  expect(refused_final.is_error() && sx::is_n5_carrier_required(refused_final.error()),
+         "final-cert-conversion-refused-until-n5");
+  auto simplex = block::BlockSignatureSet::create_simplex(
+      f.block_signatures(f.wrapped(tos::serialize_tl_object(final_vote.to_tl(), true)), {0, 1}), f.bus.cc_seqno,
+      f.bus.validator_set_hash, f.bus.session_id, f.candidate_id.slot, f.candidate_data.to_tl());
   roundtrip(simplex, "simplex-final");
   reject(simplex->check_signatures(f.vset, wrong_id), "simplex-bound-block", "block id mismatch");
   sx::NotarizeVote notar_vote{f.candidate_id};
   auto notar = sx::NotarCert::from_tl(std::move(*f.signatures(notar_vote, {0, 1})), notar_vote, f.bus).move_as_ok();
-  auto approve = notar->to_signature_set(candidate, f.bus);
+  auto refused_notar = notar->to_signature_set(candidate, f.bus);
+  expect(refused_notar.is_error() && sx::is_n5_carrier_required(refused_notar.error()),
+         "notar-cert-conversion-refused-until-n5");
+  auto approve = block::BlockSignatureSet::create_simplex_approve(
+      f.block_signatures(f.wrapped(tos::serialize_tl_object(notar_vote.to_tl(), true)), {0, 1}), f.bus.cc_seqno,
+      f.bus.validator_set_hash, f.bus.session_id, f.candidate_id.slot, f.candidate_data.to_tl());
   expect(approve->check_approve_signatures(f.vset, f.block_id).is_ok(), "simplex-approval");
   reject(approve->check_signatures(f.vset, f.block_id), "simplex-approval-not-final", "not final");
   expect(approve->serialize(f.vset).is_error(), "approval-cannot-be-persisted-as-final");

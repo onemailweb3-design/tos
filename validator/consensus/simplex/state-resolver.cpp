@@ -334,6 +334,10 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   struct FinalizedBlock {
     bool done = false;
     bool started = false;
+    // Terminal: this slot reached the N4/N5 seam and the carrier refused. The entry is kept
+    // precisely so the conversion is not attempted again -- erasing it, as an ordinary
+    // failure does, would retry the same permanent refusal forever and re-log it each time.
+    bool blocked_on_n5 = false;
     std::vector<td::Promise<td::Unit>> waiters;
   };
 
@@ -344,6 +348,9 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   InflightAdmission finalized_inflight_{
       cache_limit_from_env("TOS_SIMPLEX_FINALIZED_INFLIGHT_MAX", DEFAULT_FINALIZED_INFLIGHT_MAX)};
   size_t finalized_admission_rejections_ = 0;
+  // Slots latched at the N4/N5 carrier boundary. A non-zero value is the explicit, expected
+  // state of an N4-only build, not a fault to chase.
+  size_t n5_blocked_slots_ = 0;
   size_t finalized_db_hits_ = 0;
   size_t finalized_db_misses_ = 0;
   size_t finalized_db_skips_ = 0;
@@ -392,10 +399,9 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       }
       LOG(WARNING) << "MEMORY_DIAGNOSTICS simplex-state-resolver"
                    << " state_cache=" << state_cache_.size() << "/" << state_cache_lru_.capacity()
-                   << " state_evictions=" << state_cache_evictions_
-                   << " state_inflight=" << state_inflight << " state_waiters=" << state_waiters
-                   << " state_inflight_admission=" << state_inflight_.count() << "/" << state_inflight_.capacity()
-                   << " state_admission_rejections=" << state_admission_rejections_
+                   << " state_evictions=" << state_cache_evictions_ << " state_inflight=" << state_inflight
+                   << " state_waiters=" << state_waiters << " state_inflight_admission=" << state_inflight_.count()
+                   << "/" << state_inflight_.capacity() << " state_admission_rejections=" << state_admission_rejections_
                    << " unique_state_blocks=" << unique_blocks.size() << " state_block_bytes=" << state_block_bytes
                    << " finalized_cache=" << finalized_blocks_.size() << "/" << finalized_blocks_lru_.capacity()
                    << " finalized_evictions=" << finalized_cache_evictions_
@@ -403,8 +409,8 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
                    << " finalized_inflight_admission=" << finalized_inflight_.count() << "/"
                    << finalized_inflight_.capacity()
                    << " finalized_admission_rejections=" << finalized_admission_rejections_
-                   << " finalized_db_hits=" << finalized_db_hits_ << " finalized_db_misses=" << finalized_db_misses_
-                   << " finalized_db_skips=" << finalized_db_skips_;
+                   << " n5_blocked_slots=" << n5_blocked_slots_ << " finalized_db_hits=" << finalized_db_hits_
+                   << " finalized_db_misses=" << finalized_db_misses_ << " finalized_db_skips=" << finalized_db_skips_;
     }
   }
 
@@ -425,6 +431,12 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       touch_finalized_cache(id);
       co_return td::Unit{};
     }
+    if (state.blocked_on_n5) {
+      // Already latched. Answer without re-running the conversion and without logging again.
+      co_return td::Status::Error(n5_carrier_required_error_code, PSTRING()
+                                                                      << "Simplex state-resolver: slot " << id.slot
+                                                                      << " is blocked at the N4/N5 carrier boundary");
+    }
     auto [task, promise] = td::actor::StartedTask<td::Unit>::make_bridge();
     state.waiters.push_back(std::move(promise));
     if (!state.started) {
@@ -437,6 +449,17 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       if (result.is_ok()) {
         state.done = true;
         touch_finalized_cache(id);
+      } else if (is_n5_carrier_required(result.error())) {
+        // Not a transient failure: this build has no post-quantum block-signature carrier,
+        // and never will until N5. Latch the slot as terminally blocked and keep the entry,
+        // so the refusal is neither retried nor re-logged. The actor stays alive and the
+        // manager keeps a healthy group -- stopping it here would recreate the dead-entry
+        // lifecycle bug this design already fixed once.
+        state.blocked_on_n5 = true;
+        ++n5_blocked_slots_;
+        LOG(ERROR) << "Simplex consensus is blocked at the N4/N5 boundary: the certificate for slot " << id.slot
+                   << " was agreed and verified, but " << result.error().message()
+                   << ". No block was finalized, accepted or persisted. This is expected in an N4-only build.";
       } else {
         finalized_blocks_lru_.erase(id);
         finalized_blocks_.erase(id);
@@ -467,13 +490,16 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         co_await finalize_blocks(*parent, std::nullopt, std::nullopt);
       }
 
-      td::Ref<block::BlockSignatureSet> sig_set;
-      if (final_cert) {
-        sig_set = (*final_cert)->to_signature_set(*final_candidate, bus);
-      } else {
-        sig_set = notar_cert->to_signature_set(candidate, bus);
+      // The certificate is verified by this point. Converting it into a block-finality
+      // carrier is the N4/N5 seam and refuses in an N4-only build; returning that refusal
+      // here means no FinalizeBlock is published, no accept_block is reached, and the
+      // finalized-block marker below is never written.
+      auto sig_set = final_cert ? (*final_cert)->to_signature_set(*final_candidate, bus)
+                                : notar_cert->to_signature_set(candidate, bus);
+      if (sig_set.is_error()) {
+        co_return sig_set.move_as_error();
       }
-      co_await owning_bus().publish<FinalizeBlock>(candidate, sig_set);
+      co_await owning_bus().publish<FinalizeBlock>(candidate, sig_set.move_as_ok());
     } else {
       if (auto parent = candidate->parent_id) {
         co_await finalize_blocks(*parent, final_cert, final_candidate);
