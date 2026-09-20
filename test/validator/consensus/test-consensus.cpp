@@ -25,6 +25,7 @@
 #include "td/utils/OptionParser.h"
 #include "td/utils/Random.h"
 #include "td/utils/port/signals.h"
+#include "tos/quorum.h"
 #include "validator/consensus/candidate-codec.h"
 #include "validator/finality-cache-policy.h"
 #include "validator/manager-resource-policy.h"
@@ -127,6 +128,7 @@ bool RELAY_LOOP_TEST = false;
 bool QUERY_ABUSE_TEST = false;
 bool EMPTY_CHAIN_RESTART_TEST = false;
 bool VOTE_JOURNAL_TEST = false;
+bool PQ_FINALITY_E2E_TEST = false;
 std::atomic<bool> EMPTY_CHAIN_MANAGER_ANCHOR_UNAVAILABLE = false;
 std::atomic<size_t> EMPTY_CHAIN_MANAGER_ANCHOR_FAILURES = 0;
 double CATCH_UP_DOWNTIME = -1.0;
@@ -519,6 +521,63 @@ class TestManagerFacade : public ManagerFacade {
   td::actor::ActorId<TestConsensus> test_consensus_;
 };
 
+// ===== N4.5: what the end-to-end gate observes =====
+//
+// A node publishes FinalizationObserved the moment a finality certificate is agreed and
+// every signature in it has been verified against the key the validator set records. That
+// is exactly where N4 ends. Everything past it -- a block signature set, an accepted
+// block, a finalized-block marker -- belongs to N5 and must not happen in this build, so
+// the gate keeps the certificate itself rather than a count, and checks it independently.
+struct ObservedFinalization {
+  size_t node_idx = 0;
+  size_t instance_idx = 0;
+  CandidateId id;
+  simplex::FinalCertRef cert;
+};
+
+std::mutex finality_log_mutex;
+std::vector<ObservedFinalization> finality_log;
+
+// Only the end-to-end gate reads this, and only that run is short enough for it to be
+// bounded. A stress scenario finalizes for as long as it runs, so it does not record.
+void record_finalization(ObservedFinalization observation) {
+  if (!PQ_FINALITY_E2E_TEST) {
+    return;
+  }
+  std::scoped_lock lock(finality_log_mutex);
+  finality_log.push_back(std::move(observation));
+}
+
+std::vector<ObservedFinalization> read_finality_log() {
+  std::scoped_lock lock(finality_log_mutex);
+  return finality_log;
+}
+
+class TestFinalityObserver : public td::actor::SpawnsWith<simplex::Bus>, public td::actor::ConnectsTo<simplex::Bus> {
+ public:
+  TOS_RUNTIME_DEFINE_EVENT_HANDLER();
+
+  void start_up() override {
+    instance_idx_ = dynamic_cast<const TestSimplexBus&>(*owning_bus()).instance_idx;
+  }
+
+  template <>
+  void handle(simplex::BusHandle, std::shared_ptr<const StopRequested>) {
+    stop();
+  }
+
+  template <>
+  void handle(simplex::BusHandle bus, std::shared_ptr<const simplex::FinalizationObserved> event) {
+    if (!bus->local_id.has_value()) {
+      return;
+    }
+    record_finalization(ObservedFinalization{bus->local_id->idx.value(), instance_idx_, event->id, event->certificate});
+  }
+
+ private:
+  size_t instance_idx_ = 0;
+};
+
 class TestDbImpl : public consensus::Db {
  public:
   struct DbInner {
@@ -610,6 +669,9 @@ class TestConsensus : public td::actor::Actor {
 
   td::actor::Task<> on_block_accepted(size_t node_idx, size_t instance_idx, td::Ref<BlockData> block,
                                       size_t creator_idx, td::Ref<block::BlockSignatureSet> signatures) {
+    // Reaching here at all means a certificate became a block signature set and was
+    // accepted. In an N4-only build that cannot happen, and the N4.5 gate says so.
+    ++accepted_block_count_;
     BlockIdExt block_id = block->block_id();
     if (signatures->is_final()) {
       signatures->check_signatures(validator_set_, block_id).ensure();
@@ -772,8 +834,11 @@ class TestConsensus : public td::actor::Actor {
     if (VOTE_JOURNAL_TEST) {
       run_vote_journal_test().start().detach();
     }
+    if (PQ_FINALITY_E2E_TEST) {
+      run_pq_finality_e2e_test().start().detach();
+    }
 
-    if (!EMPTY_CHAIN_RESTART_TEST && !VOTE_JOURNAL_TEST) {
+    if (!EMPTY_CHAIN_RESTART_TEST && !VOTE_JOURNAL_TEST && !PQ_FINALITY_E2E_TEST) {
       run_write_status().start().detach();
     }
 
@@ -792,6 +857,14 @@ class TestConsensus : public td::actor::Actor {
       }
       if (!vote_journal_completed_ && vote_journal_error_.empty()) {
         vote_journal_error_ = "timed out waiting for the vote journal test";
+      }
+    } else if (PQ_FINALITY_E2E_TEST) {
+      auto deadline = td::Timestamp::in(DURATION);
+      while (!pq_finality_completed_ && pq_finality_error_.empty() && !deadline.is_in_past()) {
+        co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+      }
+      if (!pq_finality_completed_ && pq_finality_error_.empty()) {
+        pq_finality_error_ = "timed out waiting for the post-quantum finality end-to-end test";
       }
     } else {
       co_await td::actor::coro_sleep(td::Timestamp::in(DURATION));
@@ -824,6 +897,7 @@ class TestConsensus : public td::actor::Actor {
     BlockValidator::register_in(runtime);
     CandidateBroadcastRelay::register_in(runtime);
     runtime.register_actor<TestOverlayNode>("PrivateOverlay");
+    runtime.register_actor<TestFinalityObserver>("FinalityObserver");
     simplex::CandidateResolver::register_in(runtime);
     simplex::Consensus::register_in(runtime);
     simplex::Pool::register_in(runtime);
@@ -1141,6 +1215,272 @@ class TestConsensus : public td::actor::Actor {
       candidate = it->second;
     }
     return result;
+  }
+
+  // ===== N4.5: the post-quantum round, end to end, and the boundary it stops at =====
+
+  size_t finalized_marker_count(const Instance& instance) const {
+    std::scoped_lock lock(instance.db_inner->mutex);
+    const td::uint32 prefix = tos_api::consensus_simplex_db_key_finalizedBlock::ID;
+    size_t result = 0;
+    for (const auto& [key, _] : instance.db_inner->map) {
+      if (key.size() >= sizeof(prefix) && std::memcmp(key.data(), &prefix, sizeof(prefix)) == 0) {
+        ++result;
+      }
+    }
+    return result;
+  }
+
+  // Check a finality certificate the way a peer would, without reusing the code that
+  // produced it: every signature verified against the key the validator set records for
+  // that signer, no signer counted twice, and the weight behind it at or above the quorum.
+  std::string certificate_defect(const simplex::FinalCertRef& cert) const {
+    auto signed_bytes = serialize_tl_object(cert->vote.to_tl(), true);
+    std::set<size_t> signers;
+    ValidatorWeight weight = 0;
+    for (const auto& [validator, signature] : cert->signatures) {
+      auto idx = validator.value();
+      if (idx >= validators_.size()) {
+        return PSTRING() << "signer index " << idx << " is outside the validator set";
+      }
+      if (!signers.insert(idx).second) {
+        return PSTRING() << "signer " << idx << " appears twice in the certificate";
+      }
+      if (signature.size() != tos::pq::mldsa44_signature_bytes) {
+        return PSTRING() << "signer " << idx << " contributed a " << signature.size() << "-byte signature";
+      }
+      if (!validators_[idx].check_signature(SESSION_ID, signed_bytes, signature)) {
+        return PSTRING() << "signer " << idx << "'s signature does not verify under its post-quantum key";
+      }
+      if (!tos::checked_add_validator_weight(weight, validators_[idx].weight)) {
+        return "the certificate's signer weight overflows";
+      }
+    }
+    if (weight < tos::quorum_threshold(total_weight_)) {
+      return PSTRING() << "the certificate carries weight " << weight << ", below the quorum threshold "
+                       << tos::quorum_threshold(total_weight_);
+    }
+    return {};
+  }
+
+  td::actor::Task<> run_pq_finality_e2e_test() {
+    auto fail = [&](std::string message) { pq_finality_error_ = std::move(message); };
+
+    // --- Every node reaches an agreed, verified finality certificate ---
+    //
+    // One certificate, not a stream of them. An N4-only build agrees on the first slot and
+    // then cannot go further: the next candidate would be collated on the state of a block
+    // that is never finalized, because finalizing it is what the seam refuses. That is the
+    // intended shape of this build, so the gate asks for the round that N4 owns and stops
+    // where N4 stops.
+    auto slots_observed_by_every_node = [&]() -> size_t {
+      std::map<size_t, std::set<td::uint32>> per_node;
+      for (const auto& observation : read_finality_log()) {
+        per_node[observation.node_idx].insert(observation.id.slot);
+      }
+      if (per_node.size() < N_NODES) {
+        return 0;
+      }
+      size_t smallest = std::numeric_limits<size_t>::max();
+      for (const auto& [_, slots] : per_node) {
+        smallest = std::min(smallest, slots.size());
+      }
+      return smallest;
+    };
+
+    auto deadline = td::Timestamp::in(DURATION * 0.5);
+    while (slots_observed_by_every_node() < 1 && !deadline.is_in_past()) {
+      co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+    }
+    if (slots_observed_by_every_node() < 1) {
+      fail(PSTRING() << "not every one of " << N_NODES << " nodes reached a finality certificate");
+      co_return td::Unit{};
+    }
+
+    auto observations = read_finality_log();
+    std::map<td::uint32, CandidateId> agreed;
+    for (const auto& observation : observations) {
+      if (auto defect = certificate_defect(observation.cert); !defect.empty()) {
+        fail(PSTRING() << "node " << observation.node_idx << " accepted a finality certificate for slot "
+                       << observation.id.slot << " where " << defect);
+        co_return td::Unit{};
+      }
+      if (observation.cert->vote.id != observation.id) {
+        fail(PSTRING() << "node " << observation.node_idx << " observed a certificate for a different candidate "
+                       << "than the slot it was reported under");
+        co_return td::Unit{};
+      }
+      // Two nodes finalizing different candidates for one slot is the failure the whole
+      // protocol exists to prevent, so it is checked across nodes rather than per node.
+      auto [it, inserted] = agreed.emplace(observation.id.slot, observation.id);
+      if (!inserted && it->second != observation.id) {
+        fail(PSTRING() << "nodes disagreed on the candidate finalized at slot " << observation.id.slot);
+        co_return td::Unit{};
+      }
+    }
+
+    // --- A restarted node presents its journalled signature, not a new one ---
+    //
+    // This is the end-to-end form of the exact-byte property, and it is the step that ties
+    // the journal to what the network actually holds. The restarted node rebuilds its
+    // finality certificate from persisted records -- which re-verifies every signature in
+    // it -- and the signature it contributes must be the one its journal kept. Had replay
+    // signed again, the certificate would still verify, and nothing outside the journal
+    // would ever reveal that this node now holds different bytes than the peers do.
+    auto& restarted = nodes_[0].instances[0];
+    auto signed_before = own_vote_journal(restarted);
+    std::erase_if(signed_before, [](const JournalledVote& v) { return !v.is_signed; });
+    if (signed_before.empty()) {
+      fail("the node to restart had journalled no signed votes");
+      co_return td::Unit{};
+    }
+    auto observations_before_restart = read_finality_log().size();
+    co_await stop_instance(0, 0);
+    start_instance(0, 0);
+
+    auto rejoin_deadline = td::Timestamp::in(DURATION * 0.4);
+    auto observed_again = [&]() {
+      auto log = read_finality_log();
+      return std::any_of(log.begin() + static_cast<long>(observations_before_restart), log.end(),
+                         [](const ObservedFinalization& o) { return o.node_idx == 0; });
+    };
+    while (!observed_again() && !rejoin_deadline.is_in_past()) {
+      co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+    }
+    if (!observed_again()) {
+      fail("the restarted node did not rebuild a finality certificate from its persisted records");
+      co_return td::Unit{};
+    }
+
+    auto signed_after = own_vote_journal(restarted);
+    std::map<td::Slice, td::Slice> after_by_key;
+    for (const auto& entry : signed_after) {
+      after_by_key.emplace(entry.key.as_slice(), entry.value.as_slice());
+    }
+    for (const auto& entry : signed_before) {
+      auto it = after_by_key.find(entry.key.as_slice());
+      if (it == after_by_key.end() || it->second != entry.value.as_slice()) {
+        fail(PSTRING() << "the restarted node's journalled vote at seqno " << entry.seqno
+                       << " did not survive the restart byte for byte");
+        co_return td::Unit{};
+      }
+    }
+
+    // The certificate the restarted node rebuilt must carry this node's journalled bytes.
+    auto rebuilt_log = read_finality_log();
+    const ObservedFinalization* rebuilt = nullptr;
+    for (size_t i = observations_before_restart; i < rebuilt_log.size(); ++i) {
+      if (rebuilt_log[i].node_idx == 0) {
+        rebuilt = &rebuilt_log[i];
+        break;
+      }
+    }
+    CHECK(rebuilt != nullptr);
+    if (auto defect = certificate_defect(rebuilt->cert); !defect.empty()) {
+      fail(PSTRING() << "the certificate rebuilt after the restart is defective: " << defect);
+      co_return td::Unit{};
+    }
+    // Every signature in that certificate must be the one its signer journalled. A quorum
+    // certificate need not contain any particular node's signature -- four nodes reach a
+    // quorum with three -- so this checks whichever signers are in it against their own
+    // journals rather than singling one out. It is also the end-to-end form of the
+    // ordering rule: a signature cannot become observable before its record is committed,
+    // so a signature a peer holds must exist, byte for byte, in its signer's journal.
+    auto wanted_vote = serialize_tl_object(simplex::Vote{rebuilt->cert->vote}.to_tl(), true);
+    size_t checked_against_journals = 0;
+    for (const auto& [validator, signature] : rebuilt->cert->signatures) {
+      auto signer = validator.value();
+      if (signer >= N_NODES) {
+        fail(PSTRING() << "the rebuilt certificate names signer " << signer << ", which is not a node");
+        co_return td::Unit{};
+      }
+      td::Slice journalled;
+      for (const auto& entry : own_vote_journal(nodes_[signer].instances[0])) {
+        if (entry.is_signed && serialize_tl_object(entry.vote, true).as_slice() == wanted_vote.as_slice()) {
+          journalled = entry.signature.as_slice();
+        }
+      }
+      if (journalled.empty()) {
+        fail(PSTRING() << "node " << signer << " contributed a finalize signature it never journalled");
+        co_return td::Unit{};
+      }
+      if (journalled != signature.as_slice()) {
+        fail(PSTRING() << "node " << signer << " is holding a different signature than the one in the certificate");
+        co_return td::Unit{};
+      }
+      ++checked_against_journals;
+    }
+    if (checked_against_journals == 0) {
+      fail("the rebuilt certificate carried no signatures to check against a journal");
+      co_return td::Unit{};
+    }
+
+    // --- And none of it crossed into N5 ---
+    //
+    // The blocked-slot count belongs to the running process, not to the chain, so the
+    // restarted node starts it again from zero and reaches the boundary a second time when
+    // it replays its certificate. Waiting for that is not weakening the assertion: a node
+    // that never gets there fails on the deadline just the same.
+    auto boundary_deadline = td::Timestamp::in(DURATION * 0.2);
+    while (true) {
+      bool every_node_reached_it = true;
+      for (size_t node_idx = 0; node_idx < N_NODES && every_node_reached_it; ++node_idx) {
+        for (auto& instance : nodes_[node_idx].instances) {
+          if (instance.status != Instance::Running) {
+            continue;
+          }
+          auto blocked = co_await instance.bus.publish(std::make_shared<simplex::QueryN5BlockedSlotCount>());
+          if (blocked == 0) {
+            every_node_reached_it = false;
+            break;
+          }
+        }
+      }
+      if (every_node_reached_it) {
+        break;
+      }
+      if (boundary_deadline.is_in_past()) {
+        fail("a node finalized without ever reaching the N4/N5 carrier boundary");
+        co_return td::Unit{};
+      }
+      co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+    }
+
+    for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
+      for (size_t instance_idx = 0; instance_idx < nodes_[node_idx].instances.size(); ++instance_idx) {
+        auto& instance = nodes_[node_idx].instances[instance_idx];
+        if (instance.status != Instance::Running) {
+          continue;
+        }
+        if (auto markers = finalized_marker_count(instance); markers != 0) {
+          fail(PSTRING() << "node " << node_idx << "." << instance_idx << " wrote " << markers
+                         << " finalized-block markers");
+          co_return td::Unit{};
+        }
+      }
+    }
+    // Unlike the two checks above, nothing can currently make this one fire: reaching it
+    // needs a block signature set that verifies, and the legacy carrier refuses a
+    // post-quantum validator outright, so a build that got past the seam would abort in
+    // the harness's own verification before arriving here. It is kept because N5 is what
+    // makes acceptance possible, and this is the line that should start being able to fail
+    // then -- for the right reason.
+    if (accepted_block_count_ != 0) {
+      fail(PSTRING() << "the network accepted " << accepted_block_count_
+                     << " blocks; an N4-only build has no carrier to accept one with");
+      co_return td::Unit{};
+    }
+    if (last_accepted_block_ != FIRST_PARENT) {
+      fail("a block was accepted past the genesis parent");
+      co_return td::Unit{};
+    }
+
+    LOG(WARNING) << "PQ finality: " << N_NODES << " nodes agreed on one finality certificate and verified every "
+                 << "signature in it, a restart rebuilt that certificate from persisted records and its "
+                 << checked_against_journals << " signatures matched their signers' journals byte for byte, and "
+                 << "every node stopped at the N4/N5 boundary with no block accepted and no finalized marker written";
+    pq_finality_completed_ = true;
+    co_return td::Unit{};
   }
 
   // ===== N4.4: this node's own vote journal =====
@@ -1805,6 +2145,14 @@ class TestConsensus : public td::actor::Actor {
         co_return td::Status::Error("the vote journal test did not complete");
       }
     }
+    if (PQ_FINALITY_E2E_TEST) {
+      if (!pq_finality_error_.empty()) {
+        co_return td::Status::Error(pq_finality_error_);
+      }
+      if (!pq_finality_completed_) {
+        co_return td::Status::Error("the post-quantum finality end-to-end test did not complete");
+      }
+    }
     co_return td::Unit{};
   }
 
@@ -1862,6 +2210,9 @@ class TestConsensus : public td::actor::Actor {
   std::string empty_chain_restart_error_;
   bool vote_journal_completed_ = false;
   std::string vote_journal_error_;
+  bool pq_finality_completed_ = false;
+  std::string pq_finality_error_;
+  size_t accepted_block_count_ = 0;
   bool finishing_ = false;
 };
 
@@ -2830,6 +3181,9 @@ int main(int argc, char* argv[]) {
                [&]() { EMPTY_CHAIN_RESTART_TEST = true; });
   p.add_option('\0', "vote-journal-test", "restart across the two-phase own-vote journal and require exact-byte replay",
                [&]() { VOTE_JOURNAL_TEST = true; });
+  p.add_option('\0', "pq-finality-e2e-test",
+               "require an agreed post-quantum finality certificate on every node, and nothing past it",
+               [&]() { PQ_FINALITY_E2E_TEST = true; });
   p.add_option('\0', "candidate-relay-eviction-test", "fill the candidate-relay LRU and verify oldest-entry eviction",
                [&]() { run_candidate_relay_eviction_test = true; });
   p.add_option('\0', "state-resolver-cache-unit-test",

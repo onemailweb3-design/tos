@@ -133,6 +133,17 @@ struct QueryResolverTrackedStateCount {
   std::string contents_to_string() const;
 };
 
+// Read-only observability of the N4/N5 boundary: how many finalized slots this node
+// agreed on and then could not carry into block finality, because the post-quantum
+// block-signature carrier is N5's. A validator that is advancing normally answers 0; an
+// N4-only build answers with the number of slots it has latched. It is what lets an
+// operator, or the end-to-end gate, see the refusal as a state rather than as a log line.
+struct QueryN5BlockedSlotCount {
+  using ReturnType = size_t;
+
+  std::string contents_to_string() const;
+};
+
 enum class SkippedSlotResolution { ResolveCandidate, UseAvailableBase };
 
 td::Result<SkippedSlotResolution> select_skipped_slot_resolution(const CandidateId& requested, bool is_skipped,
@@ -194,7 +205,7 @@ class Bus : public consensus::Bus {
   using Events = td::TypeList<BroadcastVote, PersistOwnVoteIntent, PersistOwnSignedVote, NotarizationObserved,
                               FinalizationObserved, LeaderWindowObserved, WaitForParent, ResolveCandidate,
                               StoreCandidate, ResolveState, SaveCertificate, QueryValidatorGroupInfo, QuerySlotSkipped,
-                              QueryResolverTrackedStateCount>;
+                              QueryResolverTrackedStateCount, QueryN5BlockedSlotCount>;
 
   Bus() = default;
 

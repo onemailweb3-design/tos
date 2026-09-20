@@ -60,6 +60,10 @@ std::string QuerySlotSkipped::contents_to_string() const {
   return PSTRING() << "{id=" << id << "}";
 }
 
+std::string QueryN5BlockedSlotCount::contents_to_string() const {
+  return "{}";
+}
+
 std::string QueryResolverTrackedStateCount::contents_to_string() const {
   return PSTRING() << "{min_slot=" << min_slot << "}";
 }

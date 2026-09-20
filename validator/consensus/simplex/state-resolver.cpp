@@ -119,6 +119,11 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     co_return co_await resolve_state(request->id);
   }
 
+  template <>
+  td::actor::Task<size_t> process(BusHandle, std::shared_ptr<QueryN5BlockedSlotCount>) {
+    co_return n5_blocked_slots_;
+  }
+
  private:
   // ===== State resolution =====
   struct CachedState {
