@@ -240,12 +240,16 @@ set_tests_properties(
 #
 # Nothing is dropped to bound that. Production stops instead. With the hold set to one and
 # failures injected past it, the group has to report the backlog, produce no candidate while
-# it is over, and then -- once the injected failures run out -- drain it and reach the seam
-# with the certificate it started with.
+# it is over, and then -- once the injected failures run out -- report that it cleared and
+# accept at least one block. This scenario deliberately throttles finalization, so it does
+# not inherit the general gate's three-consecutive-block requirement; its lower progress
+# count is valid only together with the explicit over-limit, no-production, and recovery
+# assertions above.
 add_test(
     NAME test-consensus-simplex2-pq-finality-backpressure
     COMMAND test-consensus --duration 80 --n-nodes 4 --target-rate-ms 100
             --net-ping 0.005:0.02 --pq-finality-e2e-test
+            --finalization-backpressure-test
 )
 set_tests_properties(
     test-consensus-simplex2-pq-finality-backpressure

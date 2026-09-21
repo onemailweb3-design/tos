@@ -138,6 +138,13 @@ bool QUERY_ABUSE_TEST = false;
 // TOS_SIMPLEX_FINALIZED_INFLIGHT_MAX=1 to be set for the run; without it nothing is refused
 // and the probe fails, which is the intended behaviour of a probe whose pressure is missing.
 bool FINALIZATION_RETRY_PROBE = false;
+// This scenario deliberately stops production while more agreed certificates are
+// pending than the resolver may hold. Its progress requirement is therefore one
+// accepted block after the backlog clears, rather than the general three-block
+// continuity requirement. The backlog transition and absence of production while
+// throttled are asserted separately, so the lower progress count cannot make the
+// scenario pass without exercising backpressure and recovery.
+bool FINALIZATION_BACKPRESSURE_TEST = false;
 bool EMPTY_CHAIN_RESTART_TEST = false;
 bool VOTE_JOURNAL_TEST = false;
 bool PQ_FINALITY_E2E_TEST = false;
@@ -163,6 +170,7 @@ std::atomic<size_t> BYZANTINE_RELAYS_SENT = 0;
 // resolver will hold, and candidates produced by a node while it was in that state. The
 // second is the backpressure itself: a node that is behind on finality must not add to it.
 std::atomic<size_t> BACKLOG_OVER_LIMIT_REPORTS = 0;
+std::atomic<size_t> BACKLOG_CLEARED_REPORTS = 0;
 std::atomic<size_t> CANDIDATES_WHILE_BACKLOGGED = 0;
 double CATCH_UP_DOWNTIME = -1.0;
 
@@ -639,10 +647,12 @@ class TestFinalityObserver : public td::actor::SpawnsWith<simplex::Bus>, public 
   // the state in which it is supposed to stop producing.
   template <>
   void handle(simplex::BusHandle, std::shared_ptr<const FinalizationBacklog> event) {
-    backlogged_ = event->over_limit;
     if (event->over_limit) {
       ++BACKLOG_OVER_LIMIT_REPORTS;
+    } else if (backlogged_) {
+      ++BACKLOG_CLEARED_REPORTS;
     }
+    backlogged_ = event->over_limit;
   }
 
  private:
@@ -1402,6 +1412,9 @@ class TestConsensus : public td::actor::Actor {
         {QUERY_ABUSE_TEST, [this] { return query_abuse_completed_; }, "the candidate query flood"},
         {BYZANTINE_RELAY_NODE >= 0, [] { return BYZANTINE_RELAYS_SENT.load() > 0; },
          "a validator relaying another's signed vote"},
+        {FINALIZATION_BACKPRESSURE_TEST,
+         [] { return BACKLOG_OVER_LIMIT_REPORTS.load() > 0 && BACKLOG_CLEARED_REPORTS.load() > 0; },
+         "a finalization backlog activation and recovery"},
     };
     auto deadline = td::Timestamp::in(DURATION * 0.8);
     for (const auto& adversity : adversities) {
@@ -1417,7 +1430,7 @@ class TestConsensus : public td::actor::Actor {
       }
     }
 
-    constexpr size_t required_consecutive_accepted_blocks = 3;
+    const size_t required_consecutive_accepted_blocks = FINALIZATION_BACKPRESSURE_TEST ? 1 : 3;
     while ((read_finality_log().empty() || accepted_carriers_.empty() ||
             longest_consecutive_accepted_block_run() < required_consecutive_accepted_blocks) &&
            !deadline.is_in_past()) {
@@ -1436,6 +1449,17 @@ class TestConsensus : public td::actor::Actor {
       fail(PSTRING() << "post-quantum finality accepted only " << consecutive_accepted_blocks
                      << " consecutive blocks, expected at least " << required_consecutive_accepted_blocks);
       co_return td::Unit{};
+    }
+    if (FINALIZATION_BACKPRESSURE_TEST && CANDIDATES_WHILE_BACKLOGGED.load() != 0) {
+      fail(PSTRING() << "the network produced " << CANDIDATES_WHILE_BACKLOGGED.load()
+                     << " candidate(s) while finalization backpressure was active");
+      co_return td::Unit{};
+    }
+    if (FINALIZATION_BACKPRESSURE_TEST) {
+      LOG(WARNING) << "Finalization backpressure scenario: over-limit reports="
+                   << BACKLOG_OVER_LIMIT_REPORTS.load() << "; cleared reports=" << BACKLOG_CLEARED_REPORTS.load()
+                   << "; candidates while throttled=" << CANDIDATES_WHILE_BACKLOGGED.load()
+                   << "; consecutive accepted blocks after recovery=" << consecutive_accepted_blocks;
     }
 
     size_t independently_verified_proofs = 0;
@@ -3487,6 +3511,9 @@ int main(int argc, char* argv[]) {
   p.add_option('\0', "finalization-retry-probe",
                "refuse a finalization with the concurrency limit and require it to be tried again",
                [&]() { FINALIZATION_RETRY_PROBE = true; });
+  p.add_option('\0', "finalization-backpressure-test",
+               "require finalization backlog throttling, recovery, and one accepted block after recovery",
+               [&]() { FINALIZATION_BACKPRESSURE_TEST = true; });
   p.add_option('\0', "pq-finality-e2e-test",
                "require an agreed post-quantum finality certificate on every node, and nothing past it",
                [&]() { PQ_FINALITY_E2E_TEST = true; });

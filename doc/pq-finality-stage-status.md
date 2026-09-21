@@ -302,6 +302,16 @@ evidence of continuity, because three adjacent unique heights must advance, and
 weaker evidence of volume, because three is fewer than five.  No attack-specific
 assertion was dropped.
 
+The finalization-backpressure scenario is deliberately exempt from that general
+three-block progress bar.  Its premise is that an over-limit finalization backlog
+stops production.  It instead requires the over-limit transition, zero candidates
+while throttled, the cleared transition, and at least one accepted block after
+recovery.  Loss and partition still require their injected adversity followed by
+three consecutive unique accepted heights.  Transient finalization failure must
+exhaust its finite injected failures and then meet the same three-height bar.
+Permanent finalization failure does not use the progress gate: its contract is to
+retain the certificate, stop retrying it, and stop production.
+
 ## Registered gaps and explicit non-claims
 
 The following are gaps, not green claims.
