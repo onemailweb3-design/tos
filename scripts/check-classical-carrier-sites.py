@@ -2,6 +2,7 @@
 """Keep the classical finality-carrier inventory equal to the source tree."""
 
 import re
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -41,15 +42,25 @@ MARKERS = {
 }
 
 
-def actual_sites() -> Counter[tuple[str, str]]:
+def tracked_files() -> tuple[set[str], list[str]]:
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, check=False
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace").strip()
+        return set(), [f"classical-carrier check failed: cannot enumerate tracked files: {detail}"]
+    return set(result.stdout.decode(errors="surrogateescape").split("\0")) - {""}, []
+
+
+def actual_sites(tracked: set[str]) -> Counter[tuple[str, str]]:
     result: Counter[tuple[str, str]] = Counter()
-    for path in ROOT.rglob("*"):
+    for relative in sorted(tracked):
+        path = ROOT / relative
         if not path.is_file() or path.suffix not in SOURCE_SUFFIXES:
             continue
         if path == SELF or path == MANIFEST or any(part in EXCLUDED_PARTS for part in path.parts):
             continue
         text = path.read_text(errors="replace")
-        relative = path.relative_to(ROOT).as_posix()
         for marker, pattern in MARKERS.items():
             count = sum(1 for _ in pattern.finditer(text))
             if count:
@@ -57,7 +68,7 @@ def actual_sites() -> Counter[tuple[str, str]]:
     return result
 
 
-def declared_sites() -> tuple[dict[tuple[str, str], int], list[str]]:
+def declared_sites(tracked: set[str]) -> tuple[dict[tuple[str, str], int], list[str]]:
     if not MANIFEST.is_file():
         return {}, [f"classical-carrier check failed: missing inventory {MANIFEST}"]
     declared: dict[tuple[str, str], int] = {}
@@ -70,6 +81,8 @@ def declared_sites() -> tuple[dict[tuple[str, str], int], list[str]]:
             errors.append(f"classical-carrier check failed: malformed inventory row {line_no}")
             continue
         file, marker, count_text, status, _why = fields
+        if file not in tracked:
+            errors.append(f"classical-carrier check failed: {file} is not tracked by git")
         key = (file, marker)
         if marker != "*" and marker not in MARKERS:
             errors.append(f"classical-carrier check failed: {file} has unknown marker {marker}")
@@ -86,8 +99,10 @@ def declared_sites() -> tuple[dict[tuple[str, str], int], list[str]]:
 
 
 def main() -> int:
-    actual = actual_sites()
-    declared, errors = declared_sites()
+    tracked, errors = tracked_files()
+    actual = actual_sites(tracked)
+    declared, declared_errors = declared_sites(tracked)
+    errors.extend(declared_errors)
 
     # This disk-manager helper used to manufacture a tosNode_sessionId with a
     # zero config hash and had no callers. It was not a validator-session

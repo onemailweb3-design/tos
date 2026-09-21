@@ -93,6 +93,12 @@ Commits:
 - `1347c91435908902296e61b3a76470723baba2c9` — bidirectional classical-carrier inventory and removal of the dead, misleading disk-manager session helper.
 - `fe0896df8c8604ca6f4572e3f284bb0b0a7105e6` — session-options hashing moved below consensus to preserve link boundaries.
 
+The bidirectional classical-carrier inventory contains 50 rows covering 44
+Git-tracked paths, 85 distinct marker entries and 278 source sites.  Its earlier
+408-site figure included 130 occurrences in eight untracked
+`tl/generate/auto/tl/*` build outputs.  Those derived copies are now excluded;
+their two authoritative tracked schema inputs remain inventoried.
+
 | Design gate | Registered subject test | Proves | Does not prove |
 |---|---|---|---|
 | `n5-pq-block-signature-conformance` | `pq-block-signature-conformance` | Stable validator ID, descriptor type/algorithm/key, signed preimage, role, every included signature, checked weight, and quorum are enforced. | That every production proof consumer supplies the right trusted context. |
