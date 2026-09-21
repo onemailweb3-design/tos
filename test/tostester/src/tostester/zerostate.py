@@ -273,11 +273,11 @@ elector_addr config.elector_smc!
 config.special!
 
 // gas_price gas_limit special_gas_limit gas_credit block_gas_limit freeze_due_limit delete_due_limit flat_gas_limit flat_gas_price
-// DEV-SPECIFIC: cheaper gas for tests (production: 26214400/655360000)
+// DEV-SPECIFIC: cheaper gas for tests (production: 4369067/655360000)
 10 sg* 1 *M dup   10000 1000 *M TM$0.1 TM$1.0 100 1000 config.gas_prices!
 10 sg* 1 *M 20 *M 10000 1000 *M TM$0.1 TM$1.0 100 1000 config.mc_gas_prices!
 // lump_price bit_price cell_price ihr_factor first_frac next_frac
-// DEV-SPECIFIC: cheaper forwarding for tests (production: 400000/10000000)
+// DEV-SPECIFIC: cheaper forwarding for tests (production: 66667/10000000)
 100 10 sg* 10 sg* 3/2 sg*/ 1/3 sg*/ 1/3 sg*/ config.fwd_prices!
 100 10 sg* 10 sg* 3/2 sg*/ 1/3 sg*/ 1/3 sg*/ config.mc_fwd_prices!
 // mc-cc-lifetime sh-cc-lifetime sh-val-lifetime sh-val-num mc-shuffle

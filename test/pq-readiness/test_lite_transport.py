@@ -96,10 +96,10 @@ class FakeNode(LiteClientTransport):
         if command == 'getconfig 21':
             # Production-shaped basechain prices. These deliberately include a
             # flat prefix so a test that falls back to gas_price/2^16 is wrong.
-            return ('gas_price:26214400 flat_gas_limit:100 '
-                    'flat_gas_price:40000\n')
+            return ('gas_price:4369067 flat_gas_limit:100 '
+                    'flat_gas_price:6667\n')
         if command == 'getconfig 25':
-            return ('lump_price:400000 bit_price:26214400 cell_price:2621440000 '
+            return ('lump_price:66667 bit_price:4369067 cell_price:436906667 '
                     'ihr_price_factor:98304 first_frac:21845 next_frac:21845\n')
         if command == 'last':
             return ('latest masterchain block known to server is (-1,8000000000000000,3)\n'
