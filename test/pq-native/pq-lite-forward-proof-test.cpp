@@ -271,7 +271,7 @@ td::Ref<vm::Cell> merkle_proof(td::Ref<vm::Cell> root) {
 
 using pq_block_signature_test::candidate;
 
-td::uint16 reserve_tcp_port() {
+td::uint16 allocate_tcp_port() {
   const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) {
     fail("cannot allocate TCP socket");
@@ -325,7 +325,7 @@ class ExtClientCallback final : public adnl::AdnlExtClient::Callback {
 };
 
 td::BufferSlice adnl_ext_round_trip(const td::BufferSlice& proof) {
-  const auto port = reserve_tcp_port();
+  const auto port = allocate_tcp_port();
   const auto db_root = "/tmp/tos-pq-lite-forward-" + std::to_string(::getpid());
   td::rmrf(db_root).ignore();
   require_ok(td::mkdir(db_root), "transport db directory");
@@ -340,6 +340,7 @@ td::BufferSlice adnl_ext_round_trip(const td::BufferSlice& proof) {
     std::atomic<bool> key_ready{false};
     std::atomic<bool> client_ready{false};
     std::atomic<bool> server_ready{false};
+    std::atomic<bool> server_listening{false};
     std::atomic<bool> answer_ready{false};
     td::Result<td::BufferSlice> answer{td::Status::Error("answer not received")};
     auto private_key = PrivateKey{privkeys::Ed25519::random()};
@@ -388,9 +389,23 @@ td::BufferSlice adnl_ext_round_trip(const td::BufferSlice& proof) {
         fail("transport server startup timed out");
       }
     }
-    // The promise resolves when the server actor exists; allow its TCP listener
-    // to bind before creating this one-shot client.
-    scheduler.run(0.05);
+    td::Status listening_status = td::Status::Error("transport server did not report listening");
+    scheduler.run_in_context([&] {
+      td::actor::send_closure(
+          server, &adnl::AdnlExtServer::wait_listening,
+          td::PromiseCreator::lambda([&](td::Result<td::Unit> result) {
+            listening_status = result.is_error() ? result.move_as_error() : td::Status::OK();
+            server_listening.store(true, std::memory_order_release);
+          }));
+    });
+    deadline = td::Timestamp::in(10.0);
+    while (!server_listening.load(std::memory_order_acquire)) {
+      scheduler.run(0.01);
+      if (deadline.is_in_past()) {
+        fail("transport server listen readiness timed out");
+      }
+    }
+    require_ok(std::move(listening_status), "transport server listen readiness");
     scheduler.run_in_context([&] {
       td::IPAddress address;
       require_ok(address.init_host_port("127.0.0.1", port), "transport server address");
