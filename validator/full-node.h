@@ -104,8 +104,8 @@ class FullNode : public td::actor::Actor {
 
   virtual void process_block_broadcast(BlockBroadcast broadcast, bool signatures_checked, BroadcastSource source,
                                        bool send_to_custom) = 0;
-  virtual void process_block_finality_broadcast(BlockFinalityBroadcast finality, BroadcastSource source,
-                                                bool send_to_custom) = 0;
+  virtual void process_block_finality_broadcast(BlockFinalityBroadcast finality, PublicKeyHash source_peer,
+                                                BroadcastSource source, bool send_to_custom) = 0;
   virtual void process_block_candidate_broadcast(BlockIdExt block_id, CatchainSeqno cc_seqno,
                                                  td::uint32 validator_set_hash, td::BufferSlice data,
                                                  BroadcastSource source, bool send_to_custom) = 0;

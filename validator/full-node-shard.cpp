@@ -876,7 +876,7 @@ void FullNodeShardImpl::process_broadcast(PublicKeyHash src, tos_api::tosNode_bl
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in public overlay from " << src << ": "
                         << finality.ok().block_id.to_str();
   td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, finality.move_as_ok(),
-                          BroadcastSource::public_overlay, false);
+                          src, BroadcastSource::public_overlay, false);
 }
 
 void FullNodeShardImpl::process_block_broadcast(PublicKeyHash src, tos_api::tosNode_Broadcast &query) {
@@ -1064,8 +1064,7 @@ void FullNodeShardImpl::send_block_finality_broadcast(BlockFinalityBroadcast fin
     return;
   }
   VLOG(FULL_NODE_DEBUG) << "Sending Plumtree blockFinalityBroadcast in public overlay: " << finality.block_id.to_str();
-  auto broadcast_id = get_tl_object_sha_bits256(
-      create_tl_object<tos_api::tosNode_finalityBroadcastId>(create_tl_block_id(finality.block_id)));
+  auto broadcast_id = block_finality_broadcast_transport_id(finality);
   auto payload = serialize_block_finality_broadcast(finality);
   auto source = choose_outbound_source(static_cast<td::uint32>(payload.size()), true);
   td::actor::send_closure(overlays_, &overlay::Overlays::send_broadcast_plumtree, adnl_id_, overlay_id_, source,

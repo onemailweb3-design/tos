@@ -104,7 +104,7 @@ void FullNodeFastSyncOverlay::process_block_finality_broadcast(PublicKeyHash src
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in fast sync overlay from " << src << ": "
                         << finality.ok().block_id.to_str();
   td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, finality.move_as_ok(),
-                          BroadcastSource::fast_sync_overlay, true);
+                          src, BroadcastSource::fast_sync_overlay, true);
 }
 
 void FullNodeFastSyncOverlay::obtain_state_for_decompression(PublicKeyHash src,
@@ -328,8 +328,7 @@ void FullNodeFastSyncOverlay::send_block_finality_broadcast(BlockFinalityBroadca
   }
   VLOG(FULL_NODE_DEBUG) << "Sending Plumtree blockFinalityBroadcast in fast sync overlay: "
                         << finality.block_id.to_str();
-  auto broadcast_id = get_tl_object_sha_bits256(
-      create_tl_object<tos_api::tosNode_finalityBroadcastId>(create_tl_block_id(finality.block_id)));
+  auto broadcast_id = block_finality_broadcast_transport_id(finality);
   auto B = serialize_block_finality_broadcast(finality);
   td::actor::send_closure(overlays_, &overlay::Overlays::send_broadcast_plumtree, local_id_, overlay_id_,
                           local_id_.pubkey_hash(), overlay::Overlays::BroadcastFlagAnySender(), broadcast_id,

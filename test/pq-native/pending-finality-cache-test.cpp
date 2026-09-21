@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "validator/finality-cache-policy.h"
+#include "validator/full-node-serializer.hpp"
 
 #include "pq-block-signature-test-common.h"
 
@@ -20,17 +21,20 @@ struct ProcessingResult {
 
 ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::BlockSignatureSet>>& arrivals,
                                              const block::PQFinalityVerificationContext& context) {
-  tos::validator::PendingFinalityCandidates<td::Ref<block::BlockSignatureSet>, 4> candidates;
+  tos::validator::PendingFinalityStore<int, int, td::Ref<block::BlockSignatureSet>> store;
+  int sender = 0;
   for (const auto& signature_set : arrivals) {
-    if (candidates.admit(signature_set, false, true) == tos::validator::PendingFinalityAdmission::Keep) {
+    auto serialized_bytes = serialize_tl_object(signature_set->tl(), true).size();
+    if (!store.admit(0, sender++, signature_set, serialized_bytes, false, true).admitted()) {
       return {};
     }
   }
+  auto* candidates = store.get_if_exists(0);
   ProcessingResult result;
-  while (auto candidate = candidates.begin_processing()) {
+  while (auto candidate = candidates->begin_processing()) {
     result.attempted.push_back(candidate->evidence.get());
     bool accepted = block::verify_pq_finality(context, *candidate->evidence, block::FinalityRole::Final).is_ok();
-    candidates.complete_front(accepted);
+    candidates->complete_front(accepted);
     if (accepted) {
       result.accepted = true;
       return result;
@@ -42,11 +46,31 @@ ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::Bl
 }  // namespace
 
 int main() {
-  tos::validator::PendingFinalityCandidates<int, 2> bound_check;
-  if (bound_check.admit(1, false, true) != tos::validator::PendingFinalityAdmission::Replace ||
-      bound_check.admit(2, false, true) != tos::validator::PendingFinalityAdmission::Append ||
-      bound_check.admit(3, false, true) != tos::validator::PendingFinalityAdmission::Keep || bound_check.size() != 2) {
-    std::cerr << "PENDING_FINALITY_BOUND_FAILURE: unverified candidate bound was not enforced\n";
+  tos::validator::PendingFinalityStore<int, int, int> sender_budget_check;
+  if (!sender_budget_check
+           .admit(1, 7, 1, tos::validator::pending_finality_sender_budget_bytes, false, true)
+           .admitted() ||
+      sender_budget_check.admit(2, 7, 2, 1, false, true).rejection !=
+          tos::validator::PendingFinalityRejection::SenderBudget) {
+    std::cerr << "PENDING_FINALITY_SENDER_BUDGET_FAILURE: one sender exceeded its 1048576-byte share\n";
+    return 1;
+  }
+  tos::validator::PendingFinalityStore<int, int, int> total_budget_check;
+  constexpr std::size_t senders_fitting_total = tos::validator::pending_finality_total_budget_bytes /
+                                                 tos::validator::pending_finality_sender_budget_bytes;
+  for (std::size_t i = 0; i < senders_fitting_total; ++i) {
+    if (!total_budget_check
+             .admit(static_cast<int>(i), static_cast<int>(i), static_cast<int>(i),
+                    tos::validator::pending_finality_sender_budget_bytes, false, true)
+             .admitted()) {
+      std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: store rejected bytes below its 16777216-byte budget\n";
+      return 1;
+    }
+  }
+  if (total_budget_check
+          .admit(99, 99, 99, tos::validator::pending_finality_minimum_charge_bytes, false, true)
+          .rejection != tos::validator::PendingFinalityRejection::TotalBudget) {
+    std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: store exceeded its 16777216-byte budget\n";
     return 1;
   }
 
@@ -65,7 +89,45 @@ int main() {
                                                     weight, fixture.validator_set->get_validator_set_hash(),
                                                     fixture.validator_set->get_catchain_seqno(), fixture.validator_set),
                             "invalid-final");
+  auto valid_transport_id = tos::validator::fullnode::block_finality_broadcast_transport_id({fixture.id, valid});
+  auto invalid_transport_id = tos::validator::fullnode::block_finality_broadcast_transport_id({fixture.id, invalid});
+  if (valid_transport_id == invalid_transport_id) {
+    std::cerr << "PENDING_FINALITY_TRANSPORT_DEDUP_FAILURE: invalid finality occupied the honest finality transport id\n";
+    return 1;
+  }
   const block::PQFinalityVerificationContext context{fixture.validator_set, fixture.id, fixture.session};
+
+  tos::validator::PendingFinalityStore<int, int, td::Ref<block::BlockSignatureSet>> isolated_store;
+  auto invalid_bytes = serialize_tl_object(invalid->tl(), true).size();
+  auto valid_bytes = serialize_tl_object(valid->tl(), true).size();
+  constexpr int old_candidate_limit = 4;
+  for (int i = 0; i < old_candidate_limit; ++i) {
+    auto admission = isolated_store.admit(0, 1, invalid, invalid_bytes, false, true);
+    if ((i == 0 && !admission.admitted()) ||
+        (i != 0 && admission.rejection != tos::validator::PendingFinalityRejection::SenderAlreadyPending)) {
+      std::cerr << "PENDING_FINALITY_SENDER_ISOLATION_FAILURE: one sender occupied more than one block candidate\n";
+      return 1;
+    }
+  }
+  if (!isolated_store.admit(0, 2, valid, valid_bytes, false, true).admitted() ||
+      isolated_store.get_if_exists(0)->size() != 2) {
+    std::cerr << "PENDING_FINALITY_SENDER_ISOLATION_FAILURE: honest sender was excluded by a Byzantine sender\n";
+    return 1;
+  }
+  bool isolated_accepted = false;
+  auto* isolated_candidates = isolated_store.get_if_exists(0);
+  while (auto pending = isolated_candidates->begin_processing()) {
+    bool accepted = block::verify_pq_finality(context, *pending->evidence, block::FinalityRole::Final).is_ok();
+    isolated_candidates->complete_front(accepted);
+    if (accepted) {
+      isolated_accepted = true;
+      break;
+    }
+  }
+  if (!isolated_accepted) {
+    std::cerr << "PENDING_FINALITY_SENDER_ISOLATION_FAILURE: honest finality was not accepted after Byzantine evidence\n";
+    return 1;
+  }
   auto positive_control = block::verify_pq_finality(context, *valid, block::FinalityRole::Final);
   if (positive_control.is_error()) {
     std::cerr << "PENDING_FINALITY_POSITIVE_CONTROL_FAILURE: " << positive_control.error().message().str() << "\n";
@@ -93,5 +155,8 @@ int main() {
     return 1;
   }
   std::cout << "PENDING_FINALITY_ORDER_OK: first cryptographically valid final accepted in both arrival orders\n";
+  std::cout << "PENDING_FINALITY_TRANSPORT_DEDUP_OK: evidence-distinct finalities have distinct transport ids\n";
+  std::cout << "PENDING_FINALITY_SENDER_ISOLATION_OK: four bad arrivals from one sender did not exclude another sender\n";
+  std::cout << "PENDING_FINALITY_BYTE_BUDGET_OK: total=16777216 per_sender=1048576 minimum_charge=4096\n";
   return 0;
 }

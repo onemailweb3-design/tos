@@ -74,9 +74,25 @@ struct PendingBlockFinalityCandidate {
   BroadcastSource source;
 };
 
-struct PendingBlockFinality {
-  static constexpr std::size_t max_candidates = 4;
-  PendingFinalityCandidates<PendingBlockFinalityCandidate, max_candidates> candidates;
+struct PendingBlockFinalitySender {
+  bool local{true};
+  PublicKeyHash peer;
+
+  static PendingBlockFinalitySender local_source() {
+    return {};
+  }
+  static PendingBlockFinalitySender remote(PublicKeyHash peer) {
+    return {false, peer};
+  }
+  bool operator==(const PendingBlockFinalitySender &other) const {
+    return local == other.local && (local || peer == other.peer);
+  }
+  bool operator<(const PendingBlockFinalitySender &other) const {
+    if (local != other.local) {
+      return local < other.local;
+    }
+    return !local && peer < other.peer;
+  }
 };
 
 class BlockHandleLru : public td::ListNode {
@@ -231,7 +247,8 @@ class ValidatorManagerImpl : public ValidatorManager {
   td::LRUCache<BlockIdExt, td::BufferSlice> cached_block_data_{/* max_size = */ 128};
   td::LRUCache<BlockIdExt, td::BufferSlice> cached_masterchain_block_candidates_{/* max_size = */ 128};
   td::LRUCache<BlockIdExt, td::Unit> cached_checked_shard_block_descriptions_{/* max_size = */ 1024};
-  td::LRUCache<BlockIdExt, PendingBlockFinality> pending_block_finality_{/* max_size = */ 256};
+  PendingFinalityStore<BlockIdExt, PendingBlockFinalitySender, PendingBlockFinalityCandidate>
+      pending_block_finality_;
 
   td::actor::ActorOwn<ExtMessagePool> ext_message_pool_;
   td::actor::ActorOwn<AppliedExtMessageCleanupActor> applied_ext_message_cleanup_actor_;
@@ -403,7 +420,8 @@ class ValidatorManagerImpl : public ValidatorManager {
   void validate_block(ReceivedBlock block, td::Promise<BlockHandle> promise) override;
   void new_block_broadcast(BlockBroadcast broadcast, bool signatures_checked, BroadcastSource source,
                            td::Promise<td::Unit> promise) override;
-  td::actor::Task<> new_block_finality_broadcast(BlockFinalityBroadcast finality, BroadcastSource source) override;
+  td::actor::Task<> new_block_finality_broadcast(BlockFinalityBroadcast finality, BroadcastSource source,
+                                                  td::optional<PublicKeyHash> source_peer = {}) override;
   void validate_block_broadcast_signatures(BlockBroadcast broadcast, td::Promise<td::Unit> promise) override;
   td::actor::Task<> validated_accepted_block_broadcast(BlockIdExt block_id, CatchainSeqno cc_seqno);
   td::actor::Task<> generate_shard_block_description(BlockIdExt block_id, Ref<block::BlockSignatureSet> sig_set);

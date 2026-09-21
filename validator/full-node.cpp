@@ -606,8 +606,8 @@ void FullNodeImpl::process_block_broadcast(BlockBroadcast broadcast, bool signat
                           });
 }
 
-void FullNodeImpl::process_block_finality_broadcast(BlockFinalityBroadcast finality, BroadcastSource source,
-                                                    bool send_to_custom) {
+void FullNodeImpl::process_block_finality_broadcast(BlockFinalityBroadcast finality, PublicKeyHash source_peer,
+                                                    BroadcastSource source, bool send_to_custom) {
   if (finality.sig_set.is_null()) {
     VLOG(FULL_NODE_WARNING) << "dropping block finality broadcast without signatures";
     return;
@@ -619,7 +619,7 @@ void FullNodeImpl::process_block_finality_broadcast(BlockFinalityBroadcast final
   // being silently discarded by Task::detach().  Broadcast ingress is
   // best-effort, but an unavailable manager must remain observable.
   std::move(td::actor::ask(validator_manager_, &ValidatorManagerInterface::new_block_finality_broadcast,
-                           std::move(finality), source))
+                           std::move(finality), source, td::optional<PublicKeyHash>(source_peer)))
       .detach("full-node finality broadcast");
 }
 

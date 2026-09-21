@@ -191,6 +191,17 @@ td::BufferSlice serialize_block_finality_broadcast(const BlockFinalityBroadcast&
                                                                              broadcast.sig_set->tl());
 }
 
+td::Bits256 block_finality_broadcast_transport_id(const BlockFinalityBroadcast& broadcast) {
+  auto block_identity = serialize_tl_object(
+      create_tl_object<tos_api::tosNode_finalityBroadcastId>(create_tl_block_id(broadcast.block_id)), true);
+  auto signature_set_hash = get_tl_object_sha_bits256(broadcast.sig_set->tl());
+  td::BufferSlice identity(block_identity.size() + signature_set_hash.as_slice().size());
+  auto destination = identity.as_slice();
+  destination.substr(0, block_identity.size()).copy_from(block_identity.as_slice());
+  destination.substr(block_identity.size()).copy_from(signature_set_hash.as_slice());
+  return td::sha256_bits256(identity.as_slice());
+}
+
 td::Result<BlockFinalityBroadcast> deserialize_block_finality_broadcast(
     tos_api::tosNode_blockFinalityBroadcast& broadcast) {
   TRY_RESULT(signatures, block::BlockSignatureSet::fetch_node_checked(broadcast.signature_set_));

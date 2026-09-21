@@ -644,7 +644,8 @@ static td::actor::Task<> check_finality_signatures(BlockIdExt block_id, Ref<bloc
 }
 
 td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinalityBroadcast finality,
-                                                                     BroadcastSource source) {
+                                                                     BroadcastSource source,
+                                                                     td::optional<PublicKeyHash> source_peer) {
   if (!last_masterchain_block_handle_ || last_masterchain_state_.is_null()) {
     VLOG(VALIDATOR_DEBUG) << "dropping block finality broadcast: not inited";
     co_return td::Unit{};
@@ -664,10 +665,11 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
   }
 
   // A finality-only broadcast does not carry the verified header coordinates needed to
-  // derive the trusted PQ session. Keep a bounded arrival-ordered set of structurally checked,
-  // explicitly unverified PQ candidates until the block arrives. ValidateBroadcast then derives
-  // the context from its proof and tries each candidate until one is genuinely valid. Classical
-  // evidence can still be checked immediately and is marked verified before cache admission.
+  // derive the trusted PQ session. Keep an arrival-ordered, sender-isolated and byte-bounded set
+  // of structurally checked, explicitly unverified PQ candidates until the block arrives.
+  // ValidateBroadcast then derives the context from its proof and tries each candidate until one
+  // is genuinely valid. Classical evidence can still be checked immediately and is marked
+  // verified before cache admission.
   bool signatures_verified = false;
   if (!finality.sig_set->is_pq()) {
     auto status =
@@ -681,20 +683,17 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
 
   auto block_id = finality.block_id;
   auto incoming_is_final = finality.sig_set->is_final();
-  auto cached = pending_block_finality_.get_if_exists(block_id, false);
-  if (cached == nullptr) {
-    PendingBlockFinality pending;
-    pending.candidates.admit(PendingBlockFinalityCandidate{finality.sig_set, source}, signatures_verified,
-                             incoming_is_final);
-    pending_block_finality_.put(block_id, std::move(pending));
-  } else {
-    auto action = cached->candidates.admit(
-        PendingBlockFinalityCandidate{finality.sig_set, source}, signatures_verified, incoming_is_final);
-    if (action == PendingFinalityAdmission::Keep) {
-      VLOG(VALIDATOR_DEBUG) << "dropping block finality broadcast because its bounded candidate set did not admit it: "
-                            << block_id.to_str();
-      co_return td::Unit{};
-    }
+  auto serialized_bytes = serialize_tl_object(finality.sig_set->tl(), true).size();
+  auto sender = source_peer ? PendingBlockFinalitySender::remote(*source_peer)
+                            : PendingBlockFinalitySender::local_source();
+  auto admission = pending_block_finality_.admit(
+      block_id, std::move(sender), PendingBlockFinalityCandidate{finality.sig_set, source}, serialized_bytes,
+      signatures_verified, incoming_is_final);
+  if (!admission.admitted()) {
+    VLOG(VALIDATOR_DEBUG) << "dropping block finality broadcast because its sender-isolated byte-bounded store did "
+                             "not admit it: block="
+                          << block_id.to_str() << " rejection=" << static_cast<int>(admission.rejection);
+    co_return td::Unit{};
   }
   if (signatures_verified && !block_id.is_masterchain() && incoming_is_final && has_local_validator_keys()) {
     generate_shard_block_description(block_id, finality.sig_set).start().detach();
@@ -880,7 +879,7 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
   auto candidate = block_id.is_masterchain() ? cached_masterchain_block_candidates_.get_if_exists(block_id)
                                              : cached_block_data_.get_if_exists(block_id);
   auto pending = pending_block_finality_.get_if_exists(block_id);
-  if (candidate == nullptr || pending == nullptr || pending->candidates.empty() || pending->candidates.processing() ||
+  if (candidate == nullptr || pending == nullptr || pending->empty() || pending->processing() ||
       last_masterchain_state_.is_null()) {
     return;
   }
@@ -898,7 +897,7 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
     return;
   }
 
-  auto finality = pending->candidates.begin_processing();
+  auto finality = pending->begin_processing();
   if (finality == nullptr) {
     return;
   }
@@ -908,7 +907,7 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
                                           last_masterchain_state_)
           : WaitBlockData::generate_proof_link(block_id, block.ok()->root_cell());
   if (proof.is_error()) {
-    pending->candidates.cancel_processing();
+    pending->cancel_processing();
     auto error = proof.move_as_error();
     if (error.code() == ErrorCode::notready) {
       VLOG(VALIDATOR_DEBUG) << "failed to create pending block proof for " << block_id.to_str() << ": " << error;
@@ -950,22 +949,22 @@ void ValidatorManagerImpl::checked_pending_block_finality(BlockIdExt block_id, B
                                                            BroadcastSource source, bool was_final,
                                                            td::Result<td::Unit> result) {
   auto pending = pending_block_finality_.get_if_exists(block_id);
-  if (pending == nullptr || !pending->candidates.processing()) {
+  if (pending == nullptr || !pending->processing()) {
     return;
   }
   if (result.is_error()) {
     auto error = result.move_as_error();
-    pending->candidates.complete_front(false);
+    pending->complete_front(false);
     VLOG(VALIDATOR_INFO) << "rejected unverified pending block finality candidate for " << block_id.to_str() << ": "
                          << error;
-    if (pending->candidates.empty()) {
+    if (pending->empty()) {
       pending_block_finality_.erase(block_id);
     } else {
       try_process_pending_block_finality(block_id);
     }
     return;
   }
-  pending->candidates.mark_front_verified();
+  pending->mark_front_verified();
   new_block_broadcast(std::move(broadcast), true, source,
                       [SelfId = actor_id(this), block_id, was_final](td::Result<td::Unit> apply_result) mutable {
                         td::actor::send_closure(SelfId, &ValidatorManagerImpl::processed_pending_block_finality,
@@ -976,12 +975,12 @@ void ValidatorManagerImpl::checked_pending_block_finality(BlockIdExt block_id, B
 void ValidatorManagerImpl::processed_pending_block_finality(BlockIdExt block_id, bool was_final,
                                                              td::Result<td::Unit> result) {
   auto pending = pending_block_finality_.get_if_exists(block_id);
-  if (pending == nullptr || !pending->candidates.processing()) {
+  if (pending == nullptr || !pending->processing()) {
     return;
   }
   bool accepted = result.is_ok();
   if (!accepted) {
-    pending->candidates.cancel_processing();
+    pending->cancel_processing();
     auto error = result.move_as_error();
     if (error.code() == ErrorCode::notready || error.code() == ErrorCode::timeout) {
       VLOG(VALIDATOR_DEBUG) << "failed to apply verified pending block finality for " << block_id.to_str() << ": "
@@ -992,7 +991,7 @@ void ValidatorManagerImpl::processed_pending_block_finality(BlockIdExt block_id,
     }
     return;
   }
-  pending->candidates.complete_front(true);
+  pending->complete_front(true);
   if (was_final) {
     if (block_id.is_masterchain()) {
       cached_masterchain_block_candidates_.erase(block_id);
@@ -1000,7 +999,7 @@ void ValidatorManagerImpl::processed_pending_block_finality(BlockIdExt block_id,
     pending_block_finality_.erase(block_id);
     return;
   }
-  if (pending->candidates.empty()) {
+  if (pending->empty()) {
     pending_block_finality_.erase(block_id);
     return;
   }

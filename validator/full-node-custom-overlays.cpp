@@ -108,7 +108,7 @@ void FullNodeCustomOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNod
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in custom overlay \"" << name_ << "\" from " << src << ": "
                         << finality.ok().block_id.to_str();
   td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, finality.move_as_ok(),
-                          BroadcastSource::custom_overlay, !block_senders_.contains(local_id_));
+                          src, BroadcastSource::custom_overlay, !block_senders_.contains(local_id_));
 }
 
 void FullNodeCustomOverlay::obtain_state_for_decompression(PublicKeyHash src,
