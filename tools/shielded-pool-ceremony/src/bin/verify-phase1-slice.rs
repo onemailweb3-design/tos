@@ -13,7 +13,7 @@
 
 use std::process::ExitCode;
 
-use shielded_pool_ceremony::{layout, shape, slice, verify, Result};
+use shielded_pool_ceremony::{lagrange, layout, shape, slice, verify, Result};
 use shielded_pool_circuit::circuit::ShieldedTransactionCircuit;
 use shielded_pool_circuit::scenario;
 
@@ -59,13 +59,29 @@ fn run() -> Result<()> {
     let mut seed = [0u8; 32];
     getrandom(&mut seed)?;
     verify::verify(&parsed, seed)?;
-
     println!("\nthe slice is a well-formed powers-of-tau string over domain 2^{exponent}.");
+
+    // And the basis change, because a verified slice is still not something a
+    // setup can use. It is fast, it has no secrets, and its result is what a
+    // phase-2 transcript would name itself against -- so it belongs in the
+    // same run rather than in a separate step someone can forget.
+    let srs = lagrange::transform(&parsed)?;
+    getrandom(&mut seed)?;
+    lagrange::verify(&parsed, &srs, seed)?;
     println!(
-        "\nWhat that does NOT say: nothing about who knows tau. That property comes from the\n\
-         contribution chain behind {}, which cannot be checked from a slice --\n\
-         re-verifying it means replaying every response in the transcript. The digest above is\n\
-         what to hold against the ceremony's published attestations.",
+        "the Lagrange basis over that domain checks out: {} basis points a group, {} in the h \
+         query.",
+        srs.degree(),
+        srs.h.len()
+    );
+    println!("reference string {}", lagrange::digest(&srs));
+    println!(
+        "\nWhat none of that says: anything about who knows tau. That property comes from the\n\
+         contribution chain behind {}, which cannot be\n\
+         checked from a slice -- re-verifying it means replaying every response in the\n\
+         transcript. The TRANSCRIPT digest, printed at the top, is what to hold against that\n\
+         ceremony's published attestations; the reference string digest names only what came\n\
+         out of this run.",
         layout::CHALLENGE_URL
     );
     Ok(())

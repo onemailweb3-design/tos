@@ -36,6 +36,7 @@
 //! deliberately rather than a gap to fill quickly.
 
 pub mod error;
+pub mod lagrange;
 pub mod layout;
 pub mod points;
 pub mod slice;

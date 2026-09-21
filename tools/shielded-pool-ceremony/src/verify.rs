@@ -67,7 +67,7 @@ impl Phase1Slice {
 /// Written as one multi-pairing with `a` negated rather than two pairings
 /// compared, so a slice that is wrong fails on the equation rather than on
 /// floating comparisons of target-group elements.
-fn same_ratio((a, b): (G1Affine, G1Affine), (c, d): (G2Affine, G2Affine)) -> bool {
+pub(crate) fn same_ratio((a, b): (G1Affine, G1Affine), (c, d): (G2Affine, G2Affine)) -> bool {
     // e(a, d) * e(-b, c) == 1
     let minus_b = -b;
     Bls12_381::multi_pairing([a, minus_b], [d, c]).0 == <Bls12_381 as Pairing>::TargetField::one()
@@ -84,7 +84,7 @@ fn same_ratio((a, b): (G1Affine, G1Affine), (c, d): (G2Affine, G2Affine)) -> boo
 /// The randomness is drawn from the caller's generator. It must not be
 /// derived from the slice: scalars a malicious transcript could predict are
 /// scalars it could cancel against.
-fn merge_consecutive<R: rand::Rng>(
+pub(crate) fn merge_consecutive<R: rand::Rng>(
     points: &[G1Affine],
     rng: &mut R,
 ) -> Result<(G1Affine, G1Affine)> {

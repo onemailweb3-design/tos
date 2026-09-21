@@ -24,7 +24,7 @@
 
 use std::path::PathBuf;
 
-use shielded_pool_ceremony::{slice, verify};
+use shielded_pool_ceremony::{lagrange, slice, verify};
 
 const EXPONENT: u32 = 15;
 
@@ -122,6 +122,61 @@ fn two_real_powers_swapped_are_refused() {
         verify::verify(&parsed, [0x5au8; 32]).expect_err("two powers out of order must be refused");
     assert!(
         format!("{error}").contains("not consecutive powers of one tau"),
+        "refused for the wrong reason: {error}"
+    );
+}
+
+/// The digest of the reference string phase 2 will start from.
+///
+/// The transform is a function of the slice, so this is determined by the
+/// hashes above and by nothing else. It is pinned because a phase-2 transcript
+/// has to record which reference string it built on, and twenty megabytes is
+/// not a thing to record.
+const SRS_DIGEST: &str = "b30791cf1925a9184e90d9088acbc8299ae172fd3ef9958d892065368325baba";
+
+/// The real 2^15 Lagrange basis, computed from the real slice and checked
+/// against it.
+///
+/// About five seconds to transform 131,839 points and a second and a half to
+/// check the result -- which is why this is a step in the ceremony rather than
+/// an artifact to store.
+#[test]
+#[ignore = "needs artifacts/phase1; see the module comment"]
+fn the_real_slice_becomes_the_lagrange_basis_it_should() {
+    let (bytes, record) = load();
+    let parsed = slice::parse(&bytes, &record, EXPONENT).expect("the real slice must parse");
+    let srs = lagrange::transform(&parsed).expect("the transform");
+
+    assert_eq!(srs.degree(), 32_768, "the basis is not the circuit's domain");
+    assert_eq!(srs.h.len(), 32_767, "the h query is not n-1 long");
+    lagrange::verify(&parsed, &srs, [0xa5u8; 32]).expect("the real transform must verify");
+    assert_eq!(
+        lagrange::digest(&srs),
+        SRS_DIGEST,
+        "the reference string phase 2 would start from has moved"
+    );
+}
+
+/// And the checks bite on the real thing too.
+///
+/// Two elements of the real basis swapped **in both groups**: the sum is
+/// unchanged, the two groups still agree with each other, every point is
+/// genuine and in the right subgroup. Only going back to the powers it was
+/// built from can see it.
+#[test]
+#[ignore = "needs artifacts/phase1; see the module comment"]
+fn a_permuted_real_basis_is_refused() {
+    let (bytes, record) = load();
+    let parsed = slice::parse(&bytes, &record, EXPONENT).expect("the real slice must parse");
+    let mut srs = lagrange::transform(&parsed).expect("the transform");
+
+    srs.coeffs_g1.swap(11_111, 22_222);
+    srs.coeffs_g2.swap(11_111, 22_222);
+
+    let error = lagrange::verify(&parsed, &srs, [0xa5u8; 32])
+        .expect_err("a permuted real basis must be refused");
+    assert!(
+        format!("{error}").contains("disagrees with the powers it was built from"),
         "refused for the wrong reason: {error}"
     );
 }
