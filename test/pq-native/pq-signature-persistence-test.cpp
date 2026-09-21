@@ -1,9 +1,14 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
 #include "test/pq-native/pq-block-signature-test-common.h"
 
+#include "block/block-auto.h"
+#include "block/block-parse.h"
 #include "validator/db/rootdb.hpp"
 #include "validator/fabric.h"
+#include "validator/impl/check-proof.hpp"
+#include "validator/impl/top-shard-descr.hpp"
 #include "validator/interfaces/db.h"
+#include "validator/pq-finality-verification.h"
 #include "validator/validator.h"
 
 #include "crypto/pq/pq-bytes.h"
@@ -284,6 +289,133 @@ void run_corruption_matrix() {
                      fixture.validator_set, "signature weight mismatch", "claimed_weight");
 }
 
+td::Ref<vm::Cell> block_proof_cell(const BlockIdExt& block_id, td::Ref<vm::Cell> signatures) {
+  vm::CellBuilder builder;
+  if (!(builder.store_long_bool(0xc3, 8) && block::tlb::t_BlockIdExt.pack(builder, block_id) &&
+        builder.store_ref_bool(vm::CellBuilder{}.finalize_novm()) && builder.store_bool_bool(true) &&
+        builder.store_ref_bool(std::move(signatures)))) {
+    fail("PQ_SIGNATURE_PERSISTENCE_BLOCK_PROOF_BUILD_FAILED");
+  }
+  return builder.finalize_novm();
+}
+
+td::Ref<vm::Cell> top_block_descr_cell(const BlockIdExt& block_id, td::Ref<vm::Cell> signatures,
+                                       td::Ref<vm::Cell> proof) {
+  vm::CellBuilder builder;
+  if (!(builder.store_long_bool(0xd5, 8) && block::tlb::t_BlockIdExt.pack(builder, block_id) &&
+        builder.store_bool_bool(true) && builder.store_ref_bool(std::move(signatures)) &&
+        builder.store_long_bool(1, 8) && builder.store_ref_bool(std::move(proof)))) {
+    fail("PQ_SIGNATURE_PERSISTENCE_TOP_DESCR_BUILD_FAILED");
+  }
+  auto root = builder.finalize_novm();
+  if (!block::gen::t_TopBlockDescr.validate_ref(root)) {
+    fail("PQ_SIGNATURE_PERSISTENCE_TOP_DESCR_SCHEMA_FAILED");
+  }
+  return root;
+}
+
+td::Ref<block::BlockSignatureSet> parse_structural(td::Ref<vm::Cell> root, ValidatorWeight& claimed_weight,
+                                                   std::string_view name) {
+  return require_ok(block::BlockSignatureSet::fetch(std::move(root), claimed_weight), name);
+}
+
+void expect_consumer_error(td::Ref<block::BlockSignatureSet> signatures, ValidatorWeight claimed_weight,
+                           const block::PQFinalityVerificationContext& context, std::string_view expected,
+                           std::string_view name) {
+  expect_error(verify_pq_proof_signatures(context, *signatures, claimed_weight), expected, name);
+  std::fprintf(stderr, "PQ_PROOF_CONSUMER_REJECT_OK case=%.*s reason=%.*s\n", static_cast<int>(name.size()),
+               name.data(), static_cast<int>(expected.size()), expected.data());
+}
+
+void run_proof_consumers() {
+  Fixture fixture;
+  const std::vector<std::size_t> quorum{0, 1, 2};
+  auto candidate_data = candidate(fixture.id);
+  auto pairs = fixture.sign(quorum, fixture.session, Fixture::slot, candidate_data, true, fixture.id);
+  auto signatures = require_ok(block::BlockSignatureSet::create_simplex_pq_final(
+                                   clone_pairs(pairs), Fixture::catchain_seqno,
+                                   fixture.validator_set->get_validator_set_hash(), fixture.session, Fixture::slot,
+                                   candidate(fixture.id)),
+                               "consumer-carrier");
+  auto signature_cell = require_ok(signatures->serialize(fixture.validator_set), "consumer-serialize");
+  auto context = block::PQFinalityVerificationContext{fixture.validator_set, fixture.id, fixture.session};
+
+  auto proof_root = block_proof_cell(fixture.id, signature_cell);
+  auto proof_boc = require_ok(vm::std_boc_serialize(proof_root, 31), "proof-boc");
+  auto proof_loaded = require_ok(vm::std_boc_deserialize(proof_boc.as_slice()), "proof-load");
+  auto proof_envelope = require_ok(parse_block_proof_signature_envelope(proof_loaded), "proof-envelope");
+  if (proof_envelope.block_id != fixture.id || proof_envelope.signatures.is_null()) {
+    fail("PQ_BLOCK_PROOF_ENVELOPE_ID_OR_SIGNATURES_MISMATCH");
+  }
+  require_ok(verify_pq_proof_signatures(context, *proof_envelope.signatures, proof_envelope.claimed_weight),
+             "proof-verify");
+
+  auto top_root = top_block_descr_cell(fixture.id, signature_cell, proof_root);
+  auto top_boc = require_ok(vm::std_boc_serialize(top_root, 31), "top-descr-boc");
+  auto top_loaded = require_ok(vm::std_boc_deserialize(top_boc.as_slice()), "top-descr-load");
+  auto top_envelope = require_ok(parse_top_block_descr_signature_envelope(top_loaded), "top-descr-envelope");
+  if (top_envelope.block_id != fixture.id || top_envelope.signatures.is_null() ||
+      top_envelope.signatures->get_catchain_seqno() != Fixture::catchain_seqno ||
+      top_envelope.signatures->get_validator_set_hash() != fixture.validator_set->get_validator_set_hash()) {
+    fail("PQ_TOP_BLOCK_DESCR_ENVELOPE_METADATA_MISMATCH");
+  }
+  require_ok(verify_pq_proof_signatures(context, *top_envelope.signatures, top_envelope.claimed_weight),
+             "top-descr-verify");
+  std::fprintf(stderr, "PQ_BLOCK_PROOF_ROUNDTRIP_OK bytes=%zu\n", proof_boc.size());
+  std::fprintf(stderr, "PQ_TOP_BLOCK_DESCR_ROUNDTRIP_OK bytes=%zu\n", top_boc.size());
+
+  auto legacy = block::BlockSignatureSet::create_ordinary({}, Fixture::catchain_seqno,
+                                                          fixture.validator_set->get_validator_set_hash());
+  expect_consumer_error(legacy, 0, context, "post-quantum carrier required", "classical_under_pq_set");
+
+  auto entries = raw_pairs(pairs);
+  const auto weight = fixture.weight_of(quorum);
+  const auto raw = [&](td::uint32 validator_hash, CatchainSeqno cc, ValidatorWeight claimed,
+                       const std::vector<RawPair>& values, td::Ref<vm::Cell> candidate_root) {
+    return raw_signature_set(values, validator_hash, cc, claimed, fixture.session, Fixture::slot,
+                             std::move(candidate_root));
+  };
+  ValidatorWeight claimed = 0;
+  auto wrong_hash = parse_structural(
+      raw(fixture.validator_set->get_validator_set_hash() ^ 1, Fixture::catchain_seqno, weight, entries,
+          candidate_cell(candidate_data)),
+      claimed, "wrong-hash-parse");
+  expect_consumer_error(wrong_hash, claimed, context, "validator set hash mismatch", "wrong_validator_set_hash");
+
+  auto wrong_cc = parse_structural(
+      raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno ^ 1, weight, entries,
+          candidate_cell(candidate_data)),
+      claimed, "wrong-cc-parse");
+  expect_consumer_error(wrong_cc, claimed, context, "catchain seqno mismatch", "wrong_catchain_seqno");
+
+  auto other_id = fixture.id;
+  other_id.root_hash.as_slice()[0] ^= 1;
+  expect_consumer_error(proof_envelope.signatures, proof_envelope.claimed_weight,
+                        {fixture.validator_set, other_id, fixture.session}, "block id mismatch", "wrong_block_id");
+
+  auto damaged = clone_pairs(pairs);
+  damaged[0].signature.as_slice()[200] ^= 1;
+  auto damaged_set = parse_structural(
+      raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno, weight, raw_pairs(damaged),
+          candidate_cell(candidate_data)),
+      claimed, "damaged-signature-parse");
+  expect_consumer_error(damaged_set, claimed, context, "pq signatures: invalid signature", "invalid_signature");
+
+  std::vector<std::size_t> minority{3};
+  auto minority_pairs = fixture.sign(minority, fixture.session, Fixture::slot, candidate_data, true, fixture.id);
+  auto minority_set = parse_structural(
+      raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno, fixture.weight_of(minority),
+          raw_pairs(minority_pairs), candidate_cell(candidate_data)),
+      claimed, "sub-quorum-parse");
+  expect_consumer_error(minority_set, claimed, context, "pq signatures: insufficient verified weight", "sub_quorum");
+
+  auto wrong_weight = parse_structural(
+      raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno, weight - 1, entries,
+          candidate_cell(candidate_data)),
+      claimed, "wrong-weight-parse");
+  expect_consumer_error(wrong_weight, claimed, context, "bad signature set weight", "claimed_weight_mismatch");
+}
+
 void run_round_trip(std::size_t signer_count, td::uint32 discriminator) {
   LargeFixture fixture(signer_count, discriminator);
   auto signatures = fixture.signatures();
@@ -316,5 +448,6 @@ int main() {
   run_round_trip(21, 21);
   run_round_trip(100, 100);
   run_corruption_matrix();
+  run_proof_consumers();
   return 0;
 }

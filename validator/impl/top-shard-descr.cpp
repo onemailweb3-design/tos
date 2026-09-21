@@ -37,6 +37,33 @@ namespace validator {
 using td::Ref;
 using namespace std::literals::string_literals;
 
+td::Result<TopBlockDescrSignatureEnvelope> parse_top_block_descr_signature_envelope(td::Ref<vm::Cell> root) {
+  if (root.is_null()) {
+    return td::Status::Error("top block description signature envelope: null root");
+  }
+  try {
+    block::gen::TopBlockDescr::Record record;
+    TopBlockDescrSignatureEnvelope result;
+    if (!(block::gen::t_TopBlockDescr.force_validate_ref(root) && tlb::unpack_cell(root, record) &&
+          block::tlb::t_BlockIdExt.unpack(record.proof_for.write(), result.block_id))) {
+      return td::Status::Error("top block description signature envelope: invalid TopBlockDescr");
+    }
+    auto signature_root = record.signatures->prefetch_ref();
+    if (signature_root.is_null()) {
+      return result;
+    }
+    TRY_RESULT(signatures, block::BlockSignatureSet::fetch(std::move(signature_root), result.claimed_weight));
+    result.signatures = std::move(signatures);
+    return result;
+  } catch (vm::VmError& error) {
+    return error.as_status().move_as_error_prefix("top block description signature envelope: ");
+  } catch (const std::exception& error) {
+    return td::Status::Error(PSTRING() << "top block description signature envelope: " << error.what());
+  } catch (...) {
+    return td::Status::Error("top block description signature envelope: unknown parse failure");
+  }
+}
+
 ShardTopBlockDescrQ* ShardTopBlockDescrQ::make_copy() const {
   return new ShardTopBlockDescrQ{*this};
 }
@@ -170,9 +197,12 @@ td::Status ShardTopBlockDescrQ::unpack() {
     }
     root_ = res.move_as_ok();
   }
+  auto signature_envelope = parse_top_block_descr_signature_envelope(root_);
+  if (signature_envelope.is_error()) {
+    return signature_envelope.move_as_error_prefix("cannot parse TopBlockDescr signature envelope: ");
+  }
   block::gen::TopBlockDescr::Record rec;
-  if (!(block::gen::t_TopBlockDescr.force_validate_ref(root_) && tlb::unpack_cell(root_, rec) &&
-        block::tlb::t_BlockIdExt.unpack(rec.proof_for.write(), block_id_))) {
+  if (!tlb::unpack_cell(root_, rec)) {
     FLOG(INFO) {
       sb << "invalid ShardTopBlockDescr: ";
       block::gen::t_TopBlockDescr.print_ref(sb, root_);
@@ -180,18 +210,14 @@ td::Status ShardTopBlockDescrQ::unpack() {
     };
     return td::Status::Error(-666, "Shard top block description is not a valid TopBlockDescr TL-B object");
   }
+  auto parsed_signatures = signature_envelope.move_as_ok();
+  block_id_ = parsed_signatures.block_id;
   LOG(DEBUG) << "unpacking a ShardTopBlockDescr for " << block_id_.to_str() << " with " << rec.len << " links";
   CHECK(rec.len > 0 && rec.len <= 8);
   // unpack signatures
-  Ref<vm::Cell> sig_root = rec.signatures->prefetch_ref();
-  if (sig_root.not_null()) {
-    auto r_sig_set = block::BlockSignatureSet::fetch(sig_root, sig_weight_);
-    if (r_sig_set.is_error()) {
-      return td::Status::Error(
-          -666, PSTRING() << "cannot parse BlockSignatures in ShardTopBlockDescr for " + block_id_.to_str() << " : "
-                          << r_sig_set.error().message());
-    }
-    sig_set_ = r_sig_set.move_as_ok();
+  sig_set_ = std::move(parsed_signatures.signatures);
+  sig_weight_ = parsed_signatures.claimed_weight;
+  if (sig_set_.not_null()) {
     catchain_seqno_ = sig_set_->get_catchain_seqno();
     validator_set_hash_ = sig_set_->get_validator_set_hash();
   } else {
@@ -450,7 +476,7 @@ td::Result<int> ShardTopBlockDescrQ::validate_internal(BlockIdExt last_mc_block_
       res_flags |= (ResFlags::invalid | ResFlags::sig_bad);
       return context.move_as_error_prefix("cannot derive trusted finality context: ");
     }
-    result = block::verify_pq_finality(context.ok(), *sig_set_, block::FinalityRole::Final);
+    result = verify_pq_proof_signatures(context.ok(), *sig_set_, sig_weight_);
   } else {
     result = sig_set_->check_signatures(vset, block_id_);
   }
@@ -461,7 +487,7 @@ td::Result<int> ShardTopBlockDescrQ::validate_internal(BlockIdExt last_mc_block_
   }
   res_flags |= ResFlags::sig_ok;
   auto wt = result.move_as_ok();
-  if (wt != sig_weight_) {
+  if (!sig_set_->is_pq() && wt != sig_weight_) {
     res_flags |= ResFlags::invalid;
     return td::Status::Error(-666, PSTRING() << "ShardTopBlockDescr for " << block_id_.to_str()
                                              << " has incorrect signature weight " << sig_weight_

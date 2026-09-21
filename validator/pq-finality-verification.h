@@ -51,4 +51,15 @@ inline td::Result<block::PQFinalityVerificationContext> derive_pq_finality_conte
                                             previous_key_block_seqno);
 }
 
+inline td::Result<ValidatorWeight> verify_pq_proof_signatures(
+    const block::PQFinalityVerificationContext& context, const block::BlockSignatureSet& signatures,
+    ValidatorWeight claimed_weight) {
+  TRY_RESULT(verified_weight, block::verify_pq_finality(context, signatures, block::FinalityRole::Final));
+  if (verified_weight != claimed_weight) {
+    return td::Status::Error(ErrorCode::protoviolation, PSTRING() << "bad signature set weight: expected "
+                                                                  << verified_weight << ", found " << claimed_weight);
+  }
+  return verified_weight;
+}
+
 }  // namespace tos::validator

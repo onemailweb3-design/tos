@@ -21,12 +21,24 @@
 
 #include "interfaces/block-handle.h"
 #include "interfaces/validator-manager.h"
+#include "block/signature-set.h"
 #include "td/actor/actor.h"
 
 namespace tos {
 
 namespace validator {
 using td::Ref;
+
+struct BlockProofSignatureEnvelope {
+  BlockIdExt block_id;
+  td::Ref<block::BlockSignatureSet> signatures;
+  ValidatorWeight claimed_weight{0};
+};
+
+// Parses only the signed-evidence envelope. Full header/state validation remains
+// CheckProof's responsibility, but every proof consumer uses this checked carrier
+// extraction rather than reaching into the signatures reference independently.
+td::Result<BlockProofSignatureEnvelope> parse_block_proof_signature_envelope(td::Ref<vm::Cell> proof_root);
 
 /*
  *

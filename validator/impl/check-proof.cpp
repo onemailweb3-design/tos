@@ -38,6 +38,33 @@ namespace tos {
 namespace validator {
 using namespace std::literals::string_literals;
 
+td::Result<BlockProofSignatureEnvelope> parse_block_proof_signature_envelope(td::Ref<vm::Cell> proof_root) {
+  if (proof_root.is_null()) {
+    return td::Status::Error("block proof signature envelope: null root");
+  }
+  try {
+    block::gen::BlockProof::Record proof;
+    BlockProofSignatureEnvelope result;
+    if (!(tlb::unpack_cell(proof_root, proof) &&
+          block::tlb::t_BlockIdExt.unpack(proof.proof_for.write(), result.block_id))) {
+      return td::Status::Error("block proof signature envelope: invalid BlockProof");
+    }
+    auto signature_root = proof.signatures->prefetch_ref();
+    if (signature_root.is_null()) {
+      return result;
+    }
+    TRY_RESULT(signatures, block::BlockSignatureSet::fetch(std::move(signature_root), result.claimed_weight));
+    result.signatures = std::move(signatures);
+    return result;
+  } catch (vm::VmError& error) {
+    return error.as_status().move_as_error_prefix("block proof signature envelope: ");
+  } catch (const std::exception& error) {
+    return td::Status::Error(PSTRING() << "block proof signature envelope: " << error.what());
+  } catch (...) {
+    return td::Status::Error("block proof signature envelope: unknown parse failure");
+  }
+}
+
 void CheckProof::alarm() {
   abort_query(td::Status::Error(ErrorCode::notready, "timeout"));
 }
@@ -127,13 +154,17 @@ bool CheckProof::init_parse(bool is_aux) {
   }
   auto keep_cc_seqno = catchain_seqno_;
   auto keep_utime = created_at_;
-  Ref<vm::Cell> sig_root = proof.signatures->prefetch_ref();
-  if (sig_root.not_null()) {
-    auto r_sig_set = block::BlockSignatureSet::fetch(sig_root, sig_weight_);
-    if (r_sig_set.is_error()) {
-      return fatal_error(r_sig_set.move_as_error_prefix("cannot parse BlockSignatures: "));
-    }
-    sig_set_ = r_sig_set.move_as_ok();
+  auto signature_envelope = parse_block_proof_signature_envelope(is_aux ? old_proof_root_ : proof_root_);
+  if (signature_envelope.is_error()) {
+    return fatal_error(signature_envelope.move_as_error_prefix("cannot parse BlockSignatures: "));
+  }
+  auto parsed_signatures = signature_envelope.move_as_ok();
+  if (parsed_signatures.block_id != proof_blk_id) {
+    return fatal_error("block proof signature envelope refers to another block");
+  }
+  sig_set_ = std::move(parsed_signatures.signatures);
+  sig_weight_ = parsed_signatures.claimed_weight;
+  if (sig_set_.not_null()) {
     catchain_seqno_ = sig_set_->get_catchain_seqno();
     validator_hash_ = sig_set_->get_validator_set_hash();
     if (!proof_blk_id.is_masterchain()) {
@@ -435,7 +466,7 @@ void CheckProof::check_signatures() {
       abort_query(context.move_as_error());
       return;
     }
-    result = block::verify_pq_finality(context.ok(), *sig_set_, block::FinalityRole::Final);
+    result = verify_pq_proof_signatures(context.ok(), *sig_set_, sig_weight_);
   } else {
     result = sig_set_->check_signatures(vset_, id_);
   }
@@ -443,7 +474,7 @@ void CheckProof::check_signatures() {
     abort_query(result.move_as_error());
     return;
   }
-  if (result.ok() != sig_weight_) {
+  if (!sig_set_->is_pq() && result.ok() != sig_weight_) {
     abort_query(td::Status::Error(ErrorCode::protoviolation, PSTRING() << "bad signature set weight: expected "
                                                                        << result.ok() << ", found " << sig_weight_));
     return;

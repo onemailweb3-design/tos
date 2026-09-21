@@ -30,6 +30,14 @@ using td::Ref;
 
 class ValidateShardTopBlockDescr;
 
+struct TopBlockDescrSignatureEnvelope {
+  BlockIdExt block_id;
+  td::Ref<block::BlockSignatureSet> signatures;
+  ValidatorWeight claimed_weight{0};
+};
+
+td::Result<TopBlockDescrSignatureEnvelope> parse_top_block_descr_signature_envelope(td::Ref<vm::Cell> root);
+
 class ShardTopBlockDescrQBase : public ShardTopBlockDescription {
  protected:
   td::BufferSlice data_;
