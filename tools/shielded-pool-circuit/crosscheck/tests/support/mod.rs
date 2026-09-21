@@ -108,6 +108,10 @@ pub struct Outcome {
     /// What the transact itself cost, payout included.
     /// The transact's own exit code.
     pub exit: i32,
+    /// The whole transact message body, in bytes, counting every cell in the
+    /// tree. This is what the chain stores forever, and it is the
+    /// denominator any proof-size comparison has to be read against.
+    pub body_bytes: usize,
     /// Every persistent field, immediately before and after the transact.
     pub state_before: shielded_pool_circuit_crosscheck::pool::PoolState,
     pub state_after: shielded_pool_circuit_crosscheck::pool::PoolState,
@@ -358,6 +362,22 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         pool.age_to(age.index, frontier_store, anchors).expect("age the pool");
     }
 
+    // Every cell of the body, counted once.
+    fn weigh(cell: &Cell, seen: &mut std::collections::HashSet<[u8; 32]>) -> usize {
+        let id: [u8; 32] = cell.repr_hash().inner();
+        if !seen.insert(id) {
+            return 0;
+        }
+        let mut total = cell.bit_length().div_ceil(8);
+        for index in 0..cell.references_count() {
+            if let Ok(child) = cell.reference(index) {
+                total += weigh(&child, seen);
+            }
+        }
+        total
+    }
+    let body_bytes = weigh(&body, &mut std::collections::HashSet::new());
+
     if let Some(limit) = perturb.gas_limit {
         pool.bc.set_workchain_gas_limit(limit);
     }
@@ -437,6 +457,7 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         destination: destination.to_string(),
         transactions,
         exit,
+        body_bytes,
         action,
         failed_action,
         aborted,

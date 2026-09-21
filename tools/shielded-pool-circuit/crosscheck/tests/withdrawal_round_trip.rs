@@ -135,3 +135,14 @@ fn a_withdrawal_that_is_taken_leaves_nothing_to_recover() {
         outcome.holds
     );
 }
+
+/// What the chain actually stores for one private transaction.
+///
+/// Section 19 asks nothing about this, but every proof-system comparison
+/// does: a proof is only large or small next to the message it travels in.
+#[test]
+fn the_size_of_one_private_transaction() {
+    let outcome = withdraw_to("size_refuser", REFUSER);
+    eprintln!("one transact body: {} bytes", outcome.body_bytes);
+    assert!(outcome.body_bytes > 0, "the body weighed nothing");
+}
