@@ -25,6 +25,9 @@ test/pq-native/pq-block-signature-conformance-test.cpp	*	1	historical	crypto con
 test/pq-native/pq-block-signature-no-legacy-test.cpp	*	11	historical	negative fixtures prove classical carriers are refused under a post-quantum set
 test/pq-native/pq-block-signature-test-common.h	*	1	historical	shared persisted-carrier fixture parser
 test/pq-native/pq-block-signature-vectors-test.cpp	*	2	historical	shared #13 structural vectors retain classical parser coverage for reject cases
+test/pq-native/pq-lite-forward-proof-test.cpp	carrier_io	1	historical	lite proof conformance serializes #13 through the production TL adapter
+test/pq-native/pq-lite-forward-proof-test.cpp	cpp_factory	1	historical	explicit empty #11 fixture proves the lite consumer rejects classical finality under a PQ validator set
+test/pq-native/pq-lite-forward-proof-test.cpp	raw_tag_write	1	historical	test-only synthetic block root uses the ordinary Block constructor tag, not a finality carrier tag
 test/pq-native/pq-network-parser-resource-test.cpp	cpp_fetch	1	historical	resource-gate fixture proves malformed PQ network carriers stop before crypto and decompression
 test/pq-native/pq-network-parser-resource-test.cpp	cpp_node_tl	1	historical	one explicitly classical pair pins the corrected 100-byte signature-volume accounting
 test/pq-native/pq-signature-persistence-test.cpp	carrier_io	2	historical	persistence and proof-consumer gate serializes #13 and uses classical carriers only as explicit rejection inputs
@@ -67,7 +70,7 @@ validator/impl/accept-block.cpp	carrier_io	1	historical	generic persistence seri
 validator/impl/accept-block.cpp	verify	2	historical	PQ acceptance uses the trusted-session boundary; these low-level calls remain only for explicitly classical sets
 validator/impl/check-proof.cpp	*	6	historical	proof parsing and verification bind #13 to trusted context; #11/#12 remain for classical history
 validator/impl/check-proof.hpp	*	1	historical	actor entry point for the proof verification path
-validator/impl/liteserver.cpp	*	3	reachable	forward-proof construction still reaches the carrier-missing adapter; the later carrier-admission unit owns connection
+validator/impl/liteserver.cpp	*	3	historical	forward-proof generation emits #13 through tl_lite for PQ sets; classical output remains only for explicitly classical history
 validator/impl/top-shard-descr.cpp	*	3	historical	TopBlockDescr cell parsing supports #13 and verifies it through the trusted-session boundary
 validator/manager.cpp	*	2	historical	finality check admits classical carriers only for an explicitly classical validator set
 validator/validate-broadcast.cpp	*	2	historical	broadcast verification has a separate trusted-context PQ branch; these calls are the classical branch

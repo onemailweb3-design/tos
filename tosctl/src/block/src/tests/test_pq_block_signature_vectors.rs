@@ -42,7 +42,9 @@ where
 }
 
 #[test]
-fn shared_pq_block_signature_vectors() {
+fn shared_pq_block_signature_codec_parity_does_not_verify_finality() {
+    // This gate proves byte-identical C++/Rust #13 codec behavior. Rust tooling
+    // does not establish validator authority or verify finality in this path.
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../test/pq-native/pq-block-signature-vectors.txt"

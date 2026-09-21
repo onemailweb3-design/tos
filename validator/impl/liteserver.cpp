@@ -2984,6 +2984,14 @@ bool LiteQuery::construct_proof_link_forward_cont(tos::BlockIdExt cur, tos::Bloc
       return fatal_error(cfg_res.move_as_error());
     }
     auto config = cfg_res.move_as_ok();
+    // The forward proof consumer derives the expected post-quantum session
+    // from the same trusted source configuration that supplies the validator
+    // set. Touch both parameters while the Merkle proof builder is recording
+    // accesses so Param29 and the exact selected Param30 cell are present in
+    // the emitted proof. This is proof construction, not signature
+    // verification: the liteserver remains only a serializer here.
+    (void)config->get_consensus_config();
+    (void)config->get_selected_new_consensus_config(next.id.workchain);
     // unpack header of next block
     auto err = block::check_block_header(next_mpb.root(), next);
     if (err.is_error()) {
