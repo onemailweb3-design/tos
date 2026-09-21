@@ -241,12 +241,27 @@ int main() {
     check("a_set_with_an_unroutable_member_is_refused",
           block::validate_simplex_pq_validator_set(with_no_addr).is_error());
 
+    // Two members at one transport address. Everything else about them is distinct, so a
+    // shared address is the only thing that can refuse this set.
+    //
+    // Unlike the two rules below, this one is reachable, and that is exactly why it is
+    // here. Decoding refuses a repeated address, but ValidatorSet's constructor does not,
+    // so a set built directly -- a test fixture, tooling -- arrives at the preflight with
+    // two members the overlay cannot tell apart: it indexes peers by transport identity,
+    // the second member replaces the first, and a message authenticated on that transport
+    // is then attributed to a validator other than the one whose consensus key signed it.
+    ValidatorDescr shares_an_address{second_id, 1, other_key, other_pk, 1, bits_with_first_byte(0xc0)};
+    auto with_repeated_addr = set_of({matched, shares_an_address});
+    check("a_set_repeating_a_transport_address_is_refused",
+          block::validate_simplex_pq_validator_set(with_repeated_addr).is_error());
+
     // Identity and consensus-key uniqueness are deliberately NOT this helper's job, and
     // there is no case for them here, because no such set can be built: ValidatorSet's
     // constructor CHECKs both (crypto/block/validator-set.cpp:78-85) and a decoded set is
     // refused outright. A duplicate case would abort in the constructor without ever
     // reaching the helper -- a guard no input can trip is decoration, so the helper does
-    // not restate the rule.
+    // not restate the rule. The transport address has no such constructor check, which is
+    // what makes the case above reachable and the rule worth stating.
 
     auto empty = set_of({});
     check("an_empty_set_is_refused", block::validate_simplex_pq_validator_set(empty).is_error());

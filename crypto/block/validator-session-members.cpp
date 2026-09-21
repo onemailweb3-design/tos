@@ -16,6 +16,7 @@
 */
 #include <cstring>
 #include <keys/keys.hpp>
+#include <set>
 
 #include "block/validator-session-members.h"
 #include "block/validator-set.h"
@@ -85,10 +86,24 @@ td::Status validate_simplex_pq_validator_set(const ValidatorSet& set) {
   // set is refused outright if it repeats either, and ValidatorSet's own constructor holds
   // the same line for sets built directly by tests and tooling, so a set that exists at all
   // cannot repeat them. Restating the rule here would be a guard no input can reach.
+  //
+  // The transport identity is different, and it is checked. Decoding refuses a repeated
+  // one, but the constructor does not, so a set built directly -- by a test fixture or by
+  // tooling -- can carry two members at one address and reach this function. That set is
+  // not merely malformed: the overlay indexes peers by transport identity, so the second
+  // member silently replaces the first, and a message authenticated on that transport is
+  // then attributed to a different validator from the one whose consensus key signed it.
+  // It is refused here rather than asserted in the constructor so that the manager meets a
+  // structured refusal instead of an abort.
+  std::set<td::Bits256> transport_ids;
   for (const auto& descr : nodes) {
     if (auto usable = validate_pq_consensus_descriptor(descr); usable.is_error()) {
       return td::Status::Error(PSTRING() << "validator " << descr.validator_id.value.to_hex() << ": "
                                          << usable.message());
+    }
+    if (!transport_ids.insert(validator_adnl_identity(descr)).second) {
+      return td::Status::Error(PSTRING() << "validator " << descr.validator_id.value.to_hex()
+                                         << ": repeats a transport identity another member already claims");
     }
   }
   return td::Status::OK();
