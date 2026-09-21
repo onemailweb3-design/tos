@@ -13,26 +13,7 @@
 
 #include "block-signature-carrier-common.h"
 
-namespace {
-
-bool file_contains(const char* path, const char* needle) {
-  std::ifstream input(path);
-  assert(input && "an authoritative TL schema must be readable");
-  const std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-  return contents.find(needle) != std::string::npos;
-}
-
-}  // namespace
-
 int main() {
-  if (file_contains(TOS_API_SCHEMA_FILE, "tosNode.signatureSet.simplexPq") ||
-      file_contains(LITE_API_SCHEMA_FILE, "liteServer.signatureSet.simplexPq")) {
-    std::fprintf(stderr,
-                 "MODELED_TL_SCHEMA_PRESENT: a modeled PQ signature-set schema now exists; re-measure both TL "
-                 "columns against generated code, then delete the schema-absence assertion\n");
-    return 1;
-  }
-
   constexpr std::array<std::size_t, 6> counts{1, 21, 32, 64, 100, 400};
   std::vector<std::string> measured_lines;
   measured_lines.emplace_back(

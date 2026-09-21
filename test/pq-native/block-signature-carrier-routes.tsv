@@ -1,11 +1,13 @@
 # Static carrier inventory for the canonical persisted block_signatures_simplex_pq#13 BOC,
-# the deterministic node/lite SignatureSet schema projections, and the still-unavailable
+# the generated node/lite SignatureSet encodings, and the still-unavailable
 # complete production objects. These are not live carrier round trips.
 #
-# Deferred owner: the unit that adds the PQ TL variants and checked parser must match the
-# projected sizes byte-for-byte, then put complete finality-broadcast and lite forward-proof
-# objects at 21 and 100 signers through the real generated serializers and admission checks.
-# A mismatch reopens the frozen persisted-envelope decision.
+# Deferred owner: the carrier-admission unit must put complete finality-broadcast and lite
+# forward-proof objects at 21 and 100 signers through the real generated serializers and
+# admission checks. The generated signature-set measurements below corrected a projection
+# that had invented 4 * signers + 4 bytes of bare-vector framing. The correction does not
+# reopen the persisted envelope: that bound came from the #13 BOC plus BlockProof overhead,
+# and the corrected network encodings are smaller.
 #
 # Lite-gate implementer note: despite the design text mentioning RLDP max_answer_size, this tree's
 # production lite client uses AdnlExtClient::send_query over framed TCP and does not use RLDP on
@@ -32,10 +34,10 @@ verdict	persisted-#13-boc/1	measured:2720	finality-broadcast/minimum	16777216	16
 verdict	persisted-#13-boc/21	measured:53787	finality-broadcast/minimum	16777216	16723429	STATIC FIT
 verdict	persisted-#13-boc/100	measured:255396	finality-broadcast/minimum	16777216	16521820	STATIC FIT
 verdict	persisted-#13-boc/400	measured:1020996	finality-broadcast/minimum	16777216	15756220	STATIC FIT
-verdict	projected-tosNode.signatureSet.simplexPq/1	projected:2644	finality-broadcast/minimum	16777216	16774572	UNKNOWN UNTIL N5.3
-verdict	projected-tosNode.signatureSet.simplexPq/21	projected:51924	finality-broadcast/minimum	16777216	16725292	UNKNOWN UNTIL N5.3
-verdict	projected-tosNode.signatureSet.simplexPq/100	projected:246580	finality-broadcast/minimum	16777216	16530636	UNKNOWN UNTIL N5.3
-verdict	projected-tosNode.signatureSet.simplexPq/400	projected:985780	finality-broadcast/minimum	16777216	15791436	UNKNOWN UNTIL N5.3
+verdict	tosNode.signatureSet.simplexPq/1	measured:2636	finality-broadcast/minimum	16777216	16774580	STATIC FIT
+verdict	tosNode.signatureSet.simplexPq/21	measured:51836	finality-broadcast/minimum	16777216	16725380	STATIC FIT
+verdict	tosNode.signatureSet.simplexPq/100	measured:246176	finality-broadcast/minimum	16777216	16531040	STATIC FIT
+verdict	tosNode.signatureSet.simplexPq/400	measured:984176	finality-broadcast/minimum	16777216	15793040	STATIC FIT
 verdict	complete-tosNode.blockFinalityBroadcast/1	unknown	finality-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
 verdict	complete-tosNode.blockFinalityBroadcast/21	unknown	finality-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
 verdict	complete-tosNode.blockFinalityBroadcast/100	unknown	finality-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
@@ -44,10 +46,10 @@ verdict	persisted-#13-boc/1	measured:2720	v2-broadcast/minimum	16777216	16774496
 verdict	persisted-#13-boc/21	measured:53787	v2-broadcast/minimum	16777216	16723429	STATIC FIT
 verdict	persisted-#13-boc/100	measured:255396	v2-broadcast/minimum	16777216	16521820	STATIC FIT
 verdict	persisted-#13-boc/400	measured:1020996	v2-broadcast/minimum	16777216	15756220	STATIC FIT
-verdict	projected-tosNode.signatureSet.simplexPq/1	projected:2644	v2-broadcast/minimum	16777216	16774572	UNKNOWN UNTIL N5.3
-verdict	projected-tosNode.signatureSet.simplexPq/21	projected:51924	v2-broadcast/minimum	16777216	16725292	UNKNOWN UNTIL N5.3
-verdict	projected-tosNode.signatureSet.simplexPq/100	projected:246580	v2-broadcast/minimum	16777216	16530636	UNKNOWN UNTIL N5.3
-verdict	projected-tosNode.signatureSet.simplexPq/400	projected:985780	v2-broadcast/minimum	16777216	15791436	UNKNOWN UNTIL N5.3
+verdict	tosNode.signatureSet.simplexPq/1	measured:2636	v2-broadcast/minimum	16777216	16774580	STATIC FIT
+verdict	tosNode.signatureSet.simplexPq/21	measured:51836	v2-broadcast/minimum	16777216	16725380	STATIC FIT
+verdict	tosNode.signatureSet.simplexPq/100	measured:246176	v2-broadcast/minimum	16777216	16531040	STATIC FIT
+verdict	tosNode.signatureSet.simplexPq/400	measured:984176	v2-broadcast/minimum	16777216	15793040	STATIC FIT
 verdict	complete-tosNode.blockBroadcastCompressedV2/1	unknown	v2-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
 verdict	complete-tosNode.blockBroadcastCompressedV2/21	unknown	v2-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
 verdict	complete-tosNode.blockBroadcastCompressedV2/100	unknown	v2-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
@@ -56,10 +58,10 @@ verdict	persisted-#13-boc/1	measured:2720	lite-forward-proof/minimum	16777112	16
 verdict	persisted-#13-boc/21	measured:53787	lite-forward-proof/minimum	16777112	16723325	STATIC FIT
 verdict	persisted-#13-boc/100	measured:255396	lite-forward-proof/minimum	16777112	16521716	STATIC FIT
 verdict	persisted-#13-boc/400	measured:1020996	lite-forward-proof/minimum	16777112	15756116	STATIC FIT
-verdict	projected-liteServer.signatureSet.simplexPq/1	projected:2644	lite-forward-proof/minimum	16777112	16774468	UNKNOWN UNTIL N5.3
-verdict	projected-liteServer.signatureSet.simplexPq/21	projected:51924	lite-forward-proof/minimum	16777112	16725188	UNKNOWN UNTIL N5.3
-verdict	projected-liteServer.signatureSet.simplexPq/100	projected:246580	lite-forward-proof/minimum	16777112	16530532	UNKNOWN UNTIL N5.3
-verdict	projected-liteServer.signatureSet.simplexPq/400	projected:985780	lite-forward-proof/minimum	16777112	15791332	UNKNOWN UNTIL N5.3
+verdict	liteServer.signatureSet.simplexPq/1	measured:2636	lite-forward-proof/minimum	16777112	16774476	STATIC FIT
+verdict	liteServer.signatureSet.simplexPq/21	measured:51836	lite-forward-proof/minimum	16777112	16725276	STATIC FIT
+verdict	liteServer.signatureSet.simplexPq/100	measured:246176	lite-forward-proof/minimum	16777112	16530936	STATIC FIT
+verdict	liteServer.signatureSet.simplexPq/400	measured:984176	lite-forward-proof/minimum	16777112	15792936	STATIC FIT
 verdict	complete-lite-answer/1	unknown	lite-forward-proof/minimum	16777112	unknown	UNKNOWN UNTIL N5.3
 verdict	complete-lite-answer/21	unknown	lite-forward-proof/minimum	16777112	unknown	UNKNOWN UNTIL N5.3
 verdict	complete-lite-answer/100	unknown	lite-forward-proof/minimum	16777112	unknown	UNKNOWN UNTIL N5.3

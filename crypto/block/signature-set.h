@@ -136,6 +136,14 @@ class BlockSignatureSet : public td::CntObject {
   static td::Result<td::Ref<BlockSignatureSet>> fetch(
       const tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>& f);
 
+  // Checked adapters for the generated post-quantum network carriers. They are
+  // deliberately separate from the legacy unchecked node adapter until every
+  // untrusted production boundary is converted in the parser-wiring unit.
+  static td::Result<td::Ref<BlockSignatureSet>> fetch_pq_node_checked(
+      const tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>& f);
+  static td::Result<td::Ref<BlockSignatureSet>> fetch_pq_lite_checked(
+      const tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>& f);
+
   static constexpr size_t MAX_SIGNATURES = 1024;
 };
 

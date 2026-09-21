@@ -190,7 +190,7 @@ if(TARGET tos_crypto)
     "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measure.cpp")
   set_target_properties(block-signature-carrier-measure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(block-signature-carrier-measure PRIVATE tos_block tos_crypto tos_mldsa44
-    tos_pq_consensus_signer tos_pq_consensus tl_api tl-utils)
+    tos_pq_consensus_signer tos_pq_consensus tl_api tl_lite_api tl-utils tl-lite-utils)
   target_include_directories(block-signature-carrier-measure PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
   target_compile_definitions(block-signature-carrier-measure PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
   target_compile_definitions(block-signature-carrier-measure PRIVATE
@@ -216,6 +216,15 @@ if(TARGET tos_crypto)
     MEASUREMENTS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measurements.tsv"
     SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../..")
   add_test(NAME block-signature-carrier-routes COMMAND test-block-signature-carrier-routes)
+  add_executable(test-pq-signature-tl-vectors
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-signature-tl-vectors-test.cpp")
+  set_target_properties(test-pq-signature-tl-vectors PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-pq-signature-tl-vectors PRIVATE tos_block tos_crypto tos_mldsa44
+    tos_pq_consensus_signer tos_pq_consensus tl_api tl_lite_api tl-utils tl-lite-utils)
+  target_include_directories(test-pq-signature-tl-vectors PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
+  target_compile_definitions(test-pq-signature-tl-vectors PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h"
+    VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-signature-tl-vectors.txt")
+  add_test(NAME pq-signature-tl-vectors COMMAND test-pq-signature-tl-vectors)
   add_executable(test-pq-block-signature-vectors
     "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-block-signature-vectors-test.cpp")
   set_target_properties(test-pq-block-signature-vectors PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

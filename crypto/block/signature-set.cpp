@@ -15,6 +15,7 @@
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include <cstring>
+#include <limits>
 
 #include "auto/tl/tos_api.h"
 #include "auto/tl/tos_api.hpp"
@@ -1066,6 +1067,12 @@ td::Ref<BlockSignatureSet> BlockSignatureSet::fetch(const tos::tl_object_ptr<tos
                 sig_set = td::Ref<BlockSignatureSetSimplex>(true, std::move(signatures), obj.cc_seqno_,
                                                             obj.validator_set_hash_, obj.session_id_, obj.slot_,
                                                             clone_tl(obj.candidate_), obj.final_);
+              },
+              [&](const tos::tos_api::tosNode_signatureSet_simplexPq&) {
+                // The legacy adapter cannot report why a variable-size PQ
+                // carrier is malformed. Production callers stay fail-closed
+                // until they move to fetch_pq_node_checked.
+                sig_set = {};
               }));
   return sig_set;
 }
@@ -1095,8 +1102,78 @@ td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch(
                 }
                 sig_set = create_simplex(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_, obj.session_id_,
                                          obj.slot_, r_candidate.move_as_ok());
+              },
+              [&](const tos::lite_api::liteServer_signatureSet_simplexPq&) {
+                sig_set = td::Status::Error("post-quantum lite carrier requires checked parsing");
               }));
   return sig_set;
+}
+
+template <class Signature>
+static td::Result<std::vector<PQBlockSignature>> fetch_pq_tl_signatures_checked(
+    const std::vector<tos::tl_object_ptr<Signature>>& input) {
+  if (!pq::pq_block_signatures_accepts_signer_count(input.size())) {
+    return td::Status::Error("pq tl: signer_count");
+  }
+  std::vector<PQBlockSignature> signatures;
+  signatures.reserve(input.size());
+  for (const auto& pair : input) {
+    if (pair == nullptr) {
+      return td::Status::Error("pq tl: null_signature_pair");
+    }
+    if (pair->algorithm_id_ < 0 || pair->algorithm_id_ > std::numeric_limits<td::uint16>::max()) {
+      return td::Status::Error("pq tl: algorithm_range");
+    }
+    const auto algorithm = static_cast<tos::pq::PQAlgorithmId>(static_cast<td::uint16>(pair->algorithm_id_));
+    if (!tos::pq::is_admitted(algorithm)) {
+      return td::Status::Error("pq tl: unsupported_algorithm");
+    }
+    if (pair->signature_.size() != tos::pq::mldsa44_signature_bytes) {
+      return td::Status::Error("pq tl: signature_length");
+    }
+    signatures.push_back(
+        PQBlockSignature{tos::ValidatorId{pair->validator_id_}, algorithm, pair->signature_.clone()});
+  }
+  TRY_STATUS(validate_pq_signatures(signatures));
+  return signatures;
+}
+
+td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_pq_node_checked(
+    const tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>& f) {
+  if (f == nullptr || f->get_id() != tos::tos_api::tosNode_signatureSet_simplexPq::ID) {
+    return td::Status::Error("pq tl: wrong_node_constructor");
+  }
+  const auto& obj = static_cast<const tos::tos_api::tosNode_signatureSet_simplexPq&>(*f);
+  TRY_RESULT(signatures, fetch_pq_tl_signatures_checked(obj.signatures_));
+  if (obj.candidate_ == nullptr) {
+    return td::Status::Error("pq tl: candidate_missing");
+  }
+  const auto candidate_bytes = tos::serialize_tl_object(obj.candidate_, true);
+  if (candidate_bytes.size() > pq::pq_candidate_data_max_bytes) {
+    return td::Status::Error("pq tl: candidate_oversize");
+  }
+  return obj.final_ ? create_simplex_pq_final(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_,
+                                               obj.session_id_, obj.slot_, clone_tl(obj.candidate_))
+                    : create_simplex_pq_approve(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_,
+                                                 obj.session_id_, obj.slot_, clone_tl(obj.candidate_));
+}
+
+td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_pq_lite_checked(
+    const tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>& f) {
+  if (f == nullptr || f->get_id() != tos::lite_api::liteServer_signatureSet_simplexPq::ID) {
+    return td::Status::Error("pq tl: wrong_lite_constructor");
+  }
+  const auto& obj = static_cast<const tos::lite_api::liteServer_signatureSet_simplexPq&>(*f);
+  TRY_RESULT(signatures, fetch_pq_tl_signatures_checked(obj.signatures_));
+  if (obj.candidate_.size() > pq::pq_candidate_data_max_bytes) {
+    return td::Status::Error("pq tl: candidate_oversize");
+  }
+  auto candidate = tos::fetch_tl_object<tos::tos_api::consensus_CandidateHashData>(obj.candidate_.clone(), true);
+  if (candidate.is_error()) {
+    return candidate.move_as_error_prefix("pq tl: candidate_invalid: ");
+  }
+  return create_simplex_pq_final(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_, obj.session_id_,
+                                 obj.slot_, candidate.move_as_ok());
 }
 
 }  // namespace block

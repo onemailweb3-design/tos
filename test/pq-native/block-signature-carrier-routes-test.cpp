@@ -95,8 +95,8 @@ void check_source(const std::string& relative_path, const std::string& constant)
 
 struct Measurement {
   std::size_t boc;
-  std::size_t node_projection;
-  std::size_t lite_projection;
+  std::size_t node_tl;
+  std::size_t lite_tl;
 };
 
 std::map<std::size_t, Measurement> measured_object_sizes() {
@@ -113,8 +113,8 @@ std::map<std::size_t, Measurement> measured_object_sizes() {
     auto row = fields(line);
     if (row.size() == 11 && row[3] != "REFUSED") {
       result.emplace(number(row[0], "measurement signers"),
-                     Measurement{number(row[3], "measurement BOC"), number(row[6], "node projection"),
-                                 number(row[7], "lite projection")});
+                     Measurement{number(row[3], "measurement BOC"), number(row[6], "node TL"),
+                                 number(row[7], "lite TL")});
     }
   }
   return result;
@@ -227,14 +227,14 @@ int main() {
     if (verdict.object == "persisted-#13-boc") {
       expected_kind = "measured";
       expected_bytes = measured->second.boc;
-    } else if (verdict.object == "projected-tosNode.signatureSet.simplexPq" &&
+    } else if (verdict.object == "tosNode.signatureSet.simplexPq" &&
                (verdict.route == "finality-broadcast" || verdict.route == "v2-broadcast")) {
-      expected_kind = "projected";
-      expected_bytes = measured->second.node_projection;
-    } else if (verdict.object == "projected-liteServer.signatureSet.simplexPq" &&
+      expected_kind = "measured";
+      expected_bytes = measured->second.node_tl;
+    } else if (verdict.object == "liteServer.signatureSet.simplexPq" &&
                verdict.route == "lite-forward-proof") {
-      expected_kind = "projected";
-      expected_bytes = measured->second.lite_projection;
+      expected_kind = "measured";
+      expected_bytes = measured->second.lite_tl;
     } else if ((verdict.object == "complete-tosNode.blockFinalityBroadcast" && verdict.route == "finality-broadcast") ||
                (verdict.object == "complete-tosNode.blockBroadcastCompressedV2" && verdict.route == "v2-broadcast") ||
                (verdict.object == "complete-lite-answer" && verdict.route == "lite-forward-proof")) {
@@ -261,9 +261,7 @@ int main() {
         fail("ROUTE_VERDICT_HEADROOM_MISMATCH: object=" + verdict.object +
              " signers=" + std::to_string(verdict.signers));
       }
-      const auto expected_result = verdict.object == "persisted-#13-boc"
-                                       ? (expected_bytes <= capacity->second ? "STATIC FIT" : "STATIC DOES NOT FIT")
-                                       : "UNKNOWN UNTIL N5.3";
+      const auto expected_result = expected_bytes <= capacity->second ? "STATIC FIT" : "STATIC DOES NOT FIT";
       if (verdict.result != expected_result) {
         fail("ROUTE_VERDICT_RESULT_MISMATCH: object=" + verdict.object + " signers=" + std::to_string(verdict.signers));
       }
@@ -277,9 +275,9 @@ int main() {
     }
   }
   const std::map<std::string, std::pair<std::string, std::string>> route_objects{
-      {"finality-broadcast", {"projected-tosNode.signatureSet.simplexPq", "complete-tosNode.blockFinalityBroadcast"}},
-      {"v2-broadcast", {"projected-tosNode.signatureSet.simplexPq", "complete-tosNode.blockBroadcastCompressedV2"}},
-      {"lite-forward-proof", {"projected-liteServer.signatureSet.simplexPq", "complete-lite-answer"}},
+      {"finality-broadcast", {"tosNode.signatureSet.simplexPq", "complete-tosNode.blockFinalityBroadcast"}},
+      {"v2-broadcast", {"tosNode.signatureSet.simplexPq", "complete-tosNode.blockBroadcastCompressedV2"}},
+      {"lite-forward-proof", {"liteServer.signatureSet.simplexPq", "complete-lite-answer"}},
   };
   for (const auto& [route, objects] : route_objects) {
     for (const auto signers : signer_counts) {
