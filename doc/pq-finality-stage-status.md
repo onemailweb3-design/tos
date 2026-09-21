@@ -193,6 +193,8 @@ Commits:
 - `62d5c48a3f1d5c5cbb314bf942964dabfef00422` — semantic compressed-V2 and finality broadcast round trips.
 - `659a717df7c0209f10fe55fd50834679051ce9b7` — restored PQ catch-up and empty-chain restart scenarios.
 - `a8d3baa063ac3de3250867602c168aecd8e81c88` — JSON-RPC refuses the unsupported PQ signature carrier instead of emitting an empty classical list.
+- `cce69caf023cf087c67134a028a31da1fff028b7` — bounded arrival-order cache for finality evidence that cannot yet be verified.
+- `3de7316c83b14678d6b2620f706daf335bb92706` — TopBlockDescr authority comes from the masterchain snapshot named by its shard proof, not the node's current state.
 
 | Design gate | Registered subject test | Proves | Does not prove |
 |---|---|---|---|
@@ -233,6 +235,15 @@ Mutations observed:
   `catch-up test never recovered an evicted finalized ID through live DB lookup`.
 - Dropping the persisted finalized anchor across the empty-chain restart produced
   `missing-manager-anchor fallback was not exercised`.
+- Stopping after the first invalid unverified final, without changing the
+  candidate bound, produced
+  `PENDING_FINALITY_ORDER_FAILURE: bad final displaced the later valid final`.
+- Reversing unverified candidate processing, without changing the candidate
+  bound, produced
+  `PENDING_FINALITY_ORDER_FAILURE: later bad final ran before the earlier valid final`.
+- Allowing the current post-key-block masterchain state to stand in for the
+  snapshot named by the shard proof produced
+  `PQ_TOP_BLOCK_DESCR_CURRENT_STATE_ACCEPTED_AS_GOVERNING`.
 
 ## Section 9: transport authority
 
