@@ -1,8 +1,15 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
-#include "test/pq-native/pq-block-signature-test-common.h"
+#include <array>
+#include <mutex>
+#include <optional>
 
 #include "block/block-auto.h"
 #include "block/block-parse.h"
+#include "crypto/pq/pq-bytes.h"
+#include "td/actor/actor.h"
+#include "td/utils/Random.h"
+#include "td/utils/filesystem.h"
+#include "test/pq-native/pq-block-signature-test-common.h"
 #include "validator/db/rootdb.hpp"
 #include "validator/fabric.h"
 #include "validator/impl/accept-block.hpp"
@@ -11,17 +18,8 @@
 #include "validator/interfaces/db.h"
 #include "validator/pq-finality-verification.h"
 #include "validator/validator.h"
-
-#include "crypto/pq/pq-bytes.h"
-#include "td/actor/actor.h"
-#include "td/utils/Random.h"
-#include "td/utils/filesystem.h"
 #include "vm/cells/CellString.h"
 #include "vm/cells/MerkleProof.h"
-
-#include <array>
-#include <mutex>
-#include <optional>
 
 namespace {
 
@@ -84,9 +82,8 @@ class RootDbRoundTrip {
   }
 
   td::Ref<Proof> load_proof(ConstBlockHandle handle) {
-    return ask<td::Ref<Proof>>([&](auto promise) {
-      td::actor::send_closure(db_.get(), &Db::get_block_proof, handle, std::move(promise));
-    });
+    return ask<td::Ref<Proof>>(
+        [&](auto promise) { td::actor::send_closure(db_.get(), &Db::get_block_proof, handle, std::move(promise)); });
   }
 
  private:
@@ -134,9 +131,9 @@ struct LargeFixture {
   td::uint32 slot;
 
   LargeFixture(std::size_t count, td::uint32 discriminator)
-      : id(block_id("pq-persistence-" + std::to_string(count))),
-        session(hash_of("pq-persistence-session-" + std::to_string(count))),
-        slot(3000 + discriminator) {
+      : id(block_id("pq-persistence-" + std::to_string(count)))
+      , session(hash_of("pq-persistence-session-" + std::to_string(count)))
+      , slot(3000 + discriminator) {
     std::vector<ValidatorDescr> descriptors;
     descriptors.reserve(count);
     stores.reserve(count);
@@ -150,16 +147,16 @@ struct LargeFixture {
       if (!store.has_value()) {
         fail("PQ_SIGNATURE_PERSISTENCE_KEY_DERIVATION_FAILED");
       }
-      auto validator_id = ValidatorId{hash_of("pq-persistence-validator-" + std::to_string(discriminator) + "-" +
-                                                    std::to_string(i))};
+      auto validator_id =
+          ValidatorId{hash_of("pq-persistence-validator-" + std::to_string(discriminator) + "-" + std::to_string(i))};
       const auto& key = store->consensus_key();
-      descriptors.emplace_back(validator_id, static_cast<td::uint16>(key.algorithm_id), key_id_of(key),
-                               key.public_key, 1, hash_of("pq-persistence-adnl-" + std::to_string(i)));
+      descriptors.emplace_back(validator_id, static_cast<td::uint16>(key.algorithm_id), key_id_of(key), key.public_key,
+                               1, hash_of("pq-persistence-adnl-" + std::to_string(i)));
       validator_ids.push_back(validator_id);
       stores.push_back(std::move(*store));
     }
-    validator_set = td::Ref<block::ValidatorSet>{true, 7000 + discriminator, ShardIdFull{masterchainId},
-                                                 std::move(descriptors)};
+    validator_set =
+        td::Ref<block::ValidatorSet>{true, 7000 + discriminator, ShardIdFull{masterchainId}, std::move(descriptors)};
   }
 
   td::Ref<block::BlockSignatureSet> signatures() {
@@ -194,9 +191,8 @@ td::Ref<vm::Cell> candidate_cell(const tos::tl_object_ptr<tos_api::consensus_Can
 }
 
 td::Ref<vm::Cell> raw_signature_set(const std::vector<RawPair>& pairs, td::uint32 validator_hash,
-                                    CatchainSeqno catchain_seqno, ValidatorWeight weight,
-                                    ValidatorSessionId session, td::uint32 slot, td::Ref<vm::Cell> candidate_data,
-                                    unsigned tag = 0x13) {
+                                    CatchainSeqno catchain_seqno, ValidatorWeight weight, ValidatorSessionId session,
+                                    td::uint32 slot, td::Ref<vm::Cell> candidate_data, unsigned tag = 0x13) {
   vm::Dictionary dict{16};
   for (std::size_t i = 0; i < pairs.size(); ++i) {
     vm::CellBuilder value;
@@ -227,19 +223,19 @@ std::vector<RawPair> raw_pairs(const std::vector<block::PQBlockSignature>& pairs
   return result;
 }
 
-void expect_parse_error(td::Ref<vm::Cell> cell, td::Ref<block::ValidatorSet> validator_set,
-                        std::string_view expected, std::string_view name) {
+void expect_parse_error(td::Ref<vm::Cell> cell, td::Ref<block::ValidatorSet> validator_set, std::string_view expected,
+                        std::string_view name) {
   expect_error(block::BlockSignatureSet::fetch(std::move(cell), std::move(validator_set)), expected, name);
-  std::fprintf(stderr, "PQ_SIGNATURE_CORRUPTION_OK case=%.*s reason=%.*s\n", static_cast<int>(name.size()),
-               name.data(), static_cast<int>(expected.size()), expected.data());
+  std::fprintf(stderr, "PQ_SIGNATURE_CORRUPTION_OK case=%.*s reason=%.*s\n", static_cast<int>(name.size()), name.data(),
+               static_cast<int>(expected.size()), expected.data());
 }
 
 void expect_verify_error(td::Ref<vm::Cell> cell, const block::PQFinalityVerificationContext& context,
                          std::string_view expected, std::string_view name) {
   auto parsed = require_ok(block::BlockSignatureSet::fetch(std::move(cell), context.validator_set), name);
   expect_error(block::verify_pq_finality(context, *parsed, block::FinalityRole::Final), expected, name);
-  std::fprintf(stderr, "PQ_SIGNATURE_CORRUPTION_OK case=%.*s reason=%.*s\n", static_cast<int>(name.size()),
-               name.data(), static_cast<int>(expected.size()), expected.data());
+  std::fprintf(stderr, "PQ_SIGNATURE_CORRUPTION_OK case=%.*s reason=%.*s\n", static_cast<int>(name.size()), name.data(),
+               static_cast<int>(expected.size()), expected.data());
 }
 
 void run_corruption_matrix() {
@@ -267,9 +263,8 @@ void run_corruption_matrix() {
 
   auto wrong_algorithm = entries;
   wrong_algorithm[0].algorithm_id ^= 1;
-  expect_parse_error(
-      make_root(wrong_algorithm, weight, fixture.session, Fixture::slot, candidate_cell(candidate_data)),
-      fixture.validator_set, "pq signatures: unsupported algorithm", "algorithm_id");
+  expect_parse_error(make_root(wrong_algorithm, weight, fixture.session, Fixture::slot, candidate_cell(candidate_data)),
+                     fixture.validator_set, "pq signatures: unsupported algorithm", "algorithm_id");
 
   auto wrong_length = entries;
   auto short_bytes = pairs[0].signature.clone();
@@ -281,14 +276,14 @@ void run_corruption_matrix() {
 
   auto wrong_signature = clone_pairs(pairs);
   wrong_signature[0].signature.as_slice()[100] ^= 1;
-  expect_verify_error(make_root(raw_pairs(wrong_signature), weight, fixture.session, Fixture::slot,
-                                candidate_cell(candidate_data)),
-                      context, "pq signatures: invalid signature", "signature_chunk");
+  expect_verify_error(
+      make_root(raw_pairs(wrong_signature), weight, fixture.session, Fixture::slot, candidate_cell(candidate_data)),
+      context, "pq signatures: invalid signature", "signature_chunk");
 
   auto wrong_session = fixture.session;
   wrong_session.as_slice()[0] ^= 1;
-  expect_verify_error(make_root(entries, weight, wrong_session, Fixture::slot, candidate_cell(candidate_data)),
-                      context, "carried session_id does not match trusted expected session_id", "session_id");
+  expect_verify_error(make_root(entries, weight, wrong_session, Fixture::slot, candidate_cell(candidate_data)), context,
+                      "carried session_id does not match trusted expected session_id", "session_id");
 
   expect_verify_error(make_root(entries, weight, fixture.session, Fixture::slot ^ 1, candidate_cell(candidate_data)),
                       context, "pq signatures: invalid signature", "slot");
@@ -308,8 +303,8 @@ td::Ref<vm::Cell> block_proof_cell(const BlockIdExt& block_id, td::Ref<vm::Cell>
   if (RootHash{block_root->get_hash().bits()} != block_id.root_hash) {
     fail("PQ_SIGNATURE_PERSISTENCE_BLOCK_ROOT_MISMATCH");
   }
-  auto merkle_proof = require_ok(
-      vm::MerkleProof::generate(block_root, [](const td::Ref<vm::Cell>&) { return false; }), "merkle-proof");
+  auto merkle_proof =
+      require_ok(vm::MerkleProof::generate(block_root, [](const td::Ref<vm::Cell>&) { return false; }), "merkle-proof");
   vm::CellBuilder builder;
   if (!(builder.store_long_bool(0xc3, 8) && block::tlb::t_BlockIdExt.pack(builder, block_id) &&
         builder.store_ref_bool(std::move(merkle_proof)) && builder.store_bool_bool(true) &&
@@ -317,6 +312,88 @@ td::Ref<vm::Cell> block_proof_cell(const BlockIdExt& block_id, td::Ref<vm::Cell>
     fail("PQ_SIGNATURE_PERSISTENCE_BLOCK_PROOF_BUILD_FAILED");
   }
   return builder.finalize_novm();
+}
+
+td::Ref<vm::Cell> ext_block_ref(const BlockIdExt& id) {
+  vm::CellBuilder builder;
+  if (!(builder.store_long_bool(id.seqno() * 1000ULL, 64) && builder.store_long_bool(id.seqno(), 32) &&
+        builder.store_bits_bool(id.root_hash.cbits(), 256) && builder.store_bits_bool(id.file_hash.cbits(), 256))) {
+    fail("PQ_TOP_BLOCK_DESCR_EXT_REF_BUILD_FAILED");
+  }
+  return builder.finalize_novm();
+}
+
+struct ShardProofFixture {
+  BlockIdExt block_id;
+  BlockIdExt governing_mc_block_id;
+  td::Ref<vm::Cell> proof;
+};
+
+ShardProofFixture shard_proof_fixture(td::uint32 validator_set_hash, CatchainSeqno catchain_seqno) {
+  const BlockIdExt governing{masterchainId, shardIdAll, 17, hash_of("top-descr-governing-a-root"),
+                             hash_of("top-descr-governing-a-file")};
+  const BlockIdExt previous{0, shardIdAll, 41, hash_of("top-descr-prev-root"), hash_of("top-descr-prev-file")};
+  block::gen::BlockInfo::Record info;
+  info.version = 0;
+  info.not_master = true;
+  info.after_merge = info.before_split = info.after_split = false;
+  info.want_split = info.want_merge = false;
+  info.key_block = info.vert_seqno_incr = false;
+  info.flags = 0;
+  info.seq_no = 42;
+  info.vert_seq_no = 0;
+  vm::CellBuilder shard;
+  block::ShardId{ShardIdFull{0, shardIdAll}}.serialize(shard);
+  info.shard = shard.as_cellslice_ref();
+  info.gen_utime = 1000;
+  info.start_lt = 42000;
+  info.end_lt = 42001;
+  info.gen_validator_list_hash_short = validator_set_hash;
+  info.gen_catchain_seqno = catchain_seqno;
+  info.min_ref_mc_seqno = governing.seqno();
+  info.prev_key_block_seqno = governing.seqno();
+  info.master_ref = ext_block_ref(governing);
+  info.prev_ref = ext_block_ref(previous);
+  td::Ref<vm::Cell> info_cell;
+  if (!block::gen::t_BlockInfo.cell_pack(info_cell, info)) {
+    fail("PQ_TOP_BLOCK_DESCR_INFO_BUILD_FAILED");
+  }
+
+  block::ValueFlow flow{block::ValueFlow::SetZero{}};
+  vm::CellBuilder flow_builder;
+  if (!flow.store(flow_builder)) {
+    fail("PQ_TOP_BLOCK_DESCR_VALUE_FLOW_BUILD_FAILED");
+  }
+  vm::CellBuilder empty_dictionary_builder;
+  empty_dictionary_builder.store_bool_bool(false);
+  auto empty_dictionary = empty_dictionary_builder.finalize_novm();
+  block::gen::BlockExtra::Record extra;
+  extra.in_msg_descr = empty_dictionary;
+  extra.out_msg_descr = empty_dictionary;
+  extra.account_blocks = empty_dictionary;
+  vm::CellBuilder custom_builder;
+  custom_builder.store_bool_bool(false);
+  extra.custom = custom_builder.as_cellslice_ref();
+  extra.created_by = hash_of("top-descr-creator");
+  td::Ref<vm::Cell> extra_cell;
+  if (!block::gen::t_BlockExtra.cell_pack(extra_cell, extra)) {
+    fail("PQ_TOP_BLOCK_DESCR_EXTRA_BUILD_FAILED");
+  }
+  auto root = vm::CellBuilder{}
+                  .store_long(0x11ef55aa, 32)
+                  .store_long(-111, 32)
+                  .store_ref(info_cell)
+                  .store_ref(flow_builder.finalize())
+                  .store_ref(empty_dictionary)
+                  .store_ref(extra_cell)
+                  .finalize_novm();
+  auto data = require_ok(vm::std_boc_serialize(root, 31), "top-descr-block-boc");
+  td::Bits256 file_hash;
+  td::sha256(data.as_slice(), file_hash.as_slice());
+  BlockIdExt block_id{0, shardIdAll, 42, td::Bits256{root->get_hash().bits()}, file_hash};
+  auto proof = require_ok(vm::MerkleProof::generate(root, [](const td::Ref<vm::Cell>&) { return false; }),
+                          "top-descr-merkle-proof");
+  return {block_id, governing, std::move(proof)};
 }
 
 td::Ref<vm::Cell> top_block_descr_cell(const BlockIdExt& block_id, td::Ref<vm::Cell> signatures,
@@ -354,24 +431,23 @@ void run_proof_consumers() {
   const std::vector<std::size_t> quorum{0, 1, 2};
   auto candidate_data = candidate(fixture.id);
   auto pairs = fixture.sign(quorum, fixture.session, Fixture::slot, candidate_data, true, fixture.id);
-  auto signatures = require_ok(block::BlockSignatureSet::create_simplex_pq_final(
-                                   clone_pairs(pairs), Fixture::catchain_seqno,
-                                   fixture.validator_set->get_validator_set_hash(), fixture.session, Fixture::slot,
-                                   candidate(fixture.id)),
-                               "consumer-carrier");
+  auto signatures =
+      require_ok(block::BlockSignatureSet::create_simplex_pq_final(
+                     clone_pairs(pairs), Fixture::catchain_seqno, fixture.validator_set->get_validator_set_hash(),
+                     fixture.session, Fixture::slot, candidate(fixture.id)),
+                 "consumer-carrier");
   auto signature_cell = require_ok(signatures->serialize(fixture.validator_set), "consumer-serialize");
   auto context = block::PQFinalityVerificationContext{fixture.validator_set, fixture.id, fixture.session};
 
-  auto accepted_cell = require_ok(
-      prepare_accepted_block_signatures(fixture.validator_set, signatures, fixture.id, fixture.session),
-      "accept-block-prepare");
+  auto accepted_cell =
+      require_ok(prepare_accepted_block_signatures(fixture.validator_set, signatures, fixture.id, fixture.session),
+                 "accept-block-prepare");
   if (accepted_cell->get_hash() != signature_cell->get_hash()) {
     fail("PQ_ACCEPT_BLOCK_SIGNATURE_BYTES_MISMATCH");
   }
   auto wrong_expected_session = fixture.session;
   wrong_expected_session.as_slice()[0] ^= 1;
-  expect_error(prepare_accepted_block_signatures(fixture.validator_set, signatures, fixture.id,
-                                                 wrong_expected_session),
+  expect_error(prepare_accepted_block_signatures(fixture.validator_set, signatures, fixture.id, wrong_expected_session),
                "carried session_id does not match trusted expected session_id", "accept_block_wrong_session");
   std::fprintf(stderr, "PQ_ACCEPT_BLOCK_BOUNDARY_OK\n");
 
@@ -394,17 +470,74 @@ void run_proof_consumers() {
   require_ok(verify_pq_proof_signatures(context, *proof_envelope.signatures, proof_envelope.claimed_weight),
              "proof-verify");
 
-  auto top_root = top_block_descr_cell(fixture.id, signature_cell, proof_root);
+  std::vector<ValidatorDescr> shard_descriptors;
+  for (std::size_t i = 0; i < fixture.weights.size(); ++i) {
+    shard_descriptors.push_back(fixture.descriptor(i));
+  }
+  auto shard_validator_set = td::Ref<block::ValidatorSet>{true, Fixture::catchain_seqno, ShardIdFull{0, shardIdAll},
+                                                          std::move(shard_descriptors)};
+  auto shard_proof = shard_proof_fixture(shard_validator_set->get_validator_set_hash(), Fixture::catchain_seqno);
+  ValidatorSessionConfig session_options;
+  session_options.new_catchain_ids = true;
+  auto session_a = block::derive_validator_session_identity(
+                       -111, block::validator_session_options_hash(session_options), hash_of("top-descr-param30-a"),
+                       shard_proof.block_id.shard_full(), Fixture::catchain_seqno, shard_validator_set->export_vector(),
+                       0, shard_proof.governing_mc_block_id.seqno(), true)
+                       .session_id;
+  auto session_b = block::derive_validator_session_identity(
+                       -111, block::validator_session_options_hash(session_options), hash_of("top-descr-param30-b"),
+                       shard_proof.block_id.shard_full(), Fixture::catchain_seqno, shard_validator_set->export_vector(),
+                       0, shard_proof.governing_mc_block_id.seqno() + 1, true)
+                       .session_id;
+  auto shard_candidate = candidate(shard_proof.block_id);
+  auto shard_pairs_a = fixture.sign(quorum, session_a, Fixture::slot, shard_candidate, true, shard_proof.block_id);
+  auto shard_signatures_a =
+      require_ok(block::BlockSignatureSet::create_simplex_pq_final(
+                     clone_pairs(shard_pairs_a), Fixture::catchain_seqno, shard_validator_set->get_validator_set_hash(),
+                     session_a, Fixture::slot, candidate(shard_proof.block_id)),
+                 "top-descr-signatures-a");
+  auto shard_signature_cell_a =
+      require_ok(shard_signatures_a->serialize(shard_validator_set), "top-descr-signatures-a-serialize");
+  auto top_root = top_block_descr_cell(shard_proof.block_id, shard_signature_cell_a, shard_proof.proof);
   auto top_boc = require_ok(vm::std_boc_serialize(top_root, 31), "top-descr-boc");
   auto top_loaded = require_ok(vm::std_boc_deserialize(top_boc.as_slice()), "top-descr-load");
+  auto production_top = require_ok(ShardTopBlockDescrQ::fetch(top_loaded), "top-descr-production-fetch");
+  if (production_top->governing_masterchain_block_id() != shard_proof.governing_mc_block_id) {
+    fail("PQ_TOP_BLOCK_DESCR_GOVERNING_SNAPSHOT_MISMATCH");
+  }
+  const BlockIdExt current_after_key_block{masterchainId, shardIdAll, 18, hash_of("top-descr-current-b-root"),
+                                           hash_of("top-descr-current-b-file")};
+  auto exact_snapshot =
+      validate_top_block_descr_governing_snapshot(shard_proof.governing_mc_block_id, shard_proof.governing_mc_block_id);
+  if (exact_snapshot.is_error()) {
+    fail("PQ_TOP_BLOCK_DESCR_GOVERNING_SNAPSHOT_POSITIVE_FAILED: " + exact_snapshot.to_string());
+  }
+  auto current_snapshot =
+      validate_top_block_descr_governing_snapshot(shard_proof.governing_mc_block_id, current_after_key_block);
+  if (current_snapshot.is_ok() ||
+      current_snapshot.message().str().find("top block description governing state mismatch") == std::string::npos) {
+    fail("PQ_TOP_BLOCK_DESCR_CURRENT_STATE_ACCEPTED_AS_GOVERNING");
+  }
   auto top_envelope = require_ok(parse_top_block_descr_signature_envelope(top_loaded), "top-descr-envelope");
-  if (top_envelope.block_id != fixture.id || top_envelope.signatures.is_null() ||
+  if (top_envelope.block_id != shard_proof.block_id || top_envelope.signatures.is_null() ||
       top_envelope.signatures->get_catchain_seqno() != Fixture::catchain_seqno ||
-      top_envelope.signatures->get_validator_set_hash() != fixture.validator_set->get_validator_set_hash()) {
+      top_envelope.signatures->get_validator_set_hash() != shard_validator_set->get_validator_set_hash()) {
     fail("PQ_TOP_BLOCK_DESCR_ENVELOPE_METADATA_MISMATCH");
   }
-  require_ok(verify_pq_proof_signatures(context, *top_envelope.signatures, top_envelope.claimed_weight),
+  const block::PQFinalityVerificationContext governing_context{shard_validator_set, shard_proof.block_id, session_a};
+  require_ok(verify_pq_proof_signatures(governing_context, *top_envelope.signatures, top_envelope.claimed_weight),
              "top-descr-verify");
+
+  auto shard_pairs_b =
+      fixture.sign(quorum, session_b, Fixture::slot, candidate(shard_proof.block_id), true, shard_proof.block_id);
+  auto shard_signatures_b =
+      require_ok(block::BlockSignatureSet::create_simplex_pq_final(
+                     clone_pairs(shard_pairs_b), Fixture::catchain_seqno, shard_validator_set->get_validator_set_hash(),
+                     session_b, Fixture::slot, candidate(shard_proof.block_id)),
+                 "top-descr-signatures-b");
+  expect_error(verify_pq_proof_signatures(governing_context, *shard_signatures_b, fixture.weight_of(quorum)),
+               "carried session_id does not match trusted expected session_id", "top_descr_post_change_session");
+  std::fprintf(stderr, "PQ_TOP_BLOCK_DESCR_GOVERNING_SNAPSHOT_OK pre_change=accepted post_change=refused\n");
   std::fprintf(stderr, "PQ_BLOCK_PROOF_ROUNDTRIP_OK bytes=%zu\n", proof_boc.size());
   std::fprintf(stderr, "PQ_TOP_BLOCK_DESCR_ROUNDTRIP_OK bytes=%zu\n", top_boc.size());
 
@@ -420,16 +553,14 @@ void run_proof_consumers() {
                              std::move(candidate_root));
   };
   ValidatorWeight claimed = 0;
-  auto wrong_hash = parse_structural(
-      raw(fixture.validator_set->get_validator_set_hash() ^ 1, Fixture::catchain_seqno, weight, entries,
-          candidate_cell(candidate_data)),
-      claimed, "wrong-hash-parse");
+  auto wrong_hash = parse_structural(raw(fixture.validator_set->get_validator_set_hash() ^ 1, Fixture::catchain_seqno,
+                                         weight, entries, candidate_cell(candidate_data)),
+                                     claimed, "wrong-hash-parse");
   expect_consumer_error(wrong_hash, claimed, context, "validator set hash mismatch", "wrong_validator_set_hash");
 
-  auto wrong_cc = parse_structural(
-      raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno ^ 1, weight, entries,
-          candidate_cell(candidate_data)),
-      claimed, "wrong-cc-parse");
+  auto wrong_cc = parse_structural(raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno ^ 1,
+                                       weight, entries, candidate_cell(candidate_data)),
+                                   claimed, "wrong-cc-parse");
   expect_consumer_error(wrong_cc, claimed, context, "catchain seqno mismatch", "wrong_catchain_seqno");
 
   auto other_id = fixture.id;
@@ -439,24 +570,22 @@ void run_proof_consumers() {
 
   auto damaged = clone_pairs(pairs);
   damaged[0].signature.as_slice()[200] ^= 1;
-  auto damaged_set = parse_structural(
-      raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno, weight, raw_pairs(damaged),
-          candidate_cell(candidate_data)),
-      claimed, "damaged-signature-parse");
+  auto damaged_set = parse_structural(raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno,
+                                          weight, raw_pairs(damaged), candidate_cell(candidate_data)),
+                                      claimed, "damaged-signature-parse");
   expect_consumer_error(damaged_set, claimed, context, "pq signatures: invalid signature", "invalid_signature");
 
   std::vector<std::size_t> minority{3};
   auto minority_pairs = fixture.sign(minority, fixture.session, Fixture::slot, candidate_data, true, fixture.id);
-  auto minority_set = parse_structural(
-      raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno, fixture.weight_of(minority),
-          raw_pairs(minority_pairs), candidate_cell(candidate_data)),
-      claimed, "sub-quorum-parse");
+  auto minority_set =
+      parse_structural(raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno,
+                           fixture.weight_of(minority), raw_pairs(minority_pairs), candidate_cell(candidate_data)),
+                       claimed, "sub-quorum-parse");
   expect_consumer_error(minority_set, claimed, context, "pq signatures: insufficient verified weight", "sub_quorum");
 
-  auto wrong_weight = parse_structural(
-      raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno, weight - 1, entries,
-          candidate_cell(candidate_data)),
-      claimed, "wrong-weight-parse");
+  auto wrong_weight = parse_structural(raw(fixture.validator_set->get_validator_set_hash(), Fixture::catchain_seqno,
+                                           weight - 1, entries, candidate_cell(candidate_data)),
+                                       claimed, "wrong-weight-parse");
   expect_consumer_error(wrong_weight, claimed, context, "bad signature set weight", "claimed_weight_mismatch");
 }
 
@@ -466,8 +595,7 @@ void run_round_trip(std::size_t signer_count, td::uint32 discriminator) {
   auto before_cell = require_ok(signatures->serialize(fixture.validator_set), "serialize-before");
   auto before = require_ok(vm::std_boc_serialize(before_cell, 31), "boc-before");
 
-  const auto root = PSTRING() << "tmp-pq-signature-persistence-" << signer_count << "-"
-                              << td::Random::fast_uint32();
+  const auto root = PSTRING() << "tmp-pq-signature-persistence-" << signer_count << "-" << td::Random::fast_uint32();
   RootDbRoundTrip db(root);
   auto handle = create_empty_block_handle(fixture.id);
   db.store(handle, signatures, fixture.validator_set);

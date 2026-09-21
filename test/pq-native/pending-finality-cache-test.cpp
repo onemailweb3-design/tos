@@ -13,22 +13,30 @@ using pq_block_signature_test::clone_pairs;
 using pq_block_signature_test::Fixture;
 using pq_block_signature_test::require_ok;
 
-bool block_accepts_a_final(const std::vector<td::Ref<block::BlockSignatureSet>>& arrivals,
-                           const block::PQFinalityVerificationContext& context) {
+struct ProcessingResult {
+  bool accepted{false};
+  std::vector<const block::BlockSignatureSet*> attempted;
+};
+
+ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::BlockSignatureSet>>& arrivals,
+                                             const block::PQFinalityVerificationContext& context) {
   tos::validator::PendingFinalityCandidates<td::Ref<block::BlockSignatureSet>, 4> candidates;
   for (const auto& signature_set : arrivals) {
     if (candidates.admit(signature_set, false, true) == tos::validator::PendingFinalityAdmission::Keep) {
-      return false;
+      return {};
     }
   }
+  ProcessingResult result;
   while (auto candidate = candidates.begin_processing()) {
+    result.attempted.push_back(candidate->evidence.get());
     bool accepted = block::verify_pq_finality(context, *candidate->evidence, block::FinalityRole::Final).is_ok();
     candidates.complete_front(accepted);
     if (accepted) {
-      return true;
+      result.accepted = true;
+      return result;
     }
   }
-  return false;
+  return result;
 }
 
 }  // namespace
@@ -71,12 +79,17 @@ int main() {
     return 1;
   }
 
-  if (!block_accepts_a_final({invalid, valid}, context)) {
-    std::cerr << "PENDING_FINALITY_ORDER_FAILURE: bad final displaced the later valid final\n";
+  // Check the good-first ordering first. Reversing candidate processing must
+  // fail this assertion before the bad-first retry assertion can shadow it.
+  auto good_then_bad = process_finality_candidates({valid, invalid}, context);
+  if (!good_then_bad.accepted || good_then_bad.attempted.size() != 1 || good_then_bad.attempted[0] != valid.get()) {
+    std::cerr << "PENDING_FINALITY_ORDER_FAILURE: later bad final ran before the earlier valid final\n";
     return 1;
   }
-  if (!block_accepts_a_final({valid, invalid}, context)) {
-    std::cerr << "PENDING_FINALITY_ORDER_FAILURE: bad final evicted the earlier valid final\n";
+  auto bad_then_good = process_finality_candidates({invalid, valid}, context);
+  if (!bad_then_good.accepted || bad_then_good.attempted.size() != 2 || bad_then_good.attempted[0] != invalid.get() ||
+      bad_then_good.attempted[1] != valid.get()) {
+    std::cerr << "PENDING_FINALITY_ORDER_FAILURE: bad final displaced the later valid final\n";
     return 1;
   }
   std::cout << "PENDING_FINALITY_ORDER_OK: first cryptographically valid final accepted in both arrival orders\n";

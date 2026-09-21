@@ -31,8 +31,8 @@
 #include "crypto/openssl/rand.hpp"
 #include "td/actor/SharedFuture.h"
 #include "td/db/utils/BlobView.h"
-#include "td/utils/format.h"
 #include "td/utils/Random.h"
+#include "td/utils/format.h"
 #include "tos/tos-shard.h"
 #include "vm/boc.h"
 #include "vm/db/StaticBagOfCellsDb.h"
@@ -1585,8 +1585,8 @@ bool Collator::check_this_shard_mc_info() {
   if (!wc_info_->active) {
     return fatal_error(PSTRING() << "cannot create new block for disabled workchain " << workchain());
   }
-  auto execution_res = block::default_workchain_execution_registry().resolve_workchain(
-      config_->get_workchain_list(), workchain(), *config_);
+  auto execution_res = block::default_workchain_execution_registry().resolve_workchain(config_->get_workchain_list(),
+                                                                                       workchain(), *config_);
   if (execution_res.is_error()) {
     return fatal_error(execution_res.move_as_error_prefix("cannot create block for configured workchain: "));
   }
@@ -1905,7 +1905,10 @@ bool Collator::import_new_shard_top_blocks() {
     auto sh_bd = Ref<ShardTopBlockDescrQ>(entry);
     CHECK(sh_bd.not_null());
     int res_flags = 0;
-    auto chk_res = sh_bd->prevalidate(mc_block_id_, mc_state_,
+    // These descriptions were signature-validated by ValidateShardTopBlockDescr
+    // against their governing snapshots before the manager returned them. This
+    // pass rechecks their relationship to the current topology.
+    auto chk_res = sh_bd->prevalidate(mc_block_id_, mc_state_, mc_state_,
                                       ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new, res_flags);
     if (chk_res.is_error()) {
       LOG(DEBUG) << "ShardTopBlockDescr for " << sh_bd->block_id().to_str() << " skipped: res_flags=" << res_flags
@@ -5239,8 +5242,7 @@ bool Collator::create_mc_state_extra() {
                << " contains a configuration that cannot be installed: " << transition_status;
     return fatal_error(transition_status.move_as_error_prefix("attempting to install invalid new configuration: "));
   }
-  if (block::important_config_parameters_changed(cfg_smc_config, state_extra.config->prefetch_ref()) ||
-      changed_cfg) {
+  if (block::important_config_parameters_changed(cfg_smc_config, state_extra.config->prefetch_ref()) || changed_cfg) {
     LOG(WARNING) << "global configuration changed, updating";
     vm::CellBuilder cb;
     CHECK(cb.store_bits_bool(config_addr) && cb.store_ref_bool(cfg_smc_config));

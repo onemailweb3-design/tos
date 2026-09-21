@@ -197,8 +197,8 @@ Commits:
 | Design gate | Registered subject test | Proves | Does not prove |
 |---|---|---|---|
 | `n5-pq-db-roundtrip` | `test-pq-signature-persistence` | Real RootDb/archive store/get/fetch returns 21/100 signer `#13` bytes unchanged and the result verifies. | Process-crash atomicity at every persistence cut. |
-| `n5-pq-block-proof` | `test-pq-signature-persistence` plus the PQ Simplex end-to-end tests | AcceptBlock's PQ boundary, serialized/persisted BlockProof extraction, and CheckProof reject/accept matrix use the trusted verifier. | That every production scheduling route reaches this boundary; the focused fixture invokes the extracted boundary directly. |
-| `n5-pq-top-shard-descr` | `test-pq-signature-persistence` | A real serialized TopBlockDescr preserves metadata, parses `#13`, verifies it, and refuses classical finality under a PQ set. | Network distribution of TopBlockDescr. |
+| `n5-pq-block-proof` | `test-pq-signature-persistence` plus the PQ Simplex end-to-end tests | AcceptBlock's extracted PQ boundary, serialized/persisted BlockProof signature-envelope extraction, and the CheckProof reject/accept verifier matrix preserve and verify `#13`. | A production `CheckProof` actor invocation over this focused fixture; the test calls the extracted parsing and verification boundaries directly. |
+| `n5-pq-top-shard-descr` | `test-pq-signature-persistence` | A production `ShardTopBlockDescrQ::fetch` parses a real shard proof link and its governing masterchain reference; the serialized signature envelope preserves `#13`, and the trusted-session boundary accepts session A while refusing a validly signed session B. | A production `prevalidate`/`validate` actor invocation. It needs two usable masterchain-state snapshots with configuration and shard topology; the focused harness has neither a state-history manager nor that state builder. |
 | `n5-pq-broadcast-roundtrip` | `pq-broadcast-semantic-roundtrip` | The same 21/100 fixtures traverse compressed-V2 and simple-Plumtree TL, are checked against trusted PQ context, and call ML-DSA exactly once per included signer; 400 is structurally measured. | A live overlay peer graph, block-acceptance actor scheduling, or FEC behavior. |
 | Accepted-chain regressions restored by §10.5.3 | `test-consensus-simplex2-pq-state-resolver-catch-up`, `test-consensus-simplex2-pq-empty-chain-restart` | A lagging node recovers an evicted finalized ID through live DB lookup; a chain longer than 4096 empty candidates resumes after a cold resolver restart and reuses its completed-ancestor cache. | The five crash cuts required by §10.5.4. |
 | JSON-RPC unsupported-carrier behavior | `test-json-rpc-parse` | A PQ lite signature set produces error `-32603` with an explicit unsupported-carrier message, while genuine absence remains the only path to an empty classical list. | Rendering PQ signatures in the public JSON model. |
@@ -381,3 +381,14 @@ The following are gaps, not green claims.
    `VECTOR_REASON_MISMATCH` marker, not the full dynamic suffix.  Reproducing raw
    transcripts is possible by rerunning those mutations, but the original complete
    output cannot be reconstructed from committed files alone.
+
+7. **The focused proof-consumer fixture does not run the actor consumers.**
+   `test-pq-signature-persistence` now feeds a real serialized shard proof link to
+   `ShardTopBlockDescrQ::fetch`, pins the masterchain block named by that link,
+   and checks the A-to-B session boundary.  Production `ValidateShardTopBlockDescr`
+   additionally loads that exact named state before `validate`; `ValidateQuery`
+   preloads the same snapshot before its fresh parse.  The focused test does not
+   execute either actor path, because doing so requires a manager-backed history
+   containing both complete masterchain states (configuration, previous-block
+   history and shard topology).  This is missing integration coverage, not a
+   claim that a direct verifier call exercises the production consumer.
