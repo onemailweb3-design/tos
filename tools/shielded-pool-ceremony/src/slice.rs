@@ -12,11 +12,11 @@
 //! hashes, which they could not do if this tool had invented a container.
 //!
 //! The provenance record beside it is what makes the bytes checkable without
-//! the transcript: the URL, the transcript's own size, the ranges by offset
-//! and length, the SHA-256 of each range, and the 64-byte BLAKE2b digest at
-//! the head of the challenge file, which is the transcript's own name for
-//! itself and the thing to compare against the ceremony's published
-//! attestations.
+//! the transcript: **which ceremony** it came from, the URL, the file's own
+//! size, the ranges by offset and length, the SHA-256 of each range, and
+//! whatever the host publishes to identify the file. The ceremony's name comes
+//! first because it decides what every other field means, and because a
+//! deployment's custody argument is a statement about that one word.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -39,42 +39,75 @@ pub struct FetchedRange {
 /// Everything needed to decide whether a slice file is the right bytes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Provenance {
+    /// Which ceremony this came from -- `zcash` or `filecoin`. The first
+    /// field, because it decides what every other field means, and because a
+    /// deployment's custody argument is a statement about this word.
+    pub transcript: String,
     /// Where the transcript was read from.
     pub source_url: String,
-    /// The size the transcript had when read. If this is not
-    /// `layout::CHALLENGE_BYTES` the offsets below mean nothing.
+    /// The size the transcript had when read. If this is not the size the
+    /// named transcript's layout describes, the offsets below mean nothing.
     pub source_bytes: u64,
-    /// The exponent the transcript was run to.
+    /// The exponent the ceremony was run to.
     pub source_power: u32,
     /// The exponent this slice was taken at: the circuit's domain.
     pub slice_power: u32,
-    /// The 64 bytes at the head of the challenge file: the BLAKE2b digest
-    /// chaining it to the previous transcript entry. Not verified here --
-    /// verifying it means replaying the whole transcript -- but recorded so a
-    /// deployment can be held against the ceremony's published attestations.
-    pub transcript_hash: String,
+    /// For a transcript whose file opens with one: the 64-byte BLAKE2b digest
+    /// chaining it to the previous entry. Filecoin's challenge file has one;
+    /// Zcash's transcript does not, and is identified by the archive's
+    /// published checksums instead.
+    ///
+    /// Not verified here either way -- verifying a digest chain means
+    /// replaying the whole transcript -- but recorded so a deployment can be
+    /// held against the ceremony's published attestations.
+    pub transcript_hash: Option<String>,
+    /// What the ceremony's host says the file is, copied from the transcript
+    /// descriptor so the record is self-contained.
+    pub published_checksums: String,
+    /// What a deployment carrying this slice is inheriting, in one line.
+    pub custody: String,
     pub ranges: Vec<FetchedRange>,
     /// The SHA-256 of the concatenated slice file.
     pub slice_sha256: String,
 }
 
 impl Provenance {
+    /// The transcript this record names, refused if it is not one we describe.
+    pub fn transcript(&self) -> Result<&'static layout::Transcript> {
+        layout::by_name(&self.transcript).map_err(|error| Error::Slice(error.to_string()))
+    }
+
     /// Checks the record describes the layout this circuit needs, before any
     /// of its bytes are believed.
     pub fn check_against_layout(&self, slice_power: u32) -> Result<()> {
-        if self.source_bytes != layout::CHALLENGE_BYTES {
+        let transcript = self.transcript()?;
+        if self.source_url != transcript.url {
             return Err(Error::Slice(format!(
-                "the transcript was {} bytes when this slice was taken and the layout describes \
-                 a file of {}; every offset in this record is for a different file",
-                self.source_bytes,
-                layout::CHALLENGE_BYTES
+                "the record says it came from {} and {} is published at {}",
+                self.source_url, transcript.name, transcript.url
             )));
         }
-        if self.source_power != layout::CHALLENGE_POWER {
+        if self.source_bytes != transcript.file_bytes {
             return Err(Error::Slice(format!(
-                "the record says the transcript was run to 2^{} and the layout assumes 2^{}",
-                self.source_power,
-                layout::CHALLENGE_POWER
+                "the transcript was {} bytes when this slice was taken and {}'s layout describes \
+                 a file of {}; every offset in this record is for a different file",
+                self.source_bytes, transcript.name, transcript.file_bytes
+            )));
+        }
+        if self.source_power != transcript.power {
+            return Err(Error::Slice(format!(
+                "the record says the ceremony was run to 2^{} and {} was run to 2^{}",
+                self.source_power, transcript.name, transcript.power
+            )));
+        }
+        // A transcript with no digest at the head of its file cannot have
+        // recorded one, and a transcript with one must have.
+        if transcript.head_digest != self.transcript_hash.is_some() {
+            return Err(Error::Slice(format!(
+                "{} {} a digest at the head of its file and this record {} one",
+                transcript.name,
+                if transcript.head_digest { "carries" } else { "carries no" },
+                if self.transcript_hash.is_some() { "has" } else { "has not" }
             )));
         }
         if self.slice_power != slice_power {
@@ -83,7 +116,7 @@ impl Provenance {
                 self.slice_power
             )));
         }
-        let expected = layout::slice_ranges(self.source_power, self.slice_power)?;
+        let expected = layout::slice_ranges(transcript, self.slice_power)?;
         if expected.len() != self.ranges.len() {
             return Err(Error::Slice(format!(
                 "the record has {} ranges and the layout has {}",
@@ -170,12 +203,11 @@ pub fn parse(bytes: &[u8], provenance: &Provenance, slice_power: u32) -> Result<
 /// transcript.
 pub fn describe(
     bytes: &[u8],
-    source_url: &str,
-    transcript_hash: &str,
-    source_power: u32,
+    transcript: &layout::Transcript,
+    transcript_hash: Option<String>,
     slice_power: u32,
 ) -> Result<Provenance> {
-    let ranges = layout::slice_ranges(source_power, slice_power)?;
+    let ranges = layout::slice_ranges(transcript, slice_power)?;
     let mut cursor = 0usize;
     let mut fetched = Vec::with_capacity(ranges.len());
     for range in &ranges {
@@ -196,11 +228,14 @@ pub fn describe(
         cursor = end;
     }
     Ok(Provenance {
-        source_url: source_url.to_string(),
-        source_bytes: layout::CHALLENGE_BYTES,
-        source_power,
+        transcript: transcript.name.to_string(),
+        source_url: transcript.url.to_string(),
+        source_bytes: transcript.file_bytes,
+        source_power: transcript.power,
         slice_power,
-        transcript_hash: transcript_hash.to_string(),
+        transcript_hash,
+        published_checksums: transcript.published_checksums.to_string(),
+        custody: transcript.custody.to_string(),
         ranges: fetched,
         slice_sha256: hex_sha256(bytes),
     })

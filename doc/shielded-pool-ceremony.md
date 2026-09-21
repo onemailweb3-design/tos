@@ -21,9 +21,40 @@ trustworthy.
 
 ## Phase 1: reused, sliced, and checked
 
-Phase 1 is circuit-independent, so it is not ours to run. The BLS12-381
-powers-of-tau this chain uses is the published Filecoin transcript,
-`challenge_19`, run to 2^27 and derived from the Zcash Sapling ceremony.
+Phase 1 is circuit-independent, so it is not ours to run — it is ours to
+*choose*, and the choice is a **custody** decision rather than a technical one.
+Whichever ceremony is picked, the deployment inherits that ceremony's
+participants and nothing else. So the transcript is a described thing in
+`layout.rs` with its provenance attached, not a constant somebody once typed,
+and the provenance record beside every fetched slice names it in its first
+field.
+
+### Which ceremony, and why
+
+Two published BLS12-381 powers-of-tau are large enough:
+
+| | Zcash Sapling | Filecoin |
+|---|---|---|
+| degree | 2^21 — 64× this circuit | 2^27 |
+| when | 2017–2018 | end of 2019 |
+| provenance | **the canonical BLS12-381 ceremony**; later ones reference it | its own ceremony, *not* a continuation of Zcash's — Zcash's 2^21 was too small for Filecoin's hundred-million-gate circuits |
+| attested | 87 named humans + a public random beacon, of an 89-round chain | not examined here |
+| an 18 MB slice takes | **seconds** (Internet Archive) | ~25 minutes (IPFS gateway) |
+
+**The default is Zcash.** Better provenance, far better availability, and its
+contribution chain turned out to be *auditable from published material* — two
+links of it were recomputed against PGP signatures from 2017 before it was made
+the default. Filecoin's only advantage is headroom this circuit does not need;
+it is kept as an alternative, because two independent sources hedge
+availability and one of them has already lost its original host.
+
+Neither is preferred by the code. `--transcript filecoin` switches, and the
+tests pin both ceremonies' artifacts so that changing the default means moving
+a pin rather than discovering later that nothing was checking.
+
+The full audit, including the 89-vs-88-vs-87 round count and the two hash
+computations that resolve it, is in
+`memo/privacy/measurements/zcash-transcript-audit-20260921/`.
 
 **This circuit needs 2^15.** Not chosen — measured:
 
@@ -306,7 +337,8 @@ key is frozen.
 ## Running it
 
 ```
-# the slice: five range requests, ~18 MB, resumable
+# the slice: five range requests, ~18 MB. Zcash by default;
+# --transcript filecoin for the other ceremony
 uv run python scripts/shielded-pool-phase1-slice.py --out artifacts/phase1
 
 # what the bytes actually are, the basis change, and the reference string
@@ -314,7 +346,7 @@ uv run python scripts/shielded-pool-phase1-slice.py --out artifacts/phase1
 # not yet usable and the step between is easy to forget
 cargo run --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml \
     --bin verify-phase1-slice -- \
-    artifacts/phase1/phase1-2m15.bin artifacts/phase1/phase1-2m15.json
+    artifacts/phase1/phase1-zcash-2m15.bin artifacts/phase1/phase1-zcash-2m15.json
 
 # the same against the fetched artifact, with its hashes pinned
 cargo test --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml \

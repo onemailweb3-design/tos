@@ -28,39 +28,68 @@ use shielded_pool_ceremony::{lagrange, slice, verify};
 
 const EXPONENT: u32 = 15;
 
-/// The slice fetched on 2026-09-21, by the hash of its bytes.
+/// What each ceremony's degree-2^15 slice is, by the hashes it produced when
+/// it was fetched on 2026-09-21.
 ///
-/// Pinned so that "the real slice verifies" is a statement about a specific
-/// eighteen megabytes and not about whatever happens to be on disk. A
-/// different transcript, or the same one re-published, moves this.
-const SLICE_SHA256: &str = "d161614630b0504bd02075a9f57e7ca18d24f0c7c911c5cda5a686e91b8ced75";
-
-/// The 64 bytes the challenge file opens with: the transcript's own name for
-/// itself, and what a deployment is held against the ceremony's attestations
-/// by.
-const TRANSCRIPT_HASH: &str = concat!(
-    "6e3f4b98e6c205d0efa5abc917dd03e28864016df380936fa4e9865595c5d698",
-    "63eff93e8badf8e6b8c8cbfd5ab3a415ef7ba50b86e124bd9bfcd3f9aab67124"
-);
-
-fn artifact() -> (PathBuf, PathBuf) {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    (root.join("artifacts/phase1/phase1-2m15.bin"), root.join("artifacts/phase1/phase1-2m15.json"))
+/// Both are pinned, not only the default's, because "the real slice verifies"
+/// has to be a statement about specific bytes — and because a deployment that
+/// switches ceremony should have to move a pin rather than discover later that
+/// nothing had been checking.
+struct Pinned {
+    transcript: &'static str,
+    /// SHA-256 of the eighteen megabytes.
+    slice: &'static str,
+    /// The reference string the Lagrange transform produces from it: a
+    /// function of the slice and of nothing else.
+    srs: &'static str,
 }
 
+const PINNED: [Pinned; 2] = [
+    Pinned {
+        transcript: "zcash",
+        slice: "1bfd7acdb3ecbfaaa695ab159a7a643a2eb58203a4d93361040c6bd4c2aa3d6e",
+        srs: "d4e6d28ef16ad12fd1102a64b9fbb8a8eeb4ddaef542635122c44af813b08097",
+    },
+    Pinned {
+        transcript: "filecoin",
+        slice: "d161614630b0504bd02075a9f57e7ca18d24f0c7c911c5cda5a686e91b8ced75",
+        srs: "b30791cf1925a9184e90d9088acbc8299ae172fd3ef9958d892065368325baba",
+    },
+];
+
+fn pinned_for(transcript: &str) -> &'static Pinned {
+    PINNED
+        .iter()
+        .find(|entry| entry.transcript == transcript)
+        .unwrap_or_else(|| panic!("no pinned hashes for the {transcript} ceremony"))
+}
+
+/// Whichever slice is on disk. Either ceremony's is acceptable here; what is
+/// not acceptable is a slice nobody pinned.
 fn load() -> (Vec<u8>, slice::Provenance) {
-    let (bin, json) = artifact();
-    let bytes = std::fs::read(&bin).unwrap_or_else(|error| {
-        panic!(
-            "{}: {error}\n\nFetch it first:\n  uv run python \
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let directory = root.join("artifacts/phase1");
+    let missing = || -> String {
+        format!(
+            "{}\n\nFetch a slice first:\n  uv run python \
              scripts/shielded-pool-phase1-slice.py --out artifacts/phase1",
-            bin.display()
+            directory.display()
         )
-    });
+    };
+    let mut records: Vec<PathBuf> = std::fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("{}: {error}", missing()))
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .collect();
+    records.sort();
+    let json = records.first().unwrap_or_else(|| panic!("no provenance record in {}", missing()));
+
     let record: slice::Provenance = serde_json::from_slice(
-        &std::fs::read(&json).unwrap_or_else(|error| panic!("{}: {error}", json.display())),
+        &std::fs::read(json).unwrap_or_else(|error| panic!("{}: {error}", json.display())),
     )
     .unwrap_or_else(|error| panic!("{}: {error}", json.display()));
+    let bin = json.with_extension("bin");
+    let bytes = std::fs::read(&bin).unwrap_or_else(|error| panic!("{}: {error}", bin.display()));
     (bytes, record)
 }
 
@@ -68,13 +97,19 @@ fn load() -> (Vec<u8>, slice::Provenance) {
 #[ignore = "needs artifacts/phase1; see the module comment"]
 fn the_fetched_slice_is_the_one_that_was_checked() {
     let (bytes, record) = load();
+    let pinned = pinned_for(&record.transcript);
+    eprintln!("the {} slice, {} bytes", record.transcript, bytes.len());
+    eprintln!("inheriting: {}", record.custody);
     assert_eq!(bytes.len(), 18_874_464, "the slice is not the size the layout gives");
     assert_eq!(
-        record.slice_sha256, SLICE_SHA256,
-        "this is not the slice these hashes were recorded from"
+        record.slice_sha256, pinned.slice,
+        "this is not the {} slice these hashes were recorded from",
+        record.transcript
     );
-    assert_eq!(record.transcript_hash, TRANSCRIPT_HASH, "a different transcript");
-    assert_eq!(record.source_url, "https://trusted-setup.filecoin.io/phase1/challenge_19");
+    // The descriptor decides the URL, and `check_against_layout` holds the
+    // record to it, so this is the record agreeing with itself only if the
+    // ceremony is one we describe.
+    assert_eq!(record.source_url, record.transcript().expect("a described ceremony").url);
 }
 
 #[test]
@@ -108,9 +143,8 @@ fn two_real_powers_swapped_are_refused() {
     // Re-hash, so the cheap checks pass and only the mathematics can refuse.
     let rehashed = slice::describe(
         &tampered,
-        &record.source_url,
-        &record.transcript_hash,
-        record.source_power,
+        record.transcript().expect("a described ceremony"),
+        record.transcript_hash.clone(),
         record.slice_power,
     )
     .expect("a record for the tampered bytes");
@@ -125,14 +159,6 @@ fn two_real_powers_swapped_are_refused() {
         "refused for the wrong reason: {error}"
     );
 }
-
-/// The digest of the reference string phase 2 will start from.
-///
-/// The transform is a function of the slice, so this is determined by the
-/// hashes above and by nothing else. It is pinned because a phase-2 transcript
-/// has to record which reference string it built on, and twenty megabytes is
-/// not a thing to record.
-const SRS_DIGEST: &str = "b30791cf1925a9184e90d9088acbc8299ae172fd3ef9958d892065368325baba";
 
 /// The real 2^15 Lagrange basis, computed from the real slice and checked
 /// against it.
@@ -152,8 +178,9 @@ fn the_real_slice_becomes_the_lagrange_basis_it_should() {
     lagrange::verify(&parsed, &srs, [0xa5u8; 32]).expect("the real transform must verify");
     assert_eq!(
         lagrange::digest(&srs),
-        SRS_DIGEST,
-        "the reference string phase 2 would start from has moved"
+        pinned_for(&record.transcript).srs,
+        "the reference string phase 2 would start from, for the {} ceremony, has moved",
+        record.transcript
     );
 }
 

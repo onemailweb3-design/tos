@@ -90,11 +90,15 @@ fn both_transaction_kinds_have_the_same_shape() {
 
 #[test]
 fn the_slice_the_exponent_implies_is_the_one_the_layout_produces() {
-    let ranges = layout::slice_ranges(layout::CHALLENGE_POWER, SLICE_EXPONENT).expect("ranges");
-    let degree = 1u64 << SLICE_EXPONENT;
-    assert_eq!(ranges[0].points, 2 * degree - 1, "tau_g1 must reach degree 2n-2");
-    for range in &ranges[1..4] {
-        assert_eq!(range.points, degree, "{} must hold n points", range.name);
+    // Both ceremonies, because the slice's shape depends on the circuit and
+    // not on which one a deployment inherits.
+    for transcript in layout::ALL {
+        let ranges = layout::slice_ranges(transcript, SLICE_EXPONENT).expect("ranges");
+        let degree = 1u64 << SLICE_EXPONENT;
+        assert_eq!(ranges[0].points, 2 * degree - 1, "tau_g1 must reach degree 2n-2");
+        for range in &ranges[1..4] {
+            assert_eq!(range.points, degree, "{} must hold n points", range.name);
+        }
+        assert_eq!(ranges[4].points, 1);
     }
-    assert_eq!(ranges[4].points, 1);
 }

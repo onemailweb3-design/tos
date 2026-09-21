@@ -13,7 +13,7 @@
 
 use std::process::ExitCode;
 
-use shielded_pool_ceremony::{lagrange, layout, shape, slice, verify, Result};
+use shielded_pool_ceremony::{lagrange, shape, slice, verify, Result};
 use shielded_pool_circuit::circuit::ShieldedTransactionCircuit;
 use shielded_pool_circuit::scenario;
 
@@ -41,8 +41,13 @@ fn run() -> Result<()> {
 
     let bytes = std::fs::read(&slice_path)?;
     let record: slice::Provenance = serde_json::from_slice(&std::fs::read(&record_path)?)?;
-    println!("slice:   {} bytes from {}", bytes.len(), record.source_url);
-    println!("         transcript digest {}", record.transcript_hash);
+    println!("\nceremony: {} (2^{})", record.transcript, record.source_power);
+    println!("          {}", record.source_url);
+    println!("          {}", record.published_checksums);
+    if let Some(digest) = &record.transcript_hash {
+        println!("          head digest {digest}");
+    }
+    println!("slice:    {} bytes", bytes.len());
 
     let parsed = slice::parse(&bytes, &record, exponent)?;
     println!(
@@ -76,13 +81,12 @@ fn run() -> Result<()> {
     );
     println!("reference string {}", lagrange::digest(&srs));
     println!(
-        "\nWhat none of that says: anything about who knows tau. That property comes from the\n\
-         contribution chain behind {}, which cannot be\n\
-         checked from a slice -- re-verifying it means replaying every response in the\n\
-         transcript. The TRANSCRIPT digest, printed at the top, is what to hold against that\n\
-         ceremony's published attestations; the reference string digest names only what came\n\
-         out of this run.",
-        layout::CHALLENGE_URL
+        "\nWhat none of that says: anything about who knows tau. That comes from the {} \
+         ceremony's\ncontribution chain, which cannot be checked from a slice -- re-verifying \
+         it means\nreplaying every response in the transcript.\n\n  What is inherited: {}.\n\n\
+         The identifiers printed at the top are what to hold against that ceremony's published\n\
+         attestations. The reference string digest names only what came out of this run.",
+        record.transcript, record.custody
     );
     Ok(())
 }

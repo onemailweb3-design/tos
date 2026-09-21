@@ -561,8 +561,16 @@ back as a recovery note, with every figure above measured on that path. What
 is not built is a verifying key anyone should trust with money: the
 development key comes from a single-party setup, so **no proof under a
 production key has ever been produced**, and nothing here is evidence about
-one. The phase-1 transcript can be taken from an existing BLS12-381 ceremony;
-the phase-2 circuit-specific contribution has to be ours.
+one.
+
+Phase 1 is **done**: the circuit needs a 2^15 domain, and a slice that size
+has been fetched from the Zcash Sapling powers of tau, verified as a
+well-formed powers-of-tau string, and turned into the Lagrange basis a setup
+consumes. The phase-2 circuit-specific contribution has to be ours and is the
+only remaining engineering task. `doc/shielded-pool-ceremony.md` holds the
+plan; the choice between the Zcash and Filecoin ceremonies, and the audit of
+the round counts behind it, are in
+`memo/privacy/measurements/zcash-transcript-audit-20260921/`.
 
 ## What gates this branch
 

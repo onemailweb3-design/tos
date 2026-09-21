@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-"""Fetch the part of the phase-1 transcript this circuit needs.
+"""Fetch the part of a phase-1 ceremony this circuit needs.
 
-The published transcript is a powers-of-tau accumulator for circuits up to
-2^27 constraints and is 72 GiB.  This circuit needs 2^15, and the accumulator
-stores each of its five sections in ascending power order, so what we need is a
-prefix of *every section* -- five byte ranges, about eighteen megabytes.
+Two published BLS12-381 powers-of-tau ceremonies are large enough, and the
+choice between them is a custody decision rather than a technical one.  The
+default is Zcash's Sapling ceremony; Filecoin's is kept as an alternative.
+Either way the accumulator stores each of its five sections in ascending power
+order, so what we need is a prefix of *every section* rather than a prefix of
+the file -- five byte ranges, about eighteen megabytes.
 
 This script does one thing: it copies those ranges and records where they came
-from.  It decides nothing.  The ranges are read out of the Rust layout module,
-which derives them from the transcript's own published size, and everything
-that has to be true of the bytes afterwards is checked by
-`verify-phase1-slice`, which parses them into curve points and runs the pairing
-checks.  Fetching and judging are kept apart on purpose: this half needs the
-network and no cryptography, and that half needs cryptography and no network.
+from.  It decides nothing.  The ranges, the file size to expect and the
+provenance text all come out of the Rust `phase1-ranges` binary, which derives
+them from each ceremony's published size, and everything that has to be true of
+the bytes afterwards is checked by `verify-phase1-slice`, which parses them
+into curve points and runs the pairing checks.  Fetching and judging are kept
+apart on purpose: this half needs the network and no cryptography, and that
+half needs cryptography and no network.
 
     uv run python scripts/shielded-pool-phase1-slice.py --out artifacts/phase1
+    uv run python scripts/shielded-pool-phase1-slice.py --transcript filecoin ...
 
-Writes `phase1-2m<exponent>.bin` and `phase1-2m<exponent>.json` beside each
-other.  Resumable: a range already on disk with the right length and hash is
-not fetched again.
+Writes `phase1-<transcript>-2m<exponent>.bin` and a `.json` record beside it.
 """
 
 from __future__ import annotations
@@ -35,12 +37,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 CEREMONY = REPO / "tools/shielded-pool-ceremony"
 
-# The transcript, and the size it has to have before any offset into it means
-# anything. Both are declared in the Rust layout module; they are repeated in
-# the failure messages here only so this script can explain itself.
-CHALLENGE_URL = "https://trusted-setup.filecoin.io/phase1/challenge_19"
-CHALLENGE_BYTES = 77_309_411_488
-TRANSCRIPT_HASH_BYTES = 64
+# The digest a challenge file opens with, where there is one. A transcript of
+# records has none, and says so in its descriptor.
+HEAD_DIGEST_BYTES = 64
 
 
 class Failed(Exception):
@@ -51,14 +50,15 @@ def log(message: str) -> None:
     print(f"[phase1] {message}", flush=True)
 
 
-def ranges_from_rust(exponent: int) -> list[dict]:
-    """The byte ranges, from the module that derives them.
+def plan(transcript: str, exponent: int) -> dict:
+    """What to fetch, from the module that derives it.
 
     Not recomputed here.  Two copies of this arithmetic is two chances to get
     it wrong, and the Rust one is the copy with tests behind it.
     """
     result = subprocess.run(
-        ["cargo", "run", "--release", "--quiet", "--bin", "phase1-ranges", "--", str(exponent)],
+        ["cargo", "run", "--release", "--quiet", "--bin", "phase1-ranges",
+         "--", transcript, str(exponent)],
         cwd=CEREMONY,
         capture_output=True,
         text=True,
@@ -70,10 +70,11 @@ def ranges_from_rust(exponent: int) -> list[dict]:
 
 def head(url: str) -> int:
     request = urllib.request.Request(url, method="HEAD")
-    with urllib.request.urlopen(request, timeout=120) as response:
+    with urllib.request.urlopen(request, timeout=180) as response:
         length = response.headers.get("Content-Length")
         if length is None:
-            raise Failed("the server did not report a Content-Length, so the file cannot be identified")
+            raise Failed(
+                "the server did not report a Content-Length, so the file cannot be identified")
         return int(length)
 
 
@@ -81,17 +82,16 @@ def fetch_range(url: str, offset: int, length: int) -> bytes:
     """One range, with the server's answer checked rather than assumed.
 
     A server that ignores the Range header answers 200 with the whole file --
-    72 GiB of it -- so the status code is the thing to check, not the bytes
-    that arrive.
+    a hundred gigabytes of it -- so the status code is the thing to check, not
+    the bytes that arrive.
     """
     end = offset + length - 1
     request = urllib.request.Request(url, headers={"Range": f"bytes={offset}-{end}"})
-    with urllib.request.urlopen(request, timeout=900) as response:
+    with urllib.request.urlopen(request, timeout=3600) as response:
         if response.status != 206:
             raise Failed(
                 f"asked for bytes {offset}-{end} and the server answered {response.status} "
-                "rather than 206; it is sending the whole file, not the range"
-            )
+                "rather than 206; it is sending the whole file, not the range")
         content_range = response.headers.get("Content-Range", "")
         if not content_range.startswith(f"bytes {offset}-{end}/"):
             raise Failed(f"the server returned a different range: {content_range!r}")
@@ -104,72 +104,83 @@ def fetch_range(url: str, offset: int, length: int) -> bytes:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default=str(REPO / "artifacts/phase1"))
+    parser.add_argument("--transcript", default="zcash",
+                        help="which phase-1 ceremony to inherit: zcash (default) or filecoin. "
+                             "A custody decision, not a technical one -- see "
+                             "doc/shielded-pool-ceremony.md")
     parser.add_argument("--exponent", type=int, default=15,
                         help="the QAP domain exponent to slice at. The circuit decides this; "
-                             "pass it only to fetch a slice for a circuit that has changed.")
-    parser.add_argument("--url", default=CHALLENGE_URL)
+                             "pass it only for a circuit that has changed.")
     args = parser.parse_args()
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    slice_path = out / f"phase1-2m{args.exponent}.bin"
-    record_path = out / f"phase1-2m{args.exponent}.json"
+    stem = f"phase1-{args.transcript}-2m{args.exponent}"
+    slice_path = out / f"{stem}.bin"
+    record_path = out / f"{stem}.json"
 
     log("reading the layout from the Rust module that derives it ...")
-    ranges = ranges_from_rust(args.exponent)
+    described = plan(args.transcript, args.exponent)
+    ranges = described["ranges"]
+    url = described["url"]
+    expect_bytes = described["file_bytes"]
     wanted = sum(r["length"] for r in ranges)
+    log(f"ceremony {described['transcript']} (2^{described['power']})")
+    log(f"inheriting: {described['custody']}")
     log(f"{len(ranges)} ranges, {wanted:,} bytes in total")
 
-    log(f"identifying {args.url} ...")
+    log(f"identifying {url} ...")
     try:
-        size = head(args.url)
+        size = head(url)
     except urllib.error.URLError as error:
         raise Failed(f"could not reach the transcript: {error}") from error
-    if size != CHALLENGE_BYTES:
+    if size != expect_bytes:
         raise Failed(
-            f"the transcript is {size:,} bytes and the layout describes one of "
-            f"{CHALLENGE_BYTES:,}. Every offset below is for a different file, so nothing is "
-            "fetched."
-        )
-    log(f"the transcript is the {size:,} bytes the layout describes")
+            f"the file is {size:,} bytes and the layout describes one of {expect_bytes:,}. "
+            "Every offset below is for a different file, so nothing is fetched.")
+    log(f"it is the {size:,} bytes the layout describes")
 
-    # The 64-byte digest the challenge file opens with: the transcript's own
-    # name for itself. Not verified here -- verifying it means replaying the
-    # whole ceremony -- but recorded, so a deployment can be held against the
+    # Where the file opens with one, the digest chaining it to the previous
+    # entry. Not verified -- verifying a digest chain means replaying the whole
+    # transcript -- but recorded, so a deployment can be held against the
     # published attestations.
-    digest = fetch_range(args.url, 0, TRANSCRIPT_HASH_BYTES).hex()
-    log(f"transcript digest {digest}")
+    digest = None
+    if described["head_digest"]:
+        digest = fetch_range(url, 0, HEAD_DIGEST_BYTES).hex()
+        log(f"head digest {digest}")
+    else:
+        log(f"no head digest; identified by: {described['published_checksums']}")
 
     pieces: list[bytes] = []
     for entry in ranges:
-        log(
-            f"{entry['name']}: {entry['points']:,} points, "
-            f"{entry['length']:,} bytes at offset {entry['offset']:,}"
-        )
-        data = fetch_range(args.url, entry["offset"], entry["length"])
-        got = hashlib.sha256(data).hexdigest()
-        log(f"  sha256 {got}")
-        entry["sha256"] = got
+        log(f"{entry['name']}: {entry['points']:,} points, "
+            f"{entry['length']:,} bytes at offset {entry['offset']:,}")
+        data = fetch_range(url, entry["offset"], entry["length"])
+        entry["sha256"] = hashlib.sha256(data).hexdigest()
+        log(f"  sha256 {entry['sha256']}")
         pieces.append(data)
 
     body = b"".join(pieces)
     slice_path.write_bytes(body)
 
     record = {
-        "source_url": args.url,
-        "source_bytes": CHALLENGE_BYTES,
-        "source_power": 27,
+        "transcript": described["transcript"],
+        "source_url": url,
+        "source_bytes": expect_bytes,
+        "source_power": described["power"],
         "slice_power": args.exponent,
         "transcript_hash": digest,
+        "published_checksums": described["published_checksums"],
+        "custody": described["custody"],
         "ranges": [
             {
-                "name": entry["name"],
-                "offset": entry["offset"],
-                "length": entry["length"],
-                "points": entry["points"],
-                "sha256": entry["sha256"],
+                "name": e["name"],
+                "offset": e["offset"],
+                "length": e["length"],
+                "points": e["points"],
+                "sha256": e["sha256"],
             }
-            for entry in ranges
+            for e in ranges
         ],
         "slice_sha256": hashlib.sha256(body).hexdigest(),
     }

@@ -28,9 +28,13 @@ use shielded_pool_ceremony::{layout, points, slice};
 /// The smallest power the slice arithmetic is defined for that still has more
 /// than one point in every section.
 const EXPONENT: u32 = 4;
-const SOURCE: &str = "https://example.invalid/not-a-transcript";
-const DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000\
-0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Built against the default ceremony, because that is the one a deployment
+/// gets when nobody chooses. The parser is checked against both in
+/// `a_record_naming_the_other_ceremony_is_refused`.
+fn transcript() -> &'static layout::Transcript {
+    layout::DEFAULT
+}
 
 fn built() -> (Vec<u8>, slice::Provenance) {
     let mut rng = ChaCha20Rng::from_seed([19u8; 32]);
@@ -41,8 +45,8 @@ fn built() -> (Vec<u8>, slice::Provenance) {
         Fr::rand(&mut rng),
     );
     let bytes = slice::to_bytes(&built);
-    let record = slice::describe(&bytes, SOURCE, DIGEST, layout::CHALLENGE_POWER, EXPONENT)
-        .expect("a provenance record");
+    let record =
+        slice::describe(&bytes, transcript(), None, EXPONENT).expect("a provenance record");
     (bytes, record)
 }
 
@@ -96,7 +100,7 @@ fn a_record_whose_offsets_are_not_the_layouts_is_refused() {
 #[test]
 fn a_record_describing_a_file_of_another_size_is_refused() {
     let (bytes, mut record) = built();
-    record.source_bytes = layout::CHALLENGE_BYTES - 1;
+    record.source_bytes = transcript().file_bytes - 1;
     let error = slice::parse(&bytes, &record, EXPONENT).expect_err("another file is refused");
     assert!(format!("{error}").contains("different file"), "wrong check: {error}");
 }
@@ -134,4 +138,71 @@ fn an_unreduced_coordinate_is_refused() {
         message.contains("not reduced") || message.contains("blst refused"),
         "refused for the wrong reason: {message}"
     );
+}
+
+/// The field that decides what every other field means.
+///
+/// A record built for one ceremony, relabelled as the other: the bytes are
+/// unchanged and hash correctly, but the offsets in it belong to a different
+/// file. This is the mistake that would otherwise put one ceremony's slice
+/// into a deployment whose custody argument names the other.
+#[test]
+fn a_record_naming_the_other_ceremony_is_refused() {
+    let other = layout::ALL
+        .iter()
+        .copied()
+        .find(|candidate| candidate.name != transcript().name)
+        .expect("two ceremonies are described");
+
+    let (bytes, mut record) = built();
+    record.transcript = other.name.to_string();
+    let error =
+        slice::parse(&bytes, &record, EXPONENT).expect_err("a relabelled record must be refused");
+    // It fails on the URL, which is the first thing that stops agreeing.
+    assert!(format!("{error}").contains("is published at"), "wrong check: {error}");
+}
+
+#[test]
+fn a_record_naming_no_ceremony_we_describe_is_refused() {
+    let (bytes, mut record) = built();
+    record.transcript = "perpetual-powers-of-tau".to_string();
+    let error = slice::parse(&bytes, &record, EXPONENT).expect_err("an unknown ceremony");
+    assert!(format!("{error}").contains("no transcript called"), "wrong check: {error}");
+}
+
+/// A transcript of records has no digest at the head of its file and a
+/// challenge file has one, so a record claiming otherwise describes a file
+/// that does not exist.
+#[test]
+fn a_record_whose_head_digest_does_not_match_its_ceremony_is_refused() {
+    let (bytes, mut record) = built();
+    record.transcript_hash = match record.transcript_hash {
+        None => Some("00".repeat(64)),
+        Some(_) => None,
+    };
+    let error = slice::parse(&bytes, &record, EXPONENT).expect_err("a mismatched digest field");
+    assert!(format!("{error}").contains("a digest at the head"), "wrong check: {error}");
+}
+
+/// Both ceremonies produce a slice of the same shape, so the parser reads
+/// either. Neither is preferred by the code -- only by the default.
+#[test]
+fn a_slice_from_either_ceremony_round_trips() {
+    for candidate in layout::ALL {
+        let mut rng = ChaCha20Rng::from_seed([29u8; 32]);
+        let made = slice_from_known_secrets(
+            1usize << EXPONENT,
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+            Fr::rand(&mut rng),
+        );
+        let bytes = slice::to_bytes(&made);
+        let head = candidate.head_digest.then(|| "11".repeat(64));
+        let record =
+            slice::describe(&bytes, candidate, head, EXPONENT).expect("a provenance record");
+        assert_eq!(record.transcript, candidate.name);
+        assert_eq!(record.custody, candidate.custody);
+        let parsed = slice::parse(&bytes, &record, EXPONENT).expect("must parse");
+        verify(&parsed, [5u8; 32]).expect("must verify");
+    }
 }
