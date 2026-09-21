@@ -176,6 +176,11 @@ int {name}{suffix}(int rounds) method_id {{
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|a| a == "--direct") {
+        report_direct();
+        return Ok(());
+    }
+
     let rounds: u32 =
         std::env::args().nth(1).map(|value| value.parse()).transpose()?.unwrap_or(2_000);
     let repeats: usize =
@@ -403,4 +408,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("and a tariff must cover the slower of the two implementations, so");
     println!("this is a candidate and a method rather than a number to freeze.");
     Ok(())
+}
+
+// --- the permutation on its own ---------------------------------------------
+//
+// The measurements above run the instruction through the VM, so they carry the
+// stack handling, the canonical-field checks and the conversions with them.
+// When the two VMs disagree about an instruction by more than they disagree
+// about everything else, the first question is whether the disagreement is in
+// the cryptography or in the plumbing around it. This answers that: it calls
+// the permutation directly, with no VM in the picture, and `bench-poseidon2
+// --direct` in the C++ tree does the same on that side.
+
+/// Times `permute` alone, returning nanoseconds per call.
+fn direct_permutation(rounds: u32) -> f64 {
+    let mut state: [chain_block::poseidon2::FieldBytes; 8] =
+        core::array::from_fn(|lane| {
+            let mut out = [0u8; 32];
+            out[31] = lane as u8 + 1;
+            out
+        });
+    // Warm the round-constant table so the first call does not pay for it.
+    let _ = chain_block::poseidon2::permute(&state);
+    let start = std::time::Instant::now();
+    for _ in 0..rounds {
+        state = chain_block::poseidon2::permute(&state);
+    }
+    let elapsed = start.elapsed().as_nanos() as f64 / f64::from(rounds);
+    // Keep the result live so the loop cannot be optimised away.
+    std::hint::black_box(&state);
+    elapsed
+}
+
+fn report_direct() {
+    // Three passes, smallest taken: the same discipline as the anchored
+    // measurement, because a shared host makes any single pass an upper bound.
+    let best = (0..3).map(|_| direct_permutation(200_000)).fold(f64::MAX, f64::min);
+    println!("POSEIDON2_PERM8 direct: {best:.0} ns per permutation");
 }

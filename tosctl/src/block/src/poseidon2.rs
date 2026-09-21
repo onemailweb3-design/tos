@@ -53,25 +53,35 @@ fn fr_to_be(value: &blst::blst_fr) -> FieldBytes {
     out
 }
 
+/// Runs one blst field operation into an output blst writes in full.
+///
+/// `blst_fr::default()` would zero the thirty-two bytes first, and every one
+/// of them is then overwritten. A permutation does on the order of eight
+/// hundred of these, so the zeroing is not free: it is about a tenth of what
+/// the permutation costs.
+macro_rules! fr_op {
+    ($call:expr) => {{
+        let mut out = std::mem::MaybeUninit::<blst::blst_fr>::uninit();
+        // SAFETY: blst writes the whole element before returning, so the
+        // value is initialised by the time it is read. The inputs are
+        // initialised field elements.
+        unsafe {
+            $call(out.as_mut_ptr());
+            out.assume_init()
+        }
+    }};
+}
+
 fn add(a: &blst::blst_fr, b: &blst::blst_fr) -> blst::blst_fr {
-    let mut out = blst::blst_fr::default();
-    // SAFETY: three initialised field elements.
-    unsafe { blst::blst_fr_add(&mut out, a, b) };
-    out
+    fr_op!(|out| blst::blst_fr_add(out, a, b))
 }
 
 fn mul(a: &blst::blst_fr, b: &blst::blst_fr) -> blst::blst_fr {
-    let mut out = blst::blst_fr::default();
-    // SAFETY: three initialised field elements.
-    unsafe { blst::blst_fr_mul(&mut out, a, b) };
-    out
+    fr_op!(|out| blst::blst_fr_mul(out, a, b))
 }
 
 fn sqr(a: &blst::blst_fr) -> blst::blst_fr {
-    let mut out = blst::blst_fr::default();
-    // SAFETY: two initialised field elements.
-    unsafe { blst::blst_fr_sqr(&mut out, a) };
-    out
+    fr_op!(|out| blst::blst_fr_sqr(out, a))
 }
 
 fn sbox(x: &blst::blst_fr) -> blst::blst_fr {

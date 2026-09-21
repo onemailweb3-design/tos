@@ -18,6 +18,8 @@
 // rather than averaged.
 
 #include <chrono>
+
+#include "vm/poseidon2ops.h"
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -107,7 +109,43 @@ Measured measure(td::Ref<vm::Cell> code, const Subject& subject, int rounds, int
 
 }  // namespace
 
+// The permutation on its own, with no VM around it. The anchored figures
+// above run the instruction, so they carry the stack handling and the
+// conversions; when the two VMs disagree about this instruction by more than
+// they disagree about everything else, this says whether the disagreement is
+// in the cryptography or in the plumbing. `poseidon2-bench --direct` on the
+// Rust side does the same thing.
+int direct_permutation() {
+  unsigned char state[8][32];
+  for (int lane = 0; lane < 8; ++lane) {
+    std::memset(state[lane], 0, 32);
+    state[lane][31] = static_cast<unsigned char>(lane + 1);
+  }
+  vm::poseidon2::permute(state);  // warm anything that is lazily built
+  const int rounds = 200000;
+  double best = 1e18;
+  for (int pass = 0; pass < 3; ++pass) {
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < rounds; ++i) {
+      vm::poseidon2::permute(state);
+    }
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    double ns =
+        double(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()) / rounds;
+    if (ns < best) {
+      best = ns;
+    }
+  }
+  // Keep the result live.
+  std::fprintf(stderr, "%s", state[0][31] == 0xff ? "" : "");
+  std::printf("POSEIDON2_PERM8 direct: %.0f ns per permutation\n", best);
+  return 0;
+}
+
 int main(int argc, char** argv) {
+  if (argc > 1 && std::string(argv[1]) == "--direct") {
+    return direct_permutation();
+  }
   if (argc < 2) {
     std::fprintf(stderr,
                  "usage: bench-poseidon2 <probe.boc> [rounds] [repeats]\n"
