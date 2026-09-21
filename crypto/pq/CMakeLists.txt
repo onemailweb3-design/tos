@@ -193,6 +193,16 @@ if(TARGET tos_crypto)
   target_include_directories(test-block-signature-carrier-bound PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
   target_compile_definitions(test-block-signature-carrier-bound PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
   add_test(NAME block-signature-carrier-bound COMMAND test-block-signature-carrier-bound)
+  # Production admission limits for every route that will carry the persisted signature object.
+  add_executable(test-block-signature-carrier-routes
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-routes-test.cpp")
+  set_target_properties(test-block-signature-carrier-routes PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-block-signature-carrier-routes PRIVATE tl_api tl-utils)
+  target_compile_definitions(test-block-signature-carrier-routes PRIVATE
+    ROUTES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-routes.tsv"
+    MEASUREMENTS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measurements.tsv"
+    SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../..")
+  add_test(NAME block-signature-carrier-routes COMMAND test-block-signature-carrier-routes)
   # Configuration parameter 43 encodings both implementations must read identically.
   add_executable(config43-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors-gen.cpp")
   set_target_properties(config43-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

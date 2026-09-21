@@ -1,0 +1,37 @@
+# Structural carrier inventory for the canonical persisted block_signatures_simplex_pq#13 BOC.
+# These are structural verdicts against production route admission limits. They are not live
+# round trips of complete production objects: the post-quantum TL variants and their checked
+# parser do not exist yet, so constructing such objects here would create a modeled parser path.
+#
+# Deferred owner: the unit that adds those TL variants and the checked parser must put complete
+# finality-broadcast and lite forward-proof objects at 21 and 100 signers through the real
+# generated serializers and the real admission checks.
+#
+# layer columns: kind, route, layer, operation, source, named_constant, recorded_bytes, observation
+layer	finality-broadcast	overlay-manager-send	limit	overlay/overlay-manager.cpp	overlay::Overlays::max_fec_broadcast_size	16777216	CHECK_aborts_instead_of_refusing
+layer	finality-broadcast	overlay-admission	limit	overlay/overlay.cpp	overlay::Overlays::max_fec_broadcast_size	16777216	refuses_oversize_payload
+layer	finality-broadcast	plumtree-simple-send	limit	overlay/broadcast-plumtree.cpp	overlay::Overlays::max_fec_broadcast_size	16777216	refuses_oversize_payload
+layer	finality-broadcast	plumtree-simple-receive	limit	overlay/broadcast-plumtree.cpp	overlay::Overlays::max_fec_broadcast_size	16777216	refuses_oversize_payload
+layer	v2-broadcast	overlay-manager-send	limit	overlay/overlay-manager.cpp	overlay::Overlays::max_fec_broadcast_size	16777216	CHECK_aborts_instead_of_refusing
+layer	v2-broadcast	overlay-privacy-admission	limit	validator/full-node-shard.cpp	overlay::Overlays::max_fec_broadcast_size	16777216	refuses_payload_above_authorized_size
+layer	v2-broadcast	fec-reconstruction	limit	overlay/broadcast-fec.cpp	overlay::Overlays::max_fec_broadcast_size	16777216	refuses_oversize_reconstruction
+layer	lite-forward-proof	ext-connection-frame	limit	adnl/adnl-ext-connection.cpp	adnl::adnl_ext_max_packet_bytes	16777216	framed_TCP_packet_limit
+layer	lite-forward-proof	ext-connection-framing	overhead	adnl/adnl-ext-connection.cpp	adnl::adnl_ext_packet_framing_bytes	64	random_prefix_plus_SHA256
+layer	lite-forward-proof	answer-boxing	overhead	tl/generate/scheme/tos_api.tl	tos_api::adnl_message_answer.aligned_boxing_bytes	40	constructor_query_id_and_bytes_length
+# minimum columns: kind, route, expected usable object bytes
+minimum	finality-broadcast	16777216
+minimum	v2-broadcast	16777216
+minimum	lite-forward-proof	16777112
+# verdict columns: kind, route, signers, persisted_object_bytes, verdict, margin_bytes
+verdict	finality-broadcast	1	2720	fits	16774496
+verdict	finality-broadcast	21	53787	fits	16723429
+verdict	finality-broadcast	100	255396	fits	16521820
+verdict	finality-broadcast	400	1020996	fits	15756220
+verdict	v2-broadcast	1	2720	fits	16774496
+verdict	v2-broadcast	21	53787	fits	16723429
+verdict	v2-broadcast	100	255396	fits	16521820
+verdict	v2-broadcast	400	1020996	fits	15756220
+verdict	lite-forward-proof	1	2720	fits	16774392
+verdict	lite-forward-proof	21	53787	fits	16723325
+verdict	lite-forward-proof	100	255396	fits	16521716
+verdict	lite-forward-proof	400	1020996	fits	15756116
