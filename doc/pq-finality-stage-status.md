@@ -94,8 +94,8 @@ Commits:
 - `1897d48329ca80d21d11f0005c7b4684a1aca50b` — admission-path carrier markers classified by their actual classical-only or PQ-reachable branches.
 - `fe0896df8c8604ca6f4572e3f284bb0b0a7105e6` — session-options hashing moved below consensus to preserve link boundaries.
 
-The bidirectional classical-carrier inventory contains 51 rows covering 44
-Git-tracked paths, 86 distinct marker entries and 280 source sites.  Its earlier
+The bidirectional classical-carrier inventory contains 50 rows covering 44
+Git-tracked paths, 85 distinct marker entries and 279 source sites.  Its earlier
 408-site figure included 130 occurrences in eight untracked
 `tl/generate/auto/tl/*` build outputs.  Those derived copies are now excluded;
 their two authoritative tracked schema inputs remain inventoried.
@@ -204,6 +204,7 @@ Commits:
 - `3de7316c83b14678d6b2620f706daf335bb92706` — TopBlockDescr authority comes from the masterchain snapshot named by its shard proof, not the node's current state.
 - `4b801892ef542f3148a358590a1e9ce450bcb0eb` — focused TopBlockDescr coverage now drives the production `prevalidate` consumer and its governing-state guard.
 - `b64af02c37f01a5f9543385c6adba130298bd156` — evidence-aware Plumtree identity and authenticated-sender, byte-bounded pending finality admission.
+- `30b68d257b4b69a030b4ea2eaa4b6f4e740467aa` — remote pending evidence charged by its exact received payload bytes without pre-admission reserialization.
 
 | Design gate | Registered subject test | Proves | Does not prove |
 |---|---|---|---|
@@ -213,7 +214,7 @@ Commits:
 | `n5-pq-broadcast-roundtrip` | `pq-broadcast-semantic-roundtrip` | The same 21/100 fixtures traverse compressed-V2 and simple-Plumtree TL, are checked against trusted PQ context, and call ML-DSA exactly once per included signer; 400 is structurally measured. | A live overlay peer graph, block-acceptance actor scheduling, or FEC behavior. |
 | Accepted-chain regressions restored by §10.5.3 | `test-consensus-simplex2-pq-state-resolver-catch-up`, `test-consensus-simplex2-pq-empty-chain-restart` | A lagging node recovers an evicted finalized ID through live DB lookup; a chain longer than 4096 empty candidates resumes after a cold resolver restart and reuses its completed-ancestor cache. | The five crash cuts required by §10.5.4. |
 | JSON-RPC unsupported-carrier behavior | `test-json-rpc-parse` | A PQ lite signature set produces error `-32603` with an explicit unsupported-carrier message, while genuine absence remains the only path to an empty classical list. | Rendering PQ signatures in the public JSON model. |
-| Unverified finality admission | `test-pending-finality-cache`, `finality-evidence-admission-source` | Public and fast-sync Plumtree IDs commit to the block and canonical signature set; authenticated sender identity reaches the manager; one sender gets one unverified candidate per block and at most 1 MiB, while the store has a 16 MiB byte budget with a 4096-byte minimum charge; invalid/valid arrivals from distinct senders preserve arrival order and the valid final is accepted. | A live Plumtree peer graph or the actor-scheduled `ValidatorManagerImpl` ingress; the behavioural gate exercises the exact production transport-ID helper and pending-store implementation, while the source gate pins their production wiring. |
+| Unverified finality admission | `test-pending-finality-cache`, `finality-evidence-admission-source` | Public and fast-sync Plumtree IDs commit to the block and canonical signature set; authenticated sender identity and the exact received boxed-TL byte count reach the manager without reserialization; one sender gets one unverified candidate per block and at most 1 MiB, while the store has a 16 MiB byte budget with a 4096-byte minimum charge; invalid/valid arrivals from distinct senders preserve arrival order and the valid final is accepted. | A live Plumtree peer graph or the actor-scheduled `ValidatorManagerImpl` ingress; the behavioural gate exercises the exact production transport-ID helper and pending-store implementation, while the source gate pins their production wiring. Locally originated evidence has no received payload and is charged by intrinsic signature bytes. |
 
 The nine persisted corruption rows and their asserted reasons are: constructor →
 `unsupported carrier for post-quantum validator set`; validator ID →
@@ -271,6 +272,10 @@ Mutations observed:
 - Replacing the public Plumtree route's evidence-aware helper with the old
   block-only ID produced
   `FINALITY_ADMISSION_SOURCE_FAILURE: public Plumtree finality route lost its evidence-aware transport id (validator/full-node-shard.cpp)`.
+- Restoring manager-side canonical reserialization in place of received-byte
+  charging produced
+  `FINALITY_ADMISSION_SOURCE_FAILURE: manager admission no longer charges the received payload bytes (validator/manager.cpp)` and
+  `FINALITY_ADMISSION_SOURCE_FAILURE: manager reserializes remote finality before admission`.
 
 ## Section 9: transport authority
 
