@@ -71,5 +71,4 @@ validator/impl/check-proof.hpp	*	1	historical	actor entry point for the proof ve
 validator/impl/liteserver.cpp	*	3	historical	forward-proof generation emits #13 through tl_lite for PQ sets; classical output remains only for explicitly classical history
 validator/impl/top-shard-descr.cpp	*	3	historical	TopBlockDescr cell parsing supports #13 and verifies it through the trusted-session boundary
 validator/manager.cpp	verify	2	historical	verify sites at lines 629 and 631 run only after the explicit !is_pq branch and admit classical carriers only for an explicitly classical validator set
-validator/manager.cpp	carrier_io	1	reachable	the new carrier_io site at line 686 is PQ-reachable and serializes the selected variant solely to charge its exact bytes to pending-evidence admission
 validator/validate-broadcast.cpp	*	2	historical	broadcast verification has a separate trusted-context PQ branch; these calls are the classical branch

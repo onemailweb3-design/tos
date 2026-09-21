@@ -39,6 +39,23 @@ require_marker validator/full-node.cpp \
 require_marker validator/manager.cpp \
   'PendingBlockFinalitySender::remote(*source_peer)' \
   'manager admission no longer partitions unverified evidence by authenticated sender'
+require_marker validator/full-node-shard.cpp \
+  'parsed_finality.received_bytes = received_bytes' \
+  'public finality ingress no longer records the received payload size'
+require_marker validator/full-node-fast-sync-overlays.cpp \
+  'parsed_finality.received_bytes = received_bytes' \
+  'fast-sync finality ingress no longer records the received payload size'
+require_marker validator/full-node-custom-overlays.cpp \
+  'parsed_finality.received_bytes = received_bytes' \
+  'custom-overlay finality ingress no longer records the received payload size'
+require_marker validator/manager.cpp \
+  'auto accounted_bytes = finality.received_bytes' \
+  'manager admission no longer charges the received payload bytes'
+
+if grep -qF 'serialize_tl_object(finality.sig_set->tl(), true)' "$root/validator/manager.cpp"; then
+  echo "FINALITY_ADMISSION_SOURCE_FAILURE: manager reserializes remote finality before admission" >&2
+  failed=1
+fi
 
 if [ "$failed" -ne 0 ]; then
   exit 1

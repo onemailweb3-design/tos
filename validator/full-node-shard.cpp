@@ -17,6 +17,8 @@
     Copyright 2017-2020 Telegram Systems LLP
     Copyright 2025-2026 TOS Blockchain Teams
 */
+#include <type_traits>
+
 #include "adnl/utils.hpp"
 #include "auto/tl/tos_api.h"
 #include "auto/tl/tos_api_json.h"
@@ -867,15 +869,18 @@ void FullNodeShardImpl::process_broadcast(PublicKeyHash src, tos_api::tosNode_bl
   process_block_broadcast(src, query);
 }
 
-void FullNodeShardImpl::process_broadcast(PublicKeyHash src, tos_api::tosNode_blockFinalityBroadcast &query) {
+void FullNodeShardImpl::process_broadcast(PublicKeyHash src, tos_api::tosNode_blockFinalityBroadcast &query,
+                                          std::size_t received_bytes) {
   auto finality = deserialize_block_finality_broadcast(query);
   if (finality.is_error()) {
     LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: " << finality.move_as_error();
     return;
   }
+  auto parsed_finality = finality.move_as_ok();
+  parsed_finality.received_bytes = received_bytes;
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in public overlay from " << src << ": "
-                        << finality.ok().block_id.to_str();
-  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, finality.move_as_ok(),
+                        << parsed_finality.block_id.to_str();
+  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(parsed_finality),
                           src, BroadcastSource::public_overlay, false);
 }
 
@@ -937,12 +942,20 @@ void FullNodeShardImpl::receive_broadcast(PublicKeyHash src, td::BufferSlice bro
   if (!active_) {
     return;
   }
+  auto received_bytes = broadcast.size();
   auto B = fetch_tl_object<tos_api::tosNode_Broadcast>(std::move(broadcast), true);
   if (B.is_error()) {
     return;
   }
 
-  tos_api::downcast_call(*B.move_as_ok().get(), [src, Self = this](auto &obj) { Self->process_broadcast(src, obj); });
+  tos_api::downcast_call(*B.move_as_ok().get(), [src, Self = this, received_bytes](auto &obj) {
+    using Broadcast = std::decay_t<decltype(obj)>;
+    if constexpr (std::is_same_v<Broadcast, tos_api::tosNode_blockFinalityBroadcast>) {
+      Self->process_broadcast(src, obj, received_bytes);
+    } else {
+      Self->process_broadcast(src, obj);
+    }
+  });
 }
 
 void FullNodeShardImpl::send_ihr_message(td::BufferSlice data) {

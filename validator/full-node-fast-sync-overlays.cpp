@@ -16,6 +16,7 @@
 */
 
 #include <fstream>
+#include <type_traits>
 
 #include "auto/tl/tos_api_json.h"
 #include "block/validator-session-members.h"
@@ -78,8 +79,9 @@ void FullNodeFastSyncOverlay::process_broadcast(PublicKeyHash src, tos_api::tosN
   process_block_broadcast(src, query);
 }
 
-void FullNodeFastSyncOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNode_blockFinalityBroadcast &query) {
-  process_block_finality_broadcast(src, query);
+void FullNodeFastSyncOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNode_blockFinalityBroadcast &query,
+                                                std::size_t received_bytes) {
+  process_block_finality_broadcast(src, query, received_bytes);
 }
 
 void FullNodeFastSyncOverlay::process_block_broadcast(PublicKeyHash src, tos_api::tosNode_Broadcast &query) {
@@ -95,15 +97,18 @@ void FullNodeFastSyncOverlay::process_block_broadcast(PublicKeyHash src, tos_api
 }
 
 void FullNodeFastSyncOverlay::process_block_finality_broadcast(PublicKeyHash src,
-                                                               tos_api::tosNode_blockFinalityBroadcast &query) {
+                                                               tos_api::tosNode_blockFinalityBroadcast &query,
+                                                               std::size_t received_bytes) {
   auto finality = deserialize_block_finality_broadcast(query);
   if (finality.is_error()) {
     LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: " << finality.move_as_error();
     return;
   }
+  auto parsed_finality = finality.move_as_ok();
+  parsed_finality.received_bytes = received_bytes;
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in fast sync overlay from " << src << ": "
-                        << finality.ok().block_id.to_str();
-  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, finality.move_as_ok(),
+                        << parsed_finality.block_id.to_str();
+  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(parsed_finality),
                           src, BroadcastSource::fast_sync_overlay, true);
 }
 
@@ -276,6 +281,7 @@ void FullNodeFastSyncOverlay::process_telemetry_broadcast(
 }
 
 void FullNodeFastSyncOverlay::receive_broadcast(PublicKeyHash src, td::BufferSlice broadcast) {
+  auto received_bytes = broadcast.size();
   auto B = fetch_tl_object<tos_api::tosNode_Broadcast>(std::move(broadcast), true);
   if (B.is_error()) {
     if (collect_telemetry_ && src != local_id_.pubkey_hash()) {
@@ -287,7 +293,14 @@ void FullNodeFastSyncOverlay::receive_broadcast(PublicKeyHash src, td::BufferSli
     return;
   }
 
-  tos_api::downcast_call(*B.move_as_ok(), [src, Self = this](auto &obj) { Self->process_broadcast(src, obj); });
+  tos_api::downcast_call(*B.move_as_ok(), [src, Self = this, received_bytes](auto &obj) {
+    using Broadcast = std::decay_t<decltype(obj)>;
+    if constexpr (std::is_same_v<Broadcast, tos_api::tosNode_blockFinalityBroadcast>) {
+      Self->process_broadcast(src, obj, received_bytes);
+    } else {
+      Self->process_broadcast(src, obj);
+    }
+  });
 }
 
 void FullNodeFastSyncOverlay::send_shard_block_info(BlockIdExt block_id, CatchainSeqno cc_seqno, td::BufferSlice data) {

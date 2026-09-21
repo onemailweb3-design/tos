@@ -683,11 +683,32 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
 
   auto block_id = finality.block_id;
   auto incoming_is_final = finality.sig_set->is_final();
-  auto serialized_bytes = serialize_tl_object(finality.sig_set->tl(), true).size();
+  // Remote evidence is charged by the exact boxed TL payload received from the
+  // overlay. This avoids doing an attacker-triggered canonical reserialization
+  // before admission and charges the bytes the sender actually made us parse,
+  // including the wrapper and block id. A remote path that loses this metadata
+  // fails closed instead of silently undercharging. Locally originated evidence
+  // has no wire payload, so charge its intrinsic signature bytes; the store's
+  // minimum charge still bounds small local entries.
+  auto accounted_bytes = finality.received_bytes;
+  if (source_peer && accounted_bytes == 0) {
+    VLOG(VALIDATOR_WARNING) << "dropping remote block finality broadcast without its received byte count: "
+                            << block_id.to_str();
+    co_return td::Unit{};
+  }
+  if (!source_peer) {
+    auto signature_bytes = finality.sig_set->get_signature_data_size();
+    if (signature_bytes.is_error()) {
+      VLOG(VALIDATOR_WARNING) << "dropping local block finality broadcast with an unmeasurable signature set: "
+                              << signature_bytes.move_as_error();
+      co_return td::Unit{};
+    }
+    accounted_bytes = signature_bytes.move_as_ok();
+  }
   auto sender = source_peer ? PendingBlockFinalitySender::remote(*source_peer)
                             : PendingBlockFinalitySender::local_source();
   auto admission = pending_block_finality_.admit(
-      block_id, std::move(sender), PendingBlockFinalityCandidate{finality.sig_set, source}, serialized_bytes,
+      block_id, std::move(sender), PendingBlockFinalityCandidate{finality.sig_set, source}, accounted_bytes,
       signatures_verified, incoming_is_final);
   if (!admission.admitted()) {
     VLOG(VALIDATOR_DEBUG) << "dropping block finality broadcast because its sender-isolated byte-bounded store did "

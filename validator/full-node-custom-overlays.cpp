@@ -14,6 +14,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include <type_traits>
+
 #include "auto/tl/tos_api_json.h"
 #include "common/checksum.h"
 #include "common/delay.h"
@@ -94,7 +96,8 @@ void FullNodeCustomOverlay::process_block_broadcast(PublicKeyHash src, tos_api::
                           BroadcastSource::custom_overlay, !block_senders_.contains(local_id_));
 }
 
-void FullNodeCustomOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNode_blockFinalityBroadcast &query) {
+void FullNodeCustomOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNode_blockFinalityBroadcast &query,
+                                              std::size_t received_bytes) {
   if (!block_senders_.count(adnl::AdnlNodeIdShort(src))) {
     VLOG(FULL_NODE_DEBUG) << "Dropping block finality broadcast in private overlay \"" << name_
                           << "\" from unauthorized sender " << src;
@@ -105,9 +108,11 @@ void FullNodeCustomOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNod
     LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: " << finality.move_as_error();
     return;
   }
+  auto parsed_finality = finality.move_as_ok();
+  parsed_finality.received_bytes = received_bytes;
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in custom overlay \"" << name_ << "\" from " << src << ": "
-                        << finality.ok().block_id.to_str();
-  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, finality.move_as_ok(),
+                        << parsed_finality.block_id.to_str();
+  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(parsed_finality),
                           src, BroadcastSource::custom_overlay, !block_senders_.contains(local_id_));
 }
 
@@ -225,11 +230,19 @@ void FullNodeCustomOverlay::receive_broadcast(PublicKeyHash src, td::BufferSlice
   if (adnl::AdnlNodeIdShort{src} == local_id_) {
     return;
   }
+  auto received_bytes = broadcast.size();
   auto B = fetch_tl_object<tos_api::tosNode_Broadcast>(std::move(broadcast), true);
   if (B.is_error()) {
     return;
   }
-  tos_api::downcast_call(*B.move_as_ok(), [src, Self = this](auto &obj) { Self->process_broadcast(src, obj); });
+  tos_api::downcast_call(*B.move_as_ok(), [src, Self = this, received_bytes](auto &obj) {
+    using Broadcast = std::decay_t<decltype(obj)>;
+    if constexpr (std::is_same_v<Broadcast, tos_api::tosNode_blockFinalityBroadcast>) {
+      Self->process_broadcast(src, obj, received_bytes);
+    } else {
+      Self->process_broadcast(src, obj);
+    }
+  });
 }
 
 void FullNodeCustomOverlay::send_external_message(td::BufferSlice data) {
