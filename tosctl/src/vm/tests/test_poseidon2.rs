@@ -24,7 +24,7 @@ const ACTIVE_VERSION: u32 = 17;
 /// return. Written as specification literals, not read from the
 /// implementation: a test that reads the constant it checks cannot catch that
 /// constant changing.
-const EXPECTED_GAS: i64 = 3500 + 34 + 5;
+const EXPECTED_GAS: i64 = 2800 + 34 + 5;
 
 fn stack_of(values: &[[u8; 32]]) -> Stack {
     let mut stack = Stack::new();
@@ -189,7 +189,7 @@ fn both_instructions_cost_the_tariff() {
     test_case("POSEIDON2_PERM8")
         .with_block_version(ACTIVE_VERSION)
         .with_stack(stack_with_lane(&input, 7, field(&MODULUS_BE)))
-        .with_gas_limit(3500 - 1)
+        .with_gas_limit(2800 - 1)
         .expect_failure(ExceptionCode::OutOfGas);
 }
 
@@ -206,7 +206,7 @@ const PATH7_VERSION: u32 = 18;
 /// them and the C++ one's does not, so the C++ implementation charges them
 /// explicitly. Two VMs that price the same instruction differently do not
 /// agree at all, and this is the assertion that says so.
-const PATH7_EXPECTED_GAS: i64 = 500 + 12 * 3700 + 24 * 100 + 34 + 5;
+const PATH7_EXPECTED_GAS: i64 = 500 + 12 * 3000 + 24 * 100 + 34 + 5;
 const DEPTH: usize = 12;
 
 /// A field element from a small number, which is always canonical.

@@ -24,9 +24,13 @@ use shielded_pool_genesis::{build, Parameters};
 const RESERVE_FLOOR: u128 = 5_000_000_000;
 /// Re-derived on 2026-09-21 when the basechain prices were aligned with TON
 /// mainnet's live values. Section 14.2's floor -- the payout's forward fee
-/// plus a whole bounded recovery at the bounce ceiling -- is 20,218,937,
-/// measured by `shielded_payout_sandbox`. This is that with a 2.47x margin,
+/// plus a whole bounded recovery at the bounce ceiling -- is 19,552,270,
+/// measured by `shielded_payout_sandbox`. This is that with a 2.56x margin,
 /// rounded to a hundredth of a TOS.
+///
+/// The floor moved again when the Poseidon2 tariff came down and the bounce
+/// ceiling with it, from 20,218,937 to this. The fee did not need to follow:
+/// 2.47x became 2.56x, which is still the margin it was set for.
 ///
 /// The old 250,000,000 was 2.06x the floor it was set against; the same
 /// number against the new floor would have been 12.4x, and the fee would have

@@ -58,8 +58,8 @@ const OP_UNKNOWN: u32 = 0x5348_50ff;
 /// pool costs 147,595; the growth is the frontier slots an append reads and
 /// the ring a mutation writes into, and it is what
 /// `deposit_in_a_mature_pool.rs` in the crosscheck crate measures.
-const DEPOSIT_GAS_CEILING: i64 = 290_000;
-const DEPOSIT_MEASURED_MAX_GAS: i64 = 224_043;
+const DEPOSIT_GAS_CEILING: i64 = 270_000;
+const DEPOSIT_MEASURED_MAX_GAS: i64 = 214_343;
 /// ConfigParam 21 of this chain's zero state, which
 /// `chain_gas_envelope_sandbox.rs` generates and holds against the
 /// executor's table.

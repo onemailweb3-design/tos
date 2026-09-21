@@ -23,7 +23,7 @@ const WORST_INDEX: u64 = 2 * 1_977_326_743 - 1;
 /// Section 5: twelve levels, arity seven.
 const DEPTH: i64 = 12;
 /// The frozen Poseidon2 tariff.
-const POSEIDON2: i64 = 3_500;
+const POSEIDON2: i64 = 2_800;
 
 fn slope(probe: &FrontierProbe, f: impl Fn(u64) -> i64, low: u64, high: u64) -> i64 {
     let _ = probe;

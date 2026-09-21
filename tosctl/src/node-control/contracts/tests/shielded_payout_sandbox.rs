@@ -345,7 +345,7 @@ fn the_fee_must_cover_the_message_and_a_whole_bounded_recovery() {
     let body = probe.cell("p_body", vec![int(&digest), StackItem::cell(record)]);
     // The frozen bounce ceiling, so the floor this measures is the one a
     // deployment actually has to clear.
-    let ceiling = 290_000u32;
+    let ceiling = 280_000u32;
 
     let forward = probe.int("p_forward_fee", vec![StackItem::cell(body.clone())]);
     assert!(forward > 0, "the forward fee of a real message is zero");

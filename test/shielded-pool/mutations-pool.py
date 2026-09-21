@@ -99,18 +99,18 @@ CASES = [
          '    msg_value >= deposit_amount + get_compute_fee(0, deposit_gas_ceiling()));',
          '    msg_value >= get_compute_fee(0, deposit_gas_ceiling()));', FUNDING_TEST),
     Case('gas-ceiling-live', 'the ceiling is below what the path needs', POOL,
-         'int deposit_gas_ceiling() asm "290000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "270000 PUSHINT";',
          'int deposit_gas_ceiling() asm "5000 PUSHINT";', LEDGER_TEST),
     # The ceilings the first measurement gave, which a pool with any history
     # refuses. A deposit ceiling of 170,000 stops a pool at its thirty-fifth
     # note; a bounce ceiling of 210,000 leaves a payout that has already come
     # back with no recovery note to replace it.
     Case('gas-ceiling-fresh-pool', 'the deposit ceiling covers only a new pool', POOL,
-         'int deposit_gas_ceiling() asm "290000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "270000 PUSHINT";',
          'int deposit_gas_ceiling() asm "170000 PUSHINT";',
          MATURE_DEPOSIT_TEST, MATURE_DEPOSIT_SUITE, CROSSCHECK),
     Case('bounce-ceiling-fresh-pool', 'the bounce ceiling covers only a new pool', POOL,
-         'int bounce_gas_ceiling() asm "290000 PUSHINT";',
+         'int bounce_gas_ceiling() asm "280000 PUSHINT";',
          'int bounce_gas_ceiling() asm "210000 PUSHINT";',
          MATURE_TRANSACT_TEST, MATURE_TRANSACT_SUITE, CROSSCHECK),
 
@@ -250,7 +250,7 @@ CASES = [
          '  groth16_require_valid(vk, proof_a, proof_b, proof_c, inputs);\n', '',
          PROOF_TEST, TRANSACT_SUITE),
     Case('transact-gas-ceiling', 'the ceiling is below what the path needs', POOL,
-         'int transact_gas_ceiling() asm "1740000 PUSHINT";',
+         'int transact_gas_ceiling() asm "1620000 PUSHINT";',
          'int transact_gas_ceiling() asm "5000 PUSHINT";', ORDER_TEST, TRANSACT_SUITE),
 
     # A message with no operation must not be mistaken for one.

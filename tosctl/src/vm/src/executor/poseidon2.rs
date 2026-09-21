@@ -19,7 +19,7 @@ pub(super) const MIN_VERSION: u32 = 17;
 ///
 /// This VM is the slower of the two for this instruction -- 1.66x, where the
 /// BLS anchors differ by 1.08 to 1.17 -- so this price is the one it set.
-pub(super) const GAS_PRICE: i64 = 3500;
+pub(super) const GAS_PRICE: i64 = 2800;
 
 const STATE_WIDTH: usize = 8;
 
@@ -100,7 +100,7 @@ pub(super) const PATH7_MIN_VERSION: u32 = 18;
 /// moving the loop into the VM buys nothing cheaply. Neither figure is
 /// measured; see the note in `crypto/vm/poseidon2ops.h`.
 pub(super) const PATH7_BASE_GAS_PRICE: i64 = 500;
-pub(super) const PATH7_LEVEL_GAS_PRICE: i64 = 3700;
+pub(super) const PATH7_LEVEL_GAS_PRICE: i64 = 3000;
 /// A level is two 768-bit cells, so this is 128 cells.
 const PATH7_MAX_DEPTH: usize = 64;
 

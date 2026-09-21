@@ -56,8 +56,8 @@ const RESERVE_FLOOR: u64 = 5 * TOS;
 /// anchor rings full. A withdrawal appends three leaves, so it carries three
 /// times the frontier growth a deposit does; against a fresh pool the same
 /// path measures 1,565,609.
-const TRANSACT_GAS_CEILING: i64 = 1_740_000;
-const TRANSACT_MEASURED_MAX_GAS: i64 = 1_387_966;
+const TRANSACT_GAS_CEILING: i64 = 1_620_000;
+const TRANSACT_MEASURED_MAX_GAS: i64 = 1_288_016;
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
 /// flat 6,667 for the first hundred gas, then 4,369,067 per 65,536 gas with
 /// the division rounded up.
@@ -1087,7 +1087,7 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
     /// Section 14.1. Unlike the network limit, this one the contract sets on
     /// itself, and it is the binding one: it is far below what the chain
     /// grants, which is the point of having it.
-    const TRANSACT_GAS_CEILING: i64 = 1_740_000;
+    const TRANSACT_GAS_CEILING: i64 = 1_620_000;
     /// ConfigParam 21 of this chain's zero state.
     const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
 

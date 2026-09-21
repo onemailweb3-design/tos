@@ -33,11 +33,11 @@ const APPEND_PERMUTATIONS: i64 = 12;
 
 /// Measured when the ceilings were set: a whole withdrawal, and the
 /// permutations it executes.
-const WITHDRAWAL_GAS: i64 = 1_387_966;
+const WITHDRAWAL_GAS: i64 = 1_288_016;
 const WITHDRAWAL_PERMUTATIONS: i64 = 142;
 
 fn poseidon2_price() -> i64 {
-    std::env::var("TOS_POSEIDON2_PRICE").ok().and_then(|v| v.parse().ok()).unwrap_or(3_500)
+    std::env::var("TOS_POSEIDON2_PRICE").ok().and_then(|v| v.parse().ok()).unwrap_or(2_800)
 }
 
 fn dec(value: Fr) -> String {

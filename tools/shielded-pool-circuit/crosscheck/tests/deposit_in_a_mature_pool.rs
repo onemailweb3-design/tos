@@ -29,7 +29,7 @@ use shielded_pool_circuit_crosscheck::frontier_probe::FrontierProbe;
 use shielded_pool_circuit_crosscheck::pool::{Pool, DENOMINATION};
 
 /// The ceiling frozen into the contract for a deposit.
-const DEPOSIT_GAS_CEILING: i64 = 290_000;
+const DEPOSIT_GAS_CEILING: i64 = 270_000;
 
 /// Far more than the deposit may spend, so the ceiling is what stops it and
 /// not the message's own gas credit.

@@ -18,20 +18,25 @@ inline constexpr int poseidon2_path7_min_version = 18;
 // 512 that SHA256C allows itself. The bound is belt and braces next to the
 // per-level gas below, not instead of it.
 inline constexpr int poseidon2_path7_max_depth = 64;
-// Measured, on 2026-09-20, against instructions whose price is already fixed:
+// Measured, on 2026-09-21, against instructions whose price is already fixed:
 // BLS12-381 G1 addition, G1 subgroup check and G2 addition, on the same curve
-// over the same field. The permutation came to between 2,137 and 3,462 gas in
+// over the same field. The permutation came to between 1,591 and 2,749 gas in
 // the slower of the two VMs, and this is that upper bound rounded up.
+//
+// It was 3,500 until the Rust implementation stopped asking blst for its
+// portable build and stopped zeroing every output before blst overwrote it.
+// That made it 35% faster and moved the bracket, and a tariff that did not
+// move with it would have charged for work that no longer happens.
 //
 // Rounded up rather than to the middle because the two directions are not
 // symmetric: overpricing costs users money, underpricing is a
 // denial-of-service surface. The anchors agree with one another only to
-// within 1.61x, so a tighter figure would be false precision.
+// within 1.73x, so a tighter figure would be false precision.
 //
 // Both VMs carry the same number and it is changed in both at once.
 // `test/poseidon2/mutations.py` fails if they drift apart.
-inline constexpr long long poseidon2_perm8_gas_price = 3500;
-inline constexpr long long poseidon2_hash7_gas_price = 3500;
+inline constexpr long long poseidon2_perm8_gas_price = 2800;
+inline constexpr long long poseidon2_hash7_gas_price = 2800;
 
 // PATH7 is one HASH7 a level plus the two cells that level's siblings live
 // in, so it is priced as exactly that and nothing is being bought cheaply by
@@ -43,7 +48,7 @@ inline constexpr long long poseidon2_hash7_gas_price = 3500;
 // wants the same treatment POSEIDON2_PERM8 got: measured against instructions
 // that already have a price, on target hardware, quoted as a bracket.
 inline constexpr long long poseidon2_path7_base_gas_price = 500;
-inline constexpr long long poseidon2_path7_level_gas_price = 3700;
+inline constexpr long long poseidon2_path7_level_gas_price = 3000;
 
 void register_poseidon2_ops(OpcodeTable& table);
 
