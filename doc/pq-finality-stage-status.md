@@ -168,10 +168,11 @@ Commits:
 
 - `488f885a5c868fff0c8f010922ee59daff692132` — fail-soft certificate conversion and removal of the normal carrier-missing seam.
 - `1f1192fceaaa94bf0030806a947a74ba15c7a9cd` — local accepted finality bound to the trusted session.
+- `4137595e2d610dd18f647635e02db22d3350bdb8` — three-consecutive-block progress and independent trusted-context verification of every accepted proof.
 
 | Design gate | Registered subject test | Proves | Does not prove |
 |---|---|---|---|
-| `n5-pq-exact-certificate-carry` | `test-consensus-simplex2-pq-finality-e2e-single`, `test-consensus-simplex2-pq-finality-e2e-multi`, `test-consensus-simplex2-pq-finality-e2e-21`, `test-consensus-simplex2-pq-finality-e2e-100` | For every proof signer, journal, FinalCert, `#13`, DB-loaded set, and BlockProof-loaded set carry identical randomized ML-DSA bytes; normal PQ finality emits no carrier-missing event. | Independent proof-consumer verification of every later accepted proof or all restart cuts. |
+| `n5-pq-exact-certificate-carry` | `test-consensus-simplex2-pq-finality-e2e-single`, `test-consensus-simplex2-pq-finality-e2e-multi`, `test-consensus-simplex2-pq-finality-e2e-21`, `test-consensus-simplex2-pq-finality-e2e-100` | For every signer in one selected proof, journal, FinalCert, `#13`, DB-loaded set, and BlockProof-loaded set carry identical randomized ML-DSA bytes; every accepted proof in the run is independently checked at the trusted-context verifier; at least three unique consecutive blocks are accepted; normal PQ finality emits no carrier-missing event. | The five restart cuts or five-way byte comparison of every proof (the independent verifier, rather than the five-way comparison, covers every accepted proof). |
 
 Mutation observed:
 
@@ -191,6 +192,7 @@ Commits:
 - `890875a5dc236a23e646fe7ddf2260ad13bfec52` — persisted BlockProof fixture.
 - `62d5c48a3f1d5c5cbb314bf942964dabfef00422` — semantic compressed-V2 and finality broadcast round trips.
 - `659a717df7c0209f10fe55fd50834679051ce9b7` — restored PQ catch-up and empty-chain restart scenarios.
+- `a8d3baa063ac3de3250867602c168aecd8e81c88` — JSON-RPC refuses the unsupported PQ signature carrier instead of emitting an empty classical list.
 
 | Design gate | Registered subject test | Proves | Does not prove |
 |---|---|---|---|
@@ -199,6 +201,7 @@ Commits:
 | `n5-pq-top-shard-descr` | `test-pq-signature-persistence` | A real serialized TopBlockDescr preserves metadata, parses `#13`, verifies it, and refuses classical finality under a PQ set. | Network distribution of TopBlockDescr. |
 | `n5-pq-broadcast-roundtrip` | `pq-broadcast-semantic-roundtrip` | The same 21/100 fixtures traverse compressed-V2 and simple-Plumtree TL, are checked against trusted PQ context, and call ML-DSA exactly once per included signer; 400 is structurally measured. | A live overlay peer graph, block-acceptance actor scheduling, or FEC behavior. |
 | Accepted-chain regressions restored by §10.5.3 | `test-consensus-simplex2-pq-state-resolver-catch-up`, `test-consensus-simplex2-pq-empty-chain-restart` | A lagging node recovers an evicted finalized ID through live DB lookup; a chain longer than 4096 empty candidates resumes after a cold resolver restart and reuses its completed-ancestor cache. | The five crash cuts required by §10.5.4. |
+| JSON-RPC unsupported-carrier behavior | `test-json-rpc-parse` | A PQ lite signature set produces error `-32603` with an explicit unsupported-carrier message, while genuine absence remains the only path to an empty classical list. | Rendering PQ signatures in the public JSON model. |
 
 The nine persisted corruption rows and their asserted reasons are: constructor →
 `unsupported carrier for post-quantum validator set`; validator ID →
@@ -286,6 +289,16 @@ Mutations observed:
 - Removing the framed-TCP answer-size refusal produced
   `PQ_LITE_FORWARD_PROOF_FAILURE: lite answer limit below required bytes did not refuse`.
 
+The eight migrated adversarial scenarios were audited against their disabled
+classical registrations.  Each PQ registration retains the same attack flag(s),
+and the shared final assertions still check malicious-observer injection,
+adaptive membership rotation, relay exercise and deduplication, query-rate
+limits, and resolver-state non-growth.  Packet loss, node restart, and network
+partition additionally have to increment their injection counters before the PQ
+gate can complete.  The classical registrations required five accepted heights;
+their PQ counterparts now require three *consecutive unique* accepted heights,
+the explicit section 10.5 criterion.  No attack-specific assertion was dropped.
+
 ## Registered gaps and explicit non-claims
 
 The following are gaps, not green claims.
@@ -306,46 +319,57 @@ The following are gaps, not green claims.
    its root source with `validator_id` or another permanent key.  This is a missing
    test, not a claim that it cannot be tested.
 
-3. **Three API/tooling consumers remain outside this work.**
+3. **Three API/tooling consumers remain incomplete.**
 
    - `toslib/toslib/ToslibClient.cpp` explicitly returns
      `post-quantum block signatures are not supported by toslib yet`; this is a
      loud refusal, not support.
-   - `validator-engine/json-rpc-server-blocks.cpp` recognizes only ordinary and
-     classical Simplex lite variants.  A PQ variant falls through the ordinary
-     response branch and is emitted as an empty classical signature list.  It does
-     not fail loudly.
+   - JSON-RPC now returns error `-32603` with
+     `post-quantum block signatures are not supported by JSON-RPC yet`; it is a
+     loud refusal, not support.  The former empty-classical-list response was a
+     defect and was fixed in `a8d3baa063ac3de3250867602c168aecd8e81c88`.
    - `sdk/js/packages/client/src/types.ts` models only ordinary and classical
-     Simplex block signatures; it has no PQ response type.
+     Simplex block signatures; it has no PQ response type.  The generic
+     `rawCall<T>` performs no runtime decoding, coercion, or field stripping, so
+     it cannot itself turn a PQ value into an empty classical list.  This is
+     unfinished static type support, not a second silent downgrade.
 
-4. **Carrier route unknowns are resolved.**
+4. **Carrier route rows are resolved.**
    No `UNKNOWN` row remains in `block-signature-carrier-routes.tsv`; compressed-V2
-   complete objects are measured at 1/21/100/400 and marked `STATIC FIT`.  The
-   capacity and semantic tests still do not constitute a live overlay peer graph.
+   complete objects are measured at 1/21/100/400 and marked `STATIC FIT`.
 
-5. **Section 10.5 is only partially met.**
+5. **A live overlay peer graph is not exercised by the carrier gates.**
+   The capacity gate calls the production admission functions, and the semantic
+   gate serializes, parses, and verifies complete objects, but neither stands up
+   a live overlay peer graph.  This is a harness boundary, not an unresolved row
+   in the route table.
+
+6. **Section 10.5 is only partially met.**
    The old carrier-missing normal path is gone, accepted blocks and finalized
    markers continue, the two disabled accepted-chain scenarios are restored, and
    the PQ loss/restart/partition/byzantine/adversarial variants remain registered.
+   The general gate now requires three consecutive accepted blocks and independently
+   verifies every accepted proof observed during its run under the trusted context.
    The following prescribed evidence is absent:
 
    - the exact registered names
      `test-consensus-simplex2-pq-persisted-finality-single`,
      `test-consensus-simplex2-pq-persisted-finality-multi`, and
      `test-consensus-simplex2-pq-persisted-finality-21` do not exist;
-   - the current general PQ finality gate requires at least one accepted block, not
-     three consecutive accepted blocks;
-   - it performs the five-way exact-byte comparison for one accepted proof, not an
-     independent trusted-context verification of every accepted proof;
    - the five restart cuts listed in §10.5.4 do not have dedicated tests;
-   - the eight adversarial PQ variants share accepted-chain progress assertions,
-     but no audit demonstrates that every stronger legacy accepted-block assertion
-     was restored variant by variant.
 
-   These are missing tests and scenarios in the present harness, not intrinsically
-   untestable properties.
+   The three names are a small registration-only change: they can alias or rename
+   the existing single/multi/21 commands, at the cost of duplicate CI runtime if
+   aliases are used.  The five restart cuts are not registration work.  They need
+   deterministic cut points spanning the Simplex journal, `#13` storage,
+   BlockProof storage, the finalized marker, and a reconstruction from DB/archive
+   state without actor memory.  The first four require production failpoints and
+   restart orchestration; the fifth requires the engine/manager persistence harness
+   that this tree currently lacks.  A mock-only version would not establish the
+   required crash property.  These are missing tests and scenarios, not claims that
+   the properties are intrinsically untestable.
 
-6. **Mutation transcripts are not repository artifacts.**
+7. **Mutation transcripts are not repository artifacts.**
    This file records the exact failure lines retained in the implementation/review
    record.  Two early C++ reason-shadowing mutations retained only their exact
    `VECTOR_REASON_MISMATCH` marker, not the full dynamic suffix.  Reproducing raw
