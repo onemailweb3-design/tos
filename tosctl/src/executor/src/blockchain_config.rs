@@ -42,9 +42,11 @@ impl DefaultConfig for MsgForwardPrices {
             // crypto/smartcont/gen-zerostate.fif. Contracts use ConfigParam
             // 25 directly through GETFORWARDFEE, so an upstream-like default
             // here would invalidate production-contract fee/reserve tests.
-            lump_price: 400000,
-            bit_price: 26214400,
-            cell_price: 2621440000,
+            // TON mainnet's live basechain ConfigParam25, read on 2026-09-21.
+            // Each was six times these for the same reason the gas price was.
+            lump_price: 66667,
+            bit_price: 4369067,
+            cell_price: 436906667,
             ihr_price_factor: 98304,
             first_frac: 21845,
             next_frac: 21845,
@@ -146,9 +148,14 @@ impl DefaultConfig for GasLimitsPrices {
             // `chain_gas_envelope_sandbox.rs` now generates the zero state and
             // compares it against this table field by field, so the two cannot
             // drift apart again without a named test going red.
-            gas_price: 26214400,
+            //
+            // The prices are TON mainnet's live basechain values, read from
+            // ConfigParam21 on 2026-09-21. They used to be exactly six times
+            // these, which was what production charged before its fee cut.
+            // The limits above stay thirty times mainnet's on purpose.
+            gas_price: 4369067,
             flat_gas_limit: 100,
-            flat_gas_price: 40000,
+            flat_gas_price: 6667,
             gas_limit: 30000000,
             special_gas_limit: 30000000,
             gas_credit: 10000,

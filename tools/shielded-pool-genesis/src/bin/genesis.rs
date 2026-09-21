@@ -22,7 +22,16 @@ use shielded_pool_genesis::{build, Parameters};
 /// 205,313,600 at the current fee schedule, so this clears it; production must
 /// choose with explicit headroom and its own measurement.
 const RESERVE_FLOOR: u128 = 5_000_000_000;
-const WITHDRAWAL_FEE: u128 = 250_000_000;
+/// Re-derived on 2026-09-21 when the basechain prices were aligned with TON
+/// mainnet's live values. Section 14.2's floor -- the payout's forward fee
+/// plus a whole bounded recovery at the bounce ceiling -- is 20,218,937,
+/// measured by `shielded_payout_sandbox`. This is that with a 2.47x margin,
+/// rounded to a hundredth of a TOS.
+///
+/// The old 250,000,000 was 2.06x the floor it was set against; the same
+/// number against the new floor would have been 12.4x, and the fee would have
+/// become two thirds of what a withdrawal costs its sender.
+const WITHDRAWAL_FEE: u128 = 50_000_000;
 const DENOMINATIONS: [u128; 4] =
     [1_000_000_000, 10_000_000_000, 100_000_000_000, 1_000_000_000_000];
 

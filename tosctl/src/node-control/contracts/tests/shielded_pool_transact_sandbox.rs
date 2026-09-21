@@ -58,8 +58,25 @@ const RESERVE_FLOOR: u64 = 5 * TOS;
 /// path measures 1,565,609.
 const TRANSACT_GAS_CEILING: i64 = 1_740_000;
 const TRANSACT_MEASURED_MAX_GAS: i64 = 1_387_966;
-const NANOTOS_PER_GAS: u64 = 400;
-const TRANSACT_FEE: u64 = TRANSACT_GAS_CEILING as u64 * NANOTOS_PER_GAS;
+/// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
+/// flat 6,667 for the first hundred gas, then 4,369,067 per 65,536 gas with
+/// the division rounded up.
+///
+/// This was `gas * NANOTOS_PER_GAS` with NANOTOS_PER_GAS = 400 while the
+/// price was 26,214,400, which divides by 65,536 exactly. TON mainnet's live
+/// price does not, so a flat multiplier is no longer the same arithmetic the
+/// VM does, and the tests now do the VM's.
+const fn compute_fee(gas: u64) -> u64 {
+    const FLAT_LIMIT: u64 = 100;
+    const FLAT_PRICE: u64 = 6_667;
+    const GAS_PRICE: u64 = 4_369_067;
+    if gas <= FLAT_LIMIT {
+        FLAT_PRICE
+    } else {
+        FLAT_PRICE + ((gas - FLAT_LIMIT) * GAS_PRICE).div_ceil(65_536)
+    }
+}
+const TRANSACT_FEE: u64 = compute_fee(TRANSACT_GAS_CEILING as u64);
 
 type Field = [u8; 32];
 const ZERO: Field = [0u8; 32];
@@ -593,7 +610,7 @@ fn genesis_state(nullifier_root: Field) -> Cell {
 /// fail section 14.2's solvency check at step 16, which is after the proof and
 /// therefore out of this suite's reach; configuring it below the boundary
 /// would leave that unsaid rather than untrue.
-const CONFIG_WITHDRAWAL_FEE: u64 = 250_000_000;
+const CONFIG_WITHDRAWAL_FEE: u64 = 50_000_000;
 const DENOMINATION: u64 = TOS;
 
 /// Turn a well-formed transfer into a well-formed withdrawal: an amount the

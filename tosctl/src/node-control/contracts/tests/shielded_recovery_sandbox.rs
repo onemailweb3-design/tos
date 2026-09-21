@@ -41,7 +41,7 @@ const VERSION: u16 = 1;
 const EPOCH_NONE: u32 = 0xffff_ffff;
 const RESERVE_FLOOR: u64 = 5 * TOS;
 const DEPTH: usize = 12;
-const CONFIG_WITHDRAWAL_FEE: u64 = 250_000_000;
+const CONFIG_WITHDRAWAL_FEE: u64 = 50_000_000;
 
 type Field = [u8; 32];
 

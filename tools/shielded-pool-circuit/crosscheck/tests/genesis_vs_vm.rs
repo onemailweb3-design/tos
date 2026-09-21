@@ -68,7 +68,7 @@ fn parameters() -> Parameters {
             .expect("the Poseidon2 manifest"),
         verifying_key,
         reserve_floor: 5_000_000_000,
-        withdrawal_fee: 250_000_000,
+        withdrawal_fee: 50_000_000,
         denominations: vec![1_000_000_000, 10_000_000_000, 100_000_000_000, 1_000_000_000_000],
     }
 }

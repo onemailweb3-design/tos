@@ -377,6 +377,21 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         total
     }
     let body_bytes = weigh(&body, &mut std::collections::HashSet::new());
+    fn count(cell: &Cell, seen: &mut std::collections::HashSet<[u8; 32]>) -> usize {
+        let id: [u8; 32] = cell.repr_hash().inner();
+        if !seen.insert(id) {
+            return 0;
+        }
+        let mut total = 1;
+        for index in 0..cell.references_count() {
+            if let Ok(child) = cell.reference(index) {
+                total += count(&child, seen);
+            }
+        }
+        total
+    }
+    let body_cells = count(&body, &mut std::collections::HashSet::new());
+    eprintln!("transact body: {body_bytes} bytes in {body_cells} cells");
 
     if let Some(limit) = perturb.gas_limit {
         pool.bc.set_workchain_gas_limit(limit);

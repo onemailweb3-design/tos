@@ -71,12 +71,29 @@ const TOPUP_GAS_CEILING: i64 = 10_000;
 /// with the ruled 25% headroom.
 const TOPUP_MEASURED_MAX_GAS: i64 = 2_480;
 /// ConfigParam 21 of this chain's zero state, beyond the flat segment.
-const NANOTOS_PER_GAS: u64 = 400;
+/// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
+/// flat 6,667 for the first hundred gas, then 4,369,067 per 65,536 gas with
+/// the division rounded up.
+///
+/// This was `gas * NANOTOS_PER_GAS` with NANOTOS_PER_GAS = 400 while the
+/// price was 26,214,400, which divides by 65,536 exactly. TON mainnet's live
+/// price does not, so a flat multiplier is no longer the same arithmetic the
+/// VM does, and the tests now do the VM's.
+const fn compute_fee(gas: u64) -> u64 {
+    const FLAT_LIMIT: u64 = 100;
+    const FLAT_PRICE: u64 = 6_667;
+    const GAS_PRICE: u64 = 4_369_067;
+    if gas <= FLAT_LIMIT {
+        FLAT_PRICE
+    } else {
+        FLAT_PRICE + ((gas - FLAT_LIMIT) * GAS_PRICE).div_ceil(65_536)
+    }
+}
 const RESERVE_FLOOR: u64 = 5 * TOS;
 /// What a deposit must carry beyond its principal. 500,000 gas at the sandbox's
 /// 400 nanotos per gas unit, which the suite re-derives rather than assumes.
 /// What a deposit has to fund: the ceiling, not what it will use.
-const COMPUTE_FEE: u64 = DEPOSIT_GAS_CEILING as u64 * NANOTOS_PER_GAS;
+const COMPUTE_FEE: u64 = compute_fee(DEPOSIT_GAS_CEILING as u64);
 
 type Field = [u8; 32];
 const ZERO: Field = [0u8; 32];
@@ -658,7 +675,7 @@ fn a_reserve_top_up_adds_balance_and_nothing_else() {
     // flat segment costs exactly its own gas at the same price, so that comes
     // to the ceiling times the price per gas. The pair of sends below is what
     // checks that identity: if it were wrong, one of them would not behave.
-    let fee = TOPUP_GAS_CEILING as u64 * NANOTOS_PER_GAS;
+    let fee = compute_fee(TOPUP_GAS_CEILING as u64);
     pool.send(fee - 1, top_up.clone()).expect_exit_code(203);
     pool.send(fee, top_up).expect_success();
 

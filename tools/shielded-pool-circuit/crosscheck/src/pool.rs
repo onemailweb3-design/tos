@@ -29,7 +29,7 @@ const EPOCH_NONE: u32 = 0xffff_ffff;
 const RESERVE_FLOOR: u64 = 5 * TOS;
 /// The one configured denomination, and the fee section 14.2 fixes.
 pub const DENOMINATION: u64 = TOS;
-pub const WITHDRAWAL_FEE: u64 = 250_000_000;
+pub const WITHDRAWAL_FEE: u64 = 50_000_000;
 
 /// A field element as its 32 big-endian wire bytes.
 pub fn be(value: Fr) -> [u8; 32] {

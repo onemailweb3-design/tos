@@ -36,11 +36,14 @@ const RESERVE_FLOOR: u64 = TOS;
 const OP_DEPOSIT: u32 = 1;
 /// A message value that is above the threshold below which the executor skips
 /// the compute phase outright, and below what the deposit path costs to run.
-/// Measured on this executor at 400 nanotos per gas unit: a message is ignored
-/// (compute skipped, `NoGas`) at 20,000 and buys the whole path at 520,000, so
-/// 400,000 buys 1,000 gas against a path that needs 1,259. Both ends matter:
-/// too low and the VM never runs, which would make the test vacuous.
-const GAS_STARVED_VALUE: u64 = 400_000;
+/// Re-derived on 2026-09-21 when the basechain price was aligned with TON
+/// mainnet's live 66.66 nanotos a gas. At the old 400 this was 400,000, which
+/// bought 1,000 gas; at the new price the same value buys six times that and
+/// the message finishes the path instead of starving, which is the failure
+/// this constant exists to avoid. 66,667 buys about 1,000 gas again, against a
+/// path that needs 1,259. Both ends matter: too low and the VM never runs,
+/// which would make the test vacuous.
+const GAS_STARVED_VALUE: u64 = 66_667;
 /// TVM's out-of-gas exit code.
 const EXIT_OUT_OF_GAS: i32 = -14;
 
