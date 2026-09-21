@@ -136,6 +136,10 @@ impl ImtProbe {
     }
 
     fn call(&self, method: &str, args: Vec<StackItem>) -> Result<Vec<StackItem>> {
+        Ok(self.call_with_gas(method, args)?.0)
+    }
+
+    fn call_with_gas(&self, method: &str, args: Vec<StackItem>) -> Result<(Vec<StackItem>, i64)> {
         let result = self
             .bc
             .run_get_method(&self.addr, method, args)
@@ -143,7 +147,28 @@ impl ImtProbe {
         if result.exit_code != 0 {
             return Err(CrossCheckError::Vm(format!("{method} exited {}", result.exit_code)));
         }
-        Ok(result.stack)
+        Ok((result.stack, result.gas_used))
+    }
+
+    /// The gas one `imt_insert` costs, which is what the nullifier tree
+    /// charges a transaction twice.
+    pub fn insert_gas(
+        &self,
+        root: &str,
+        next_index: u64,
+        nullifier: &str,
+        witness: &imt::Witness,
+    ) -> Result<i64> {
+        let (_, gas) = self.call_with_gas(
+            "i_insert",
+            vec![
+                Self::integer(root)?,
+                Self::integer(&next_index.to_string())?,
+                Self::integer(nullifier)?,
+                StackItem::cell(encode_witness(witness)?),
+            ],
+        )?;
+        Ok(gas)
     }
 
     pub fn empty_at(&self, level: usize) -> Result<String> {
