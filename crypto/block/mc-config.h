@@ -434,8 +434,8 @@ struct SizeLimitsConfig {
   td::uint32 max_acc_fixed_prefix_length = 8;
   td::uint32 acc_state_cells_for_storage_dict = 26;
   td::optional<td::uint32> max_transaction_library_loads;  // default - unlimited
-  td::uint32 max_total_msg_bits = (1 << 21) * 5 / 2;   // enabled in global version 15
-  td::uint32 max_total_msg_cells = (1 << 13) * 5 / 2;  // enabled in global version 15
+  td::uint32 max_total_msg_bits = (1 << 21) * 5 / 2;       // enabled in global version 15
+  td::uint32 max_total_msg_cells = (1 << 13) * 5 / 2;      // enabled in global version 15
 };
 
 struct CatchainValidatorsConfig {
@@ -698,6 +698,7 @@ class Config {
   }
   std::pair<tos::UnixTime, tos::UnixTime> get_validator_set_start_stop(int next = 0) const;
   tos::ValidatorSessionConfig get_consensus_config() const;
+  td::optional<tos::SelectedNewConsensusConfig> get_selected_new_consensus_config(tos::WorkchainId wc) const;
   td::optional<tos::NewConsensusConfig> get_new_consensus_config(tos::WorkchainId wc) const;
   bool foreach_config_param(std::function<bool(int, Ref<vm::Cell>)> scan_func) const;
   Ref<WorkchainInfo> get_workchain_info(tos::WorkchainId workchain_id) const;

@@ -140,6 +140,9 @@ class MasterchainStateQ : public MasterchainState, public ShardStateQ {
   ValidatorSessionConfig get_consensus_config() const override {
     return config_->get_consensus_config();
   }
+  td::optional<tos::SelectedNewConsensusConfig> get_selected_new_consensus_config(WorkchainId wc) const override {
+    return config_->get_selected_new_consensus_config(wc);
+  }
   td::optional<tos::NewConsensusConfig> get_new_consensus_config(WorkchainId wc) const override {
     return config_->get_new_consensus_config(wc);
   }

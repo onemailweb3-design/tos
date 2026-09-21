@@ -33,6 +33,7 @@ validator-descr-vectors-gen	test/pq-native/validator-descr-vectors.txt
 pq-bytes-vectors-gen	test/pq-mldsa44/pq-bytes-vectors.txt
 validator-set-hash-vectors-gen	test/pq-native/validator-set-hash-vectors.txt
 validator-session-vectors-gen	test/pq-native/validator-session-vectors.txt
+validator-session-derivation-vectors-gen	test/pq-native/validator-session-derivation-vectors.tsv
 validator-set-cases-gen	test/pq-native/validator-set-cases.txt
 PAIRS
 )

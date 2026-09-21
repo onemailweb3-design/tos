@@ -193,6 +193,7 @@ set(TLB_BLOCK_AUTO
 )
 
 set(BLOCK_SOURCE
+  block/validator-session-id.cpp
   block/validator-session-members.cpp
   block/pq-vote.cpp
   pq/pq-bytes.cpp

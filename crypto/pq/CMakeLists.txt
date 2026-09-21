@@ -110,6 +110,19 @@ if(TARGET tos_crypto)
   add_executable(validator-session-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-session-vectors-gen.cpp")
   set_target_properties(validator-session-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(validator-session-vectors-gen PRIVATE tos_block tos_crypto keys tl-utils)
+  add_executable(validator-session-derivation-vectors-gen
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-session-derivation-vectors-gen.cpp")
+  set_target_properties(validator-session-derivation-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(validator-session-derivation-vectors-gen PRIVATE validator tos_block tos_crypto tl-utils)
+  add_test(NAME validator-session-derivation
+    COMMAND validator-session-derivation-vectors-gen
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-session-derivation-vectors.tsv")
+  foreach(check_name param30 global-id local-override governing-snapshot session-path constructor-selection)
+    add_test(NAME validator-session-${check_name}
+      COMMAND validator-session-derivation-vectors-gen
+              "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-session-derivation-vectors.tsv"
+              ${check_name})
+  endforeach()
   add_executable(validator-set-cases-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-set-cases-gen.cpp")
   set_target_properties(validator-set-cases-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(validator-set-cases-gen PRIVATE tos_block tos_crypto keys)

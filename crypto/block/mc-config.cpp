@@ -390,7 +390,7 @@ void store_double(Base& base, td::uint32 value) {
 
 }  // namespace
 
-td::optional<tos::NewConsensusConfig> Config::get_new_consensus_config(tos::WorkchainId wc) const {
+td::optional<tos::SelectedNewConsensusConfig> Config::get_selected_new_consensus_config(tos::WorkchainId wc) const {
   auto c1 = get_config_param(30);
   if (c1.is_null()) {
     return {};
@@ -412,19 +412,22 @@ td::optional<tos::NewConsensusConfig> Config::get_new_consensus_config(tos::Work
     if (v1.flags != 0) {
       return {};
     }
-    return tos::NewConsensusConfig{
-        .max_block_size = consensus_config.max_block_size,
-        .max_collated_data_size = consensus_config.max_collated_data_size,
+    return tos::SelectedNewConsensusConfig{
+        .config =
+            tos::NewConsensusConfig{
+                .max_block_size = consensus_config.max_block_size,
+                .max_collated_data_size = consensus_config.max_collated_data_size,
 
-        .slots_per_leader_window = v1.slots_per_leader_window,
+                .slots_per_leader_window = v1.slots_per_leader_window,
 
-        .noncritical_params =
-            {
-                .target_rate = std::chrono::milliseconds(v1.target_rate_ms),
-                .first_block_timeout = std::chrono::milliseconds(v1.first_block_timeout_ms),
-                .max_leader_window_desync = v1.max_leader_window_desync,
+                .noncritical_params =
+                    {
+                        .target_rate = std::chrono::milliseconds(v1.target_rate_ms),
+                        .first_block_timeout = std::chrono::milliseconds(v1.first_block_timeout_ms),
+                        .max_leader_window_desync = v1.max_leader_window_desync,
+                    },
             },
-    };
+        .cell_hash = td::Bits256{c2->get_hash().bits()}};
   } else if (gen::NewConsensusConfig::Record_simplex_config_v2 v2; gen::unpack_cell(c2, v2)) {
     // The five flag bits in TON's #22 layout are reserved as well. The two
     // protocol-version bits are intentionally separate and are checked by
@@ -460,10 +463,19 @@ td::optional<tos::NewConsensusConfig> Config::get_new_consensus_config(tos::Work
       }
     }
 
-    return config;
+    return tos::SelectedNewConsensusConfig{.config = std::move(config),
+                                           .cell_hash = td::Bits256{c2->get_hash().bits()}};
   }
 
   return {};
+}
+
+td::optional<tos::NewConsensusConfig> Config::get_new_consensus_config(tos::WorkchainId wc) const {
+  auto selected = get_selected_new_consensus_config(wc);
+  if (!selected) {
+    return {};
+  }
+  return std::move(selected.value().config);
 }
 
 bool Config::foreach_config_param(std::function<bool(int, Ref<vm::Cell>)> scan_func) const {

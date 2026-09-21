@@ -703,6 +703,15 @@ struct NewConsensusConfig {
   NoncriticalParams noncritical_params = {};
 };
 
+// The consensus configuration selected from ConfigParam 30 together with the
+// representation hash of the exact referenced cell that was parsed.  Keeping
+// these two facts in one value prevents session identity from committing to a
+// different encoding than the one whose settings the group actually uses.
+struct SelectedNewConsensusConfig {
+  NewConsensusConfig config;
+  td::Bits256 cell_hash;
+};
+
 // Fail-closed admission for a validator or observer group. Run only when the
 // consensus config is present AND its protocol version is one this build
 // understands. A missing/unreadable config or a newer-than-supported version

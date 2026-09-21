@@ -29,6 +29,7 @@
 #include "block/block-auto.h"
 #include "block/block-parse.h"
 #include "block/block.h"
+#include "block/validator-session-id.h"
 #include "block/validator-session-members.h"
 #include "block/workchain-execution-dispatch.h"
 #include "common/delay.h"
@@ -2889,6 +2890,7 @@ void ValidatorManagerImpl::update_shards() {
   auto config = last_masterchain_state_->get_consensus_config();
   consensus::ValidatorSessionOptions opts{config};
   auto opts_hash = opts.get_hash();
+  const auto global_id = last_masterchain_state_->get_global_id();
 
   std::map<ShardIdFull, std::vector<BlockIdExt>> new_shards;
   std::set<ShardIdFull> future_shards;
@@ -2961,7 +2963,8 @@ void ValidatorManagerImpl::update_shards() {
 
   BlockSeqno key_seqno = last_key_block_handle_->id().seqno();
 
-  auto get_or_make_next_group = [&](ShardIdFull shard, ValidatorSessionId id, td::Ref<block::ValidatorSet> val_set) {
+  auto get_or_make_next_group = [&](ShardIdFull shard, ValidatorSessionId id, td::Ref<block::ValidatorSet> val_set,
+                                    const NewConsensusConfig &simplex_config) {
     CHECK(!validator_groups_.contains(id) && !new_validator_groups.contains(id));
     CHECK(!destroyed_validator_sessions_.contains(id));
     if (auto it = next_validator_groups_.find(id); it != next_validator_groups_.end()) {
@@ -2979,7 +2982,7 @@ void ValidatorManagerImpl::update_shards() {
       return next_validator_groups_.end();
     }
 
-    auto G = create_validator_group(id, shard, val_set, key_seqno, opts, started_);
+    auto G = create_validator_group(id, shard, val_set, key_seqno, simplex_config, opts, started_);
     if (G.empty()) {
       // create_validator_group fails closed (and logs) when the consensus
       // config is missing or unreadable. Do not materialize a group entry for
@@ -3024,8 +3027,19 @@ void ValidatorManagerImpl::update_shards() {
       auto validator_id = get_validator(shard, val_set);
 
       if (!validator_id.is_zero()) {
+        auto selected_config = last_masterchain_state_->get_selected_new_consensus_config(shard.workchain);
+        if (!selected_config || !selected_config.value().config.protocol_version_supported()) {
+          LOG(ERROR) << "refusing to create validator group for " << shard.to_str()
+                     << ": consensus config is missing or its protocol version is not supported by this build; "
+                        "validation for this shard is disabled until the node is upgraded or the config is fixed";
+          continue;
+        }
         ++(shard.is_masterchain() ? active_validator_groups_master_ : active_validator_groups_shard_);
-        auto val_group_id = get_validator_set_id(shard, val_set, opts_hash, key_seqno, opts);
+        auto val_group_id = block::derive_validator_session_identity(
+                                global_id, opts_hash, selected_config.value().cell_hash, shard,
+                                val_set->get_catchain_seqno(), val_set->export_vector(),
+                                opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
+                                .session_id;
         if (destroyed_validator_sessions_.contains(val_group_id)) {
           continue;
         }
@@ -3049,7 +3063,7 @@ void ValidatorManagerImpl::update_shards() {
             validator_groups_.erase(it);
             return &entry;
           } else {
-            auto it2 = get_or_make_next_group(shard, val_group_id, val_set);
+            auto it2 = get_or_make_next_group(shard, val_group_id, val_set, selected_config.value().config);
             if (it2 == next_validator_groups_.end()) {
               return static_cast<ValidatorGroupEntry *>(nullptr);
             }
@@ -3091,11 +3105,21 @@ void ValidatorManagerImpl::update_shards() {
 
     auto validator_id = get_validator(shard, val_set);
     if (!validator_id.is_zero()) {
-      auto val_group_id = get_validator_set_id(shard, val_set, opts_hash, key_seqno, opts);
+      auto selected_config = last_masterchain_state_->get_selected_new_consensus_config(shard.workchain);
+      if (!selected_config || !selected_config.value().config.protocol_version_supported()) {
+        LOG(ERROR) << "refusing to create future validator group for " << shard.to_str()
+                   << ": consensus config is missing or its protocol version is not supported by this build";
+        continue;
+      }
+      auto val_group_id = block::derive_validator_session_identity(
+                              global_id, opts_hash, selected_config.value().cell_hash, shard,
+                              val_set->get_catchain_seqno(), val_set->export_vector(),
+                              opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
+                              .session_id;
       if (destroyed_validator_sessions_.contains(val_group_id)) {
         continue;
       }
-      get_or_make_next_group(shard, val_group_id, val_set);
+      get_or_make_next_group(shard, val_group_id, val_set, selected_config.value().config);
       if (shard.is_masterchain() && mc_validator_adnl_id.is_zero()) {
         mc_validator_adnl_id =
             adnl::AdnlNodeIdShort{val_set->get_validator(tos::ValidatorId{validator_id.bits256_value()})->addr};
@@ -3109,13 +3133,13 @@ void ValidatorManagerImpl::update_shards() {
   std::map<ObserverGroupId, ValidatorGroupEntry> new_observer_groups;
   if (allow_validate_) {
     for (const auto &[shard, prev] : new_shards) {
-      auto maybe_config = last_masterchain_state_->get_new_consensus_config(shard.workchain);
-      if (!consensus_group_admissible(maybe_config)) {
+      auto selected_config = last_masterchain_state_->get_selected_new_consensus_config(shard.workchain);
+      if (!selected_config || !selected_config.value().config.protocol_version_supported()) {
         // Missing config, or a protocol version newer than this build supports:
         // skip the observer group rather than aborting in the version check.
         continue;
       }
-      auto config = maybe_config.value();
+      auto config = selected_config.value().config;
       if (!config.enable_block_sync() && !config.observers_in_private_overlay()) {
         continue;
       }
@@ -3130,7 +3154,11 @@ void ValidatorManagerImpl::update_shards() {
         LOG(ERROR) << "refusing to create observer groups for " << shard.to_str() << ": " << usable.move_as_error();
         continue;
       }
-      auto session_id = get_validator_set_id(shard, val_set, opts_hash, key_seqno, opts);
+      auto session_id = block::derive_validator_session_identity(
+                            global_id, opts_hash, selected_config.value().cell_hash, shard,
+                            val_set->get_catchain_seqno(), val_set->export_vector(),
+                            opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
+                            .session_id;
       for (auto local_adnl_id : get_observer_adnl_ids(val_set)) {
         ObserverGroupId observer_id{session_id, local_adnl_id};
         ValidatorGroupEntry entry;
@@ -3354,29 +3382,9 @@ void ValidatorManagerImpl::updated_init_block(BlockIdExt last_rotate_block_id,
   }
 }
 
-ValidatorSessionId ValidatorManagerImpl::get_validator_set_id(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set,
-                                                              td::Bits256 opts_hash, BlockSeqno last_key_block_seqno,
-                                                              const consensus::ValidatorSessionOptions &opts) {
-  auto vec = block::validator_session_members(val_set->export_vector());
-  auto vert_seqno = opts_->get_maximal_vertical_seqno();
-  if (!opts.new_catchain_ids) {
-    if (vert_seqno == 0) {
-      return create_hash_tl_object<tos_api::validator_group>(shard.workchain, shard.shard,
-                                                             val_set->get_catchain_seqno(), opts_hash, std::move(vec));
-    } else {
-      return create_hash_tl_object<tos_api::validator_groupEx>(
-          shard.workchain, shard.shard, vert_seqno, val_set->get_catchain_seqno(), opts_hash, std::move(vec));
-    }
-  } else {
-    return create_hash_tl_object<tos_api::validator_groupNew>(shard.workchain, shard.shard, vert_seqno,
-                                                              last_key_block_seqno, val_set->get_catchain_seqno(),
-                                                              opts_hash, std::move(vec));
-  }
-}
-
 td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_group(
     ValidatorSessionId session_id, ShardIdFull shard, td::Ref<block::ValidatorSet> validator_set, BlockSeqno key_seqno,
-    consensus::ValidatorSessionOptions opts, bool init_session) {
+    NewConsensusConfig config, consensus::ValidatorSessionOptions opts, bool init_session) {
   td::actor::send_closure(ext_message_pool_, &ExtMessagePool::cleanup_external_messages, shard);
 
   auto validator_id = get_validator(shard, validator_set);
@@ -3385,8 +3393,7 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
   CHECK(descr);
   auto adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(*descr)};
 
-  auto new_consensus_config = last_masterchain_state_->get_new_consensus_config(shard.workchain);
-  if (!consensus_group_admissible(new_consensus_config)) {
+  if (!config.protocol_version_supported()) {
     // Fail closed. A missing or unrecognized consensus config (absent
     // parameter, unpack failure, reserved flag bits), or one whose protocol
     // version is newer than this build supports, must stop this node from
@@ -3399,8 +3406,6 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
                   "validation for this shard is disabled until the node is upgraded or the config is fixed";
     return {};
   }
-  auto config = new_consensus_config.value();
-
   // The consensus path is post-quantum only and verifies every peer with the key the set
   // records, so the whole set must be runnable. Decide that here, before a group exists:
   // if the bus discovered it asynchronously in start_up and stopped itself, this manager
