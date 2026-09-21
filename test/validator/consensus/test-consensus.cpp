@@ -655,8 +655,8 @@ class TestDbImpl : public consensus::Db {
   struct DbInner {
     std::map<td::BufferSlice, td::BufferSlice> map;
     std::mutex mutex;
-    size_t latest_get_count = 0;
-    size_t latest_found_count = 0;
+    size_t finalized_latest_get_count = 0;
+    size_t finalized_latest_found_count = 0;
     // TL constructor id -> how many further writes of that record to reject.
     std::map<td::uint32, size_t> fail_writes_of;
     size_t failed_write_count = 0;
@@ -689,12 +689,21 @@ class TestDbImpl : public consensus::Db {
   }
   td::actor::Task<std::optional<td::BufferSlice>> get_latest(td::BufferSlice key) const override {
     std::scoped_lock lock(db_->mutex);
-    ++db_->latest_get_count;
+    td::int32 tag = 0;
+    if (key.size() >= sizeof(tag)) {
+      std::memcpy(&tag, key.data(), sizeof(tag));
+    }
+    const bool is_finalized_block = tag == tos_api::consensus_simplex_db_key_finalizedBlock::ID;
+    if (is_finalized_block) {
+      ++db_->finalized_latest_get_count;
+    }
     auto it = db_->map.find(key);
     if (it == db_->map.end()) {
       co_return std::nullopt;
     }
-    ++db_->latest_found_count;
+    if (is_finalized_block) {
+      ++db_->finalized_latest_found_count;
+    }
     co_return it->second.clone();
   }
   td::actor::Task<> set(td::BufferSlice key, td::BufferSlice value) override {
@@ -933,11 +942,16 @@ class TestConsensus : public td::actor::Actor {
 
     if (EMPTY_CHAIN_RESTART_TEST) {
       auto deadline = td::Timestamp::in(DURATION);
-      while (!empty_chain_restart_completed_ && empty_chain_restart_error_.empty() && !deadline.is_in_past()) {
+      while (((!empty_chain_restart_completed_ && empty_chain_restart_error_.empty()) ||
+              (PQ_FINALITY_E2E_TEST && !pq_finality_completed_ && pq_finality_error_.empty())) &&
+             !deadline.is_in_past()) {
         co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
       }
       if (!empty_chain_restart_completed_ && empty_chain_restart_error_.empty()) {
         empty_chain_restart_error_ = "timed out waiting for the empty-chain restart test";
+      }
+      if (PQ_FINALITY_E2E_TEST && !pq_finality_completed_ && pq_finality_error_.empty()) {
+        pq_finality_error_ = "timed out waiting for the post-quantum finality end-to-end test";
       }
     } else if (VOTE_JOURNAL_TEST) {
       auto deadline = td::Timestamp::in(DURATION);
@@ -946,6 +960,19 @@ class TestConsensus : public td::actor::Actor {
       }
       if (!vote_journal_completed_ && vote_journal_error_.empty()) {
         vote_journal_error_ = "timed out waiting for the vote journal test";
+      }
+    } else if (CATCH_UP_DOWNTIME >= 0.0 && PQ_FINALITY_E2E_TEST) {
+      auto deadline = td::Timestamp::in(DURATION);
+      while (((!catch_up_completed_ && catch_up_error_.empty()) ||
+              (!pq_finality_completed_ && pq_finality_error_.empty())) &&
+             !deadline.is_in_past()) {
+        co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+      }
+      if (!catch_up_completed_ && catch_up_error_.empty()) {
+        catch_up_error_ = "timed out waiting for the state-resolver catch-up test";
+      }
+      if (!pq_finality_completed_ && pq_finality_error_.empty()) {
+        pq_finality_error_ = "timed out waiting for the post-quantum finality end-to-end test";
       }
     } else if (PQ_FINALITY_E2E_TEST) {
       auto deadline = td::Timestamp::in(DURATION);
@@ -2317,20 +2344,20 @@ class TestConsensus : public td::actor::Actor {
         co_return td::Status::Error(PSTRING() << "catch-up node ended at " << caught_up_height
                                               << " while network finalized " << last_accepted_block_.seqno());
       }
-      size_t latest_get_count = 0;
-      size_t latest_found_count = 0;
+      size_t finalized_latest_get_count = 0;
+      size_t finalized_latest_found_count = 0;
       for (const auto& node : nodes_) {
         for (const auto& instance : node.instances) {
           std::scoped_lock lock(instance.db_inner->mutex);
-          latest_get_count += instance.db_inner->latest_get_count;
-          latest_found_count += instance.db_inner->latest_found_count;
+          finalized_latest_get_count += instance.db_inner->finalized_latest_get_count;
+          finalized_latest_found_count += instance.db_inner->finalized_latest_found_count;
         }
       }
-      if (latest_found_count == 0) {
+      if (finalized_latest_found_count == 0) {
         co_return td::Status::Error("catch-up test never recovered an evicted finalized ID through live DB lookup");
       }
-      LOG(WARNING) << "StateResolver live DB lookup coverage: gets=" << latest_get_count
-                   << " found=" << latest_found_count;
+      LOG(WARNING) << "StateResolver live DB lookup coverage: gets=" << finalized_latest_get_count
+                   << " found=" << finalized_latest_found_count;
     }
     if (EMPTY_CHAIN_RESTART_TEST) {
       if (!empty_chain_restart_error_.empty()) {

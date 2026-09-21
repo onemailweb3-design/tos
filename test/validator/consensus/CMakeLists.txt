@@ -164,13 +164,13 @@ add_test(
     COMMAND test-validator-manager-resource-policy
 )
 add_test(
-    NAME test-consensus-simplex2-state-resolver-catch-up
+    NAME test-consensus-simplex2-pq-state-resolver-catch-up
     COMMAND test-consensus --duration 8 --n-nodes 5 --target-rate-ms 50
             --net-ping 0.002:0.01 --catch-up-downtime 2.5
-            --min-finalized-blocks 40
+            --min-finalized-blocks 40 --pq-finality-e2e-test
 )
 set_tests_properties(
-    test-consensus-simplex2-state-resolver-catch-up
+    test-consensus-simplex2-pq-state-resolver-catch-up
     PROPERTIES ENVIRONMENT
         "TOS_SIMPLEX_STATE_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_FINALIZED_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_CANDIDATE_RETENTION_SLOTS=8"
 )
@@ -354,9 +354,10 @@ add_test(
             --net-ping 0:0 --vote-journal-test
 )
 add_test(
-    NAME test-consensus-simplex2-empty-chain-restart
+    NAME test-consensus-simplex2-pq-empty-chain-restart
     COMMAND test-consensus --duration 110 --n-nodes 1 --target-rate-ms 1
             --net-ping 0:0 --empty-chain-restart-test --min-finalized-blocks 1
+            --pq-finality-e2e-test
 )
 add_test(
     NAME test-consensus-simplex2-query-abuse
@@ -377,9 +378,9 @@ add_test(
             -s ${CMAKE_CURRENT_SOURCE_DIR}/simplex2-genesis-config.fif
 )
 
-# These are the legacy full-finalization scenarios. Their post-quantum adversarial
-# counterparts run above; the accepted-chain catch-up and empty-chain restart cases remain
-# tracked separately until their harness assumptions are migrated.
+# These legacy full-finalization scenarios remain only as historical regressions. Each has
+# an enabled post-quantum counterpart above, including accepted-chain catch-up and the long
+# empty-chain restart.
 set_tests_properties(
     test-consensus-simplex2-loss
     test-consensus-simplex2-restart
@@ -388,8 +389,6 @@ set_tests_properties(
     test-consensus-simplex2-relay-loop
     test-consensus-simplex2-adaptive-byzantine
     test-consensus-simplex2-manager-ingress-adversarial
-    test-consensus-simplex2-state-resolver-catch-up
-    test-consensus-simplex2-empty-chain-restart
     test-consensus-simplex2-query-abuse
     PROPERTIES DISABLED TRUE
 )
