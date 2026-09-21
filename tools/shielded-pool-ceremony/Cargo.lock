@@ -732,6 +732,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shielded-pool-circuit",
+ "zeroize",
 ]
 
 [[package]]

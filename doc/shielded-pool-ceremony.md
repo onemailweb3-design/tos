@@ -7,9 +7,11 @@ themselves a note. Section 17 and section 20 say so, the fixture says so in its
 own `warning` field, and it is the single reason this pool cannot hold money
 today.
 
-Replacing it needs a two-phase trusted setup. This document is what exists of
-that ceremony so far, what it establishes, and what is deliberately not built
-yet.
+Replacing it needs a two-phase trusted setup. Both phases now exist in code:
+phase 1 is a published ceremony's transcript, sliced and checked, and phase 2
+is a multi-party computation written here. This document is what each part
+establishes, what it does not, and what still has to come from people rather
+than from software.
 
 ## What has to be produced
 
@@ -327,21 +329,19 @@ it.
 The permutation test runs against the real basis too — elements 11,111 and
 22,222 of the genuine 2^15 basis, swapped in both groups, refused.
 
-## Phase 2: not built, and why not sketched
+## Phase 2: built, and what each part rests on
 
-Phase 2 is circuit-specific, so it has to be ours. With phase 1 fetched and
-phase 1.5 done, it is **the only remaining engineering task**, and it is
-deliberately absent rather than half-present.
+Phase 2 is circuit-specific, so it has to be ours.
 
 `ark-groth16` 0.5 has no MPC module. That was checked in its source, not
 assumed — a web search confidently said otherwise. The two mature
 implementations are Filecoin's `phase2` (bellman) and gnark's `mpcsetup` (Go),
 and both want the circuit expressed in their own constraint system. So the
-options are:
+options were:
 
 | | cost | risk |
 |---|---|---|
-| implement BGM17 over arkworks | a real piece of protocol code | ours to get right, and a subtle error is invisible |
+| implement it over arkworks | a real piece of protocol code | ours to get right, and a subtle error is invisible |
 | Filecoin's `phase2` | re-express 18,107 constraints in bellman | **two circuits that must be identical**, with nothing checking that they are |
 | gnark's `mpcsetup` | re-express them in gnark | the same, plus a Go/Rust boundary |
 
@@ -349,10 +349,155 @@ The second and third look cheaper than they are. A second implementation of
 this circuit is not a translation exercise; it is a second chance to get the
 relations wrong, and the ceremony would fix whichever one it was fed. The
 circuit already exists once in arkworks and is cross-checked against the FunC,
-so the first option keeps the number of circuits at one.
+so the first option keeps the number of circuits at one. That is what was
+done, in `tools/shielded-pool-ceremony/src/{phase2,contribution,entropy,secret}.rs`.
 
-That is a recommendation, not a decision, and it is the reason nothing was
-written here in a hurry.
+### The starting key, which can be checked by equality
+
+A circuit-specific setup is a linear map from the phase-1 string to a proving
+key, and everything in that map except `gamma` and `delta` is fixed by the
+circuit. So the ceremony begins at `gamma = delta = 1`: a key with **no secrets
+in it at all**, a deterministic function of the slice and the R1CS, which two
+people must be able to build byte-for-byte alike.
+
+That makes this stage checkable in a way nothing later is, and it is checked
+the strong way: `phase2_initial.rs` builds a key through our map and through
+`ark_groth16::generate_parameters_with_qap` **on the same secrets**, and
+compares element for element. On two small circuits, on a determinism check,
+and on the real 18,107-constraint circuit.
+
+One thing that stage settled is load-bearing elsewhere. The setup's evaluation
+domain is `constraints + instance_variables`, not `max(constraints,
+variables)`, because `instance_map_with_evaluation` gives each public input its
+own Lagrange coefficient past the end of the constraints. Both round to 2^15
+here so the slice was right either way — but the headroom was wrong, and the
+headroom is the number somebody adding constraints reads.
+
+### A contribution
+
+Each participant draws a scalar `d`, replaces `delta` with `delta·d`, divides
+the `L` and `H` queries by `d`, and destroys `d`. Everything else — `alpha`,
+`beta`, `gamma`, the `A` and `B` queries, the input-consistency points — is
+fixed by the circuit and must not move. Do this `n` times and the final `delta`
+is a product no single participant knows: forging a proof needs all `n`, so the
+parameters are sound if **one** participant was honest. That is why a ceremony
+wants many participants rather than trustworthy ones.
+
+Three checks make a contribution worth something, and none of them needs the
+secret:
+
+1. **A proof of knowledge.** The participant publishes `s` and `s·d` in G1 and
+   `h·d` in G2, where `h` is hashed from the transcript together with `s` and
+   `s·d`. Because `h` comes out of the transcript, the same proof is worthless
+   at any other position, in any other ceremony, and after any earlier entry
+   has been altered.
+2. **The same `d` moved `delta`**, by pairing the new `delta` against `h` and
+   the old against `h·d`.
+3. **The same `d` divided the queries**, batched against weights the verifier
+   draws *after* seeing the key — so a key built to pass a known weighting
+   cannot be.
+
+`gamma` stays at one throughout. That is the established shape of a phase 2,
+not an economy: `gamma` separates the public-input terms from the rest and its
+secrecy is not what soundness rests on, being non-zero is.
+
+### The audit needs no intermediate keys
+
+This is the property that makes a ceremony checkable years later.
+`verify_chain` takes three things:
+
+* the **starting key**, which anyone rebuilds from the committed phase-1 slice
+  and the circuit;
+* the **published contributions**, 672 bytes each whatever the circuit's size;
+* the **finished key**, which is the artifact in use.
+
+Nothing else has to have been kept, and nothing that was kept has to be
+trusted. It works because the starting `delta` is one, so the final queries are
+the starting ones divided by the whole product while the final `delta` *is*
+that product — pairing one against the other cancels it without anyone knowing
+it.
+
+### The ending
+
+`finalise` applies a last contribution whose scalar is a hash of a **public
+random beacon**. It adds no secrecy — anybody can recompute the scalar — and a
+ceremony consisting only of it is worth nothing. What it removes is the worry
+that every participant colluded, or was one person: none of them could have
+predicted the beacon while contributing.
+
+That property is procedural, and the code cannot check it. **The beacon has to
+be named and fixed before the ceremony starts**; one chosen afterwards is
+decoration. What the code does check is that the finalising step is exactly the
+one those bytes determine — it is recomputed and compared byte for byte, not
+merely verified as a valid contribution, because a participant-chosen scalar
+wearing the beacon's name would verify perfectly well.
+
+### What the evidence is
+
+`test/shielded-pool/mutations-ceremony.py` weakens one check at a time and
+requires the suite to report it **by name**. 32 mutations; 31 are killed by the
+test aimed at them, and one is recorded as not test-backed.
+
+The by-name rule is not pedantry. Several checks here shadow each other, and
+the first version of this suite was green against a build with the chain link
+removed, another with the proof-of-knowledge pairing removed, and another with
+the cross-group check removed — the transcript binding or the query check was
+catching each attack first. The tests that close those gaps build a
+contribution by hand from chosen scalars, with one knob turned, so exactly one
+comparison can fail.
+
+The recorded survivor is `pok-challenge-points`: dropping the participant's own
+`s` and `s·d` from the challenge hash. That input is what makes the knowledge
+extractor work in the security proof this follows; no concrete forgery in the
+suite distinguishes a build without it, and inventing a test that appeared to
+would be worse than recording the gap.
+
+### What none of it establishes
+
+**That a participant's scalar was drawn unpredictably, and destroyed.** A
+contribution from a scalar the participant published verifies exactly as well
+as one from a scalar they burned. There is no check anywhere for this and there
+cannot be.
+
+What there is instead is arranged so the careless version does not compile:
+
+* the library offers **one** entropy source, the operating system, and has no
+  seeded constructor anywhere in it — a repeatable source for tests lives in
+  the test crate, where nothing that ships can reach it;
+* participant-supplied material can only be **stirred in**, never substituted,
+  so a draw is unpredictable if *either* the system generator or the material
+  was;
+* the scalar is reduced from **64 bytes, not 32**: the group order is a shade
+  under 2^255, so a 256-bit string biases the result by a fraction near 2^-128;
+* a source returning one repeated byte is refused — the shape of a stub, a mock
+  or a device that opened and returned nothing;
+* the scalar lives in a type that is not `Clone`, not `Serialize`, has no
+  `Display`, prints `Secret(<withheld>)` from `Debug`, never appears in a
+  return type, and wipes itself on drop. The value derived from it that would
+  equally give it away — its inverse — is wiped before the function returns.
+
+None of that defends against an attacker reading process memory, and it is not
+meant to. It defends against the way these secrets are actually lost, which is
+a developer adding a print statement to see what is going on.
+
+### Cost
+
+Measured on the real circuit — 18,107 constraints, an `L` query of 18,215
+points and an `H` query of 32,767:
+
+| | release | debug |
+|---|---|---|
+| one contribution | **10.0 s** | 120 s |
+| auditing the chain | **0.2 s** | 2.4 s |
+
+So a participant waits about ten seconds, not two minutes — the debug column is
+there because that is what an unsuspecting `cargo test` reports, and a ceremony
+scheduled around it would ask twelve times too much of everyone's time. The
+test prints which build it measured for that reason.
+
+A participant's wait is dominated by two multiexponentiations over the `L` and
+`H` queries. An auditor's work grows only in the per-contribution pairings; the
+query check is a single batched pair however many people took part.
 
 ## The acceptance gate
 
@@ -384,7 +529,10 @@ Five tests establish that the gate judges rather than nods:
    destroys their randomness. Each contributes to the phase-2 transcript and
    publishes an attestation.
 2. **A random beacon** to finalise, fixed in advance: what it is, at what
-   height or time, and who witnesses it.
+   height or time, and who witnesses it. The mechanism exists (`finalise`, and
+   `verify_beacon_step` to check it was really that beacon); what is missing is
+   the decision, and a decision taken after the ceremony has begun is worth
+   nothing.
 3. **A second verifier.** Someone outside this repository running the
    acceptance gate against the produced key and getting the same digest.
 
@@ -418,6 +566,15 @@ cargo test --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml
 cargo run --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml \
     --bin verify-phase1-slice -- \
     artifacts/phase1/phase1-zcash-2m15.bin artifacts/phase1/phase1-zcash-2m15.json
+
+# phase 2 on the real circuit -- one contribution and one audit over 18,107
+# constraints, with the timings a ceremony has to be planned against
+cargo test --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml \
+    --test phase2_contribution -- --ignored --nocapture
+
+# the evidence that the phase-2 checks are checks: each one removed in turn,
+# and the test aimed at it required to go red by name
+uv run python test/shielded-pool/mutations-ceremony.py
 
 # the gate a ceremony's verifying key has to pass
 cargo test --release --manifest-path tools/shielded-pool-circuit/crosscheck/Cargo.toml \

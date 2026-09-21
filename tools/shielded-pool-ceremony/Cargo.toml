@@ -26,6 +26,10 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
 sha2 = "=0.10.9"
 hex = "=0.4.3"
+# Wiping contribution secrets. The compiler is free to elide a plain
+# overwrite of memory that is about to be dropped; this is the crate whose
+# whole job is to stop it doing that.
+zeroize = "=1.9.0"
 # The same pin the circuit crate uses. Ruling A1 makes this chain's own BLS
 # primitives the authority on what a point is, and a ceremony that read the
 # transcript with a second library would be checking a different string from

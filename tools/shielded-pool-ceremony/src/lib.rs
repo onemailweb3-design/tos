@@ -26,16 +26,33 @@
 //! * [`points`] -- transcript bytes into curve points, with this chain's own
 //!   BLS library deciding what a point is;
 //! * [`verify`] -- the pairing checks that say the slice is a powers-of-tau
-//!   string and not merely a list of valid points.
+//!   string and not merely a list of valid points;
+//! * [`phase2`] -- the key a ceremony starts from, `gamma = delta = 1`, which
+//!   has no secrets and is therefore checkable: it is proven element for
+//!   element against the setup `ark-groth16` would have run;
+//! * [`contribution`] -- one participant's step and the checks on it, plus the
+//!   standalone audit that needs only the starting key, the published
+//!   contributions and the finished key -- no intermediate keys at all;
+//! * [`entropy`] and [`secret`] -- where a contribution's scalar comes from,
+//!   and why it never leaves the function that draws it.
 //!
-//! **The phase-2 multi-party computation is being built, and is not here
-//! yet.** `ark-groth16` 0.5 has no MPC module -- checked in its source, not
-//! assumed -- and the two mature implementations, Filecoin's `phase2` and
-//! gnark's `mpcsetup`, both want the circuit expressed in their own constraint
-//! system; a second implementation of an 18,107-constraint circuit is a worse
-//! risk than it sounds. So it is being written against arkworks, in stages,
-//! each one with a check that can fail rather than an argument that sounds
-//! right.
+//! `ark-groth16` 0.5 has no MPC module -- checked in its source, not assumed
+//! -- and the two mature implementations, Filecoin's `phase2` and gnark's
+//! `mpcsetup`, both want the circuit expressed in their own constraint system;
+//! a second implementation of an 18,107-constraint circuit is a worse risk
+//! than it sounds. So the multi-party computation is written here, against
+//! arkworks, in stages, each one with a check that can fail rather than an
+//! argument that sounds right.
+//!
+//! **What nothing in this crate can establish**: that a participant's scalar
+//! was drawn unpredictably and then destroyed. That is what the entire
+//! construction rests on and it is the one thing no verifier can observe --
+//! a contribution from a scalar the participant published verifies exactly as
+//! well as one from a scalar they burned. [`entropy`] therefore offers a
+//! single source and no seeded constructor, and [`secret`] is a type that
+//! cannot be cloned, printed or serialized. That is a discipline, not a
+//! proof, and it is the reason a ceremony wants many participants rather than
+//! careful ones.
 //!
 //! What the first stage established is already load-bearing. The setup's
 //! evaluation domain is `constraints + instance_variables` and not, as
@@ -45,11 +62,14 @@
 //! produces: the `h` query is 32,767 long and so is the transform's, because
 //! they are the same object.
 
+pub mod contribution;
+pub mod entropy;
 pub mod error;
 pub mod lagrange;
 pub mod layout;
 pub mod phase2;
 pub mod points;
+pub mod secret;
 pub mod slice;
 pub mod verify;
 

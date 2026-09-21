@@ -18,6 +18,10 @@ pub enum Error {
     /// A structural check on the powers-of-tau string failed. This is the one
     /// that means the transcript is not what it says it is.
     Structure(String),
+    /// The randomness a secret was to be drawn from is unusable. Never a
+    /// reason to retry: every case this covers means the generator is wrong,
+    /// not that the draw was unlucky.
+    Entropy(String),
     Io(std::io::Error),
     Json(serde_json::Error),
 }
@@ -29,6 +33,7 @@ impl fmt::Display for Error {
             Error::Point(message) => write!(formatter, "point: {message}"),
             Error::Slice(message) => write!(formatter, "slice: {message}"),
             Error::Structure(message) => write!(formatter, "structure: {message}"),
+            Error::Entropy(message) => write!(formatter, "entropy: {message}"),
             Error::Io(error) => write!(formatter, "io: {error}"),
             Error::Json(error) => write!(formatter, "json: {error}"),
         }
