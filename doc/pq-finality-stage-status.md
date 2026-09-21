@@ -297,7 +297,10 @@ limits, and resolver-state non-growth.  Packet loss, node restart, and network
 partition additionally have to increment their injection counters before the PQ
 gate can complete.  The classical registrations required five accepted heights;
 their PQ counterparts now require three *consecutive unique* accepted heights,
-the explicit section 10.5 criterion.  No attack-specific assertion was dropped.
+the explicit section 10.5 criterion.  This is a deliberate change: it is stronger
+evidence of continuity, because three adjacent unique heights must advance, and
+weaker evidence of volume, because three is fewer than five.  No attack-specific
+assertion was dropped.
 
 ## Registered gaps and explicit non-claims
 
@@ -350,24 +353,22 @@ The following are gaps, not green claims.
    the PQ loss/restart/partition/byzantine/adversarial variants remain registered.
    The general gate now requires three consecutive accepted blocks and independently
    verifies every accepted proof observed during its run under the trusted context.
-   The following prescribed evidence is absent:
+   The document's prescribed registered names
+   `test-consensus-simplex2-pq-persisted-finality-single`,
+   `test-consensus-simplex2-pq-persisted-finality-multi`, and
+   `test-consensus-simplex2-pq-persisted-finality-21` are deliberately not added.
+   The same coverage runs under the subject names mapped in section 7; aliases
+   would duplicate CI runtime without adding evidence, and renaming would likewise
+   add no evidence.  This is a documented naming deviation, not an unmet gate.
 
-   - the exact registered names
-     `test-consensus-simplex2-pq-persisted-finality-single`,
-     `test-consensus-simplex2-pq-persisted-finality-multi`, and
-     `test-consensus-simplex2-pq-persisted-finality-21` do not exist;
-   - the five restart cuts listed in §10.5.4 do not have dedicated tests;
-
-   The three names are a small registration-only change: they can alias or rename
-   the existing single/multi/21 commands, at the cost of duplicate CI runtime if
-   aliases are used.  The five restart cuts are not registration work.  They need
-   deterministic cut points spanning the Simplex journal, `#13` storage,
+   The five restart cuts listed in §10.5.4 remain a gap.  They need deterministic
+   cut points spanning the Simplex journal, `#13` storage,
    BlockProof storage, the finalized marker, and a reconstruction from DB/archive
    state without actor memory.  The first four require production failpoints and
    restart orchestration; the fifth requires the engine/manager persistence harness
    that this tree currently lacks.  A mock-only version would not establish the
-   required crash property.  These are missing tests and scenarios, not claims that
-   the properties are intrinsically untestable.
+   required crash property.  These are missing scenarios, not a claim that the
+   properties are intrinsically untestable.
 
 7. **Mutation transcripts are not repository artifacts.**
    This file records the exact failure lines retained in the implementation/review
