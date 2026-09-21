@@ -4,7 +4,7 @@ use super::*;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, str::FromStr};
 
-const EXPECTED_CASES: [&str; 21] = [
+const EXPECTED_CASES: [&str; 23] = [
     "valid-1",
     "valid-21",
     "duplicate-validator-id",
@@ -24,6 +24,8 @@ const EXPECTED_CASES: [&str; 21] = [
     "candidate-data-trailing-tl",
     "401-signers",
     "claimed-weight-mismatch",
+    "unknown-validator-id",
+    "validator-algorithm-mismatch",
     "old-11-under-pq-vset",
     "old-12-under-pq-vset",
 ];

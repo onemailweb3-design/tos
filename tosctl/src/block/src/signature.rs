@@ -635,6 +635,8 @@ pub enum PqBlockSignatureReasonCode {
     CandidateTrailingRef,
     CandidateTl,
     SignerCount,
+    UnknownValidatorId,
+    ValidatorAlgorithmMismatch,
     WeightMismatch,
     UnsupportedCarrier,
     CarrierOversize,
@@ -658,6 +660,8 @@ impl PqBlockSignatureReasonCode {
             Self::CandidateTrailingRef => "candidate_trailing_ref",
             Self::CandidateTl => "candidate_tl",
             Self::SignerCount => "signer_count",
+            Self::UnknownValidatorId => "unknown_validator_id",
+            Self::ValidatorAlgorithmMismatch => "validator_algorithm_mismatch",
             Self::WeightMismatch => "weight_mismatch",
             Self::UnsupportedCarrier => "unsupported_carrier",
             Self::CarrierOversize => "carrier_oversize",
@@ -860,11 +864,14 @@ impl BlockSignaturesSimplexPq {
                 .iter()
                 .find(|validator| validator.validator_id == signature.validator_id)
             else {
-                continue;
+                return pq_reject(
+                    PqBlockSignatureReasonCode::UnknownValidatorId,
+                    "unknown validator_id",
+                );
             };
             if validator.algorithm_id != signature.algorithm_id {
                 return pq_reject(
-                    PqBlockSignatureReasonCode::UnsupportedAlgorithm,
+                    PqBlockSignatureReasonCode::ValidatorAlgorithmMismatch,
                     "validator algorithm mismatch",
                 );
             }

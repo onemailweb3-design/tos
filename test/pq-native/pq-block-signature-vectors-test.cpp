@@ -80,6 +80,8 @@ std::string reason_code(const std::string& reason) {
   if (reason == "pq candidate data: trailing empty cell") return "candidate_trailing_ref";
   if (reason.find("pq candidate data: invalid TL") == 0) return "candidate_tl";
   if (reason == "pq signatures: signer count exceeds maximum") return "signer_count";
+  if (reason == "pq signatures: unknown validator_id") return "unknown_validator_id";
+  if (reason == "pq signatures: validator algorithm mismatch") return "validator_algorithm_mismatch";
   if (reason == "signature weight mismatch") return "weight_mismatch";
   if (reason == "unsupported carrier for post-quantum validator set") return "unsupported_carrier";
   fail("VECTOR_UNKNOWN_REASON reason=" + reason);
@@ -482,6 +484,23 @@ std::vector<VectorCase> make_cases() {
       raw_signature_set({{0, weight_pair}}, 1, 2, canonical_candidate(), weight_vset->get_validator_set_hash()), 1,
       weight_ids, weight_algorithms, true, weight_vset->get_validator_set_hash()));
 
+  auto known_signer = raw_pair(0);
+  auto absent_signer = raw_pair(1);
+  auto known_vset = trusted_validator_set({known_signer.validator_id}, {known_signer.algorithm});
+  cases.push_back(rejected_case(
+      "unknown-validator-id", "pq signatures: unknown validator_id",
+      raw_signature_set({{0, known_signer}, {1, absent_signer}}, 2, 1, canonical_candidate(),
+                        known_vset->get_validator_set_hash()),
+      2, {known_signer.validator_id}, {known_signer.algorithm}, true, known_vset->get_validator_set_hash()));
+
+  auto algorithm_mismatch_pair = raw_pair(0);
+  auto algorithm_mismatch_vset = validator_set({algorithm_mismatch_pair.validator_id}, {2});
+  cases.push_back(rejected_case(
+      "validator-algorithm-mismatch", "pq signatures: validator algorithm mismatch",
+      raw_signature_set({{0, algorithm_mismatch_pair}}, 1, 1, canonical_candidate(),
+                        algorithm_mismatch_vset->get_validator_set_hash()),
+      1, {algorithm_mismatch_pair.validator_id}, {2}, true, algorithm_mismatch_vset->get_validator_set_hash()));
+
   auto old_id = hash_of("persisted-validator-0");
   cases.push_back(rejected_case("old-11-under-pq-vset", "unsupported carrier for post-quantum validator set",
                                 old_signature_set(0x11), 0, {old_id}, {algorithm_id}, true, validator_set_hash, "#11"));
@@ -548,6 +567,8 @@ void write_fixture(const std::vector<VectorCase>& cases) {
     fail("VECTOR_FIXTURE_WRITE_FAILED");
   }
   output << "# Shared canonical post-quantum BlockSignatures vectors. Fields are tab-separated.\n";
+  output << "# validator_ids and algorithm_ids describe the trusted set for vset-dependent rejects; otherwise they "
+            "describe the pairs.\n";
   output << "# case outcome reason_code reason boc_hex constructor validator_set_hash catchain_seqno sig_count validator_ids "
             "algorithm_ids session_id slot candidate_sha256\n";
   for (const auto& item : cases) {
@@ -622,8 +643,8 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
         ids.push_back(hash_of("persisted-validator-0"));
         algorithms.push_back(algorithm_id);
       }
-      auto vset = row[0] == "claimed-weight-mismatch" ? trusted_validator_set(ids, algorithms)
-                                                        : validator_set(ids, algorithms);
+      const auto authoritative_weights = row[0] == "claimed-weight-mismatch" || row[0] == "unknown-validator-id";
+      auto vset = authoritative_weights ? trusted_validator_set(ids, algorithms) : validator_set(ids, algorithms);
       parsed = block::BlockSignatureSet::fetch(root.move_as_ok(), std::move(vset));
     } else {
       tos::ValidatorWeight claimed_weight = 0;
