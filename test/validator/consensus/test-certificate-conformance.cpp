@@ -22,6 +22,7 @@
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -244,24 +245,54 @@ void certificates(Fixture& f) {
          "certificate-weight-two-signers-below-quorum", "Not enough");
 }
 
-// A finality certificate cannot become a block signature set in a build with no carrier: the only
-// carrier that exists is the legacy fixed-width Ed25519 one, and the post-quantum carrier replaces it. The refusal
-// is tagged so the finalization sequencer can tell it apart from "try again".
-void carrier_seam(Fixture& f) {
+// Conversion preserves the exact certificate bytes and takes authority metadata from the
+// trusted descriptor, in canonical signer-index order. It also rechecks every structural
+// premise needed to make a persisted carrier safe to construct.
+void carrier_conversion(Fixture& f) {
   auto candidate = td::make_ref<c::Candidate>(f.candidate_id, f.candidate_data.parent, c::PeerValidatorId{0},
                                               f.block_id, td::BufferSlice());
   sx::FinalizeVote final_vote{f.candidate_id};
   auto final_cert =
-      sx::FinalCert::from_tl(std::move(*f.signatures(final_vote, {0, 1})), final_vote, f.bus).move_as_ok();
-  auto refused_final = final_cert->to_signature_set(candidate, f.bus);
-  expect(refused_final.is_error() && sx::is_carrier_missing(refused_final.error()),
-         "final-cert-refused-until-the-carrier-exists");
+      sx::FinalCert::from_tl(std::move(*f.signatures(final_vote, {1, 0})), final_vote, f.bus).move_as_ok();
+  auto final_set = final_cert->to_signature_set(candidate, f.bus).move_as_ok();
+  expect(final_set->is_pq() && final_set->is_final(), "final-cert-converted-to-pq-final");
+  auto final_pairs = final_set->export_pq_signatures().move_as_ok();
+  expect(final_pairs.size() == final_cert->signatures.size(), "final-cert-conversion-count");
+  for (std::size_t i = 0; i < final_pairs.size(); ++i) {
+    const auto& descriptor = f.bus.validator_set[i];
+    expect(final_pairs[i].validator_id == descriptor.validator_id, "conversion-validator-id-from-descriptor");
+    expect(final_pairs[i].algorithm_id == descriptor.consensus_key.algorithm_id,
+           "conversion-algorithm-from-descriptor");
+    auto source = std::find_if(final_cert->signatures.begin(), final_cert->signatures.end(),
+                               [i](const auto& item) { return item.validator.value() == i; });
+    expect(source != final_cert->signatures.end(), "conversion-source-signature-present");
+    expect(final_pairs[i].signature.as_slice() == source->signature.as_slice(), "conversion-preserves-signature-bytes");
+  }
 
   sx::NotarizeVote notar_vote{f.candidate_id};
   auto notar = sx::NotarCert::from_tl(std::move(*f.signatures(notar_vote, {0, 1})), notar_vote, f.bus).move_as_ok();
-  auto refused_notar = notar->to_signature_set(candidate, f.bus);
-  expect(refused_notar.is_error() && sx::is_carrier_missing(refused_notar.error()),
-         "notar-cert-refused-until-the-carrier-exists");
+  auto approve_set = notar->to_signature_set(candidate, f.bus).move_as_ok();
+  expect(approve_set->is_pq() && !approve_set->is_final(), "notar-cert-converted-to-pq-approve");
+
+  auto wrong_candidate = td::make_ref<c::Candidate>(c::CandidateId{8, fill(0x91)}, f.candidate_data.parent,
+                                                     c::PeerValidatorId{0}, f.block_id, td::BufferSlice());
+  reject(final_cert->to_signature_set(wrong_candidate, f.bus), "conversion-vote-candidate-mismatch",
+         "vote id does not match candidate id");
+
+  std::vector<sx::FinalCert::VoteSignature> short_signatures;
+  for (const auto& item : final_cert->signatures) {
+    short_signatures.push_back({item.validator, item.signature.clone()});
+  }
+  short_signatures[0].signature = td::BufferSlice(std::string(2419, 's'));
+  auto short_cert = td::make_ref<sx::FinalCert>(final_vote, std::move(short_signatures));
+  reject(short_cert->to_signature_set(candidate, f.bus), "conversion-signature-length", "wrong length");
+
+  auto below = sx::FinalCert::from_tl(std::move(*f.signatures(final_vote, {0})), final_vote, f.bus);
+  expect(below.is_error(), "fixture-below-quorum-refused-before-conversion");
+  std::vector<sx::FinalCert::VoteSignature> one;
+  one.push_back({c::PeerValidatorId{0}, f.sign(0, tos::serialize_tl_object(final_vote.to_tl(), true).as_slice())});
+  auto below_direct = td::make_ref<sx::FinalCert>(final_vote, std::move(one));
+  reject(below_direct->to_signature_set(candidate, f.bus), "conversion-weighted-quorum", "below weighted quorum");
 }
 
 void empty_candidate(Fixture& f) {
@@ -321,7 +352,7 @@ int main() {
   Fixture f;
   votes(f);
   certificates(f);
-  carrier_seam(f);
+  carrier_conversion(f);
   empty_candidate(f);
   candidate_producer_identity(f);
   std::printf("CERTIFICATE_CONFORMANCE_OK %u checks over the live post-quantum Simplex entrypoints\n", checks);

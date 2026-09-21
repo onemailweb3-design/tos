@@ -133,18 +133,9 @@ struct QueryResolverTrackedStateCount {
   std::string contents_to_string() const;
 };
 
-// Read-only observability of the carrier boundary: the finalized slots this node agreed on
-// and then could not carry into block finality, because the post-quantum block-signature
-// carrier does not exist yet. A validator that is advancing normally reports none; a build with no carrier
-// reports what it has latched. It is what lets an operator, or the end-to-end gate, see
-// the refusal as a state rather than as a log line.
-//
-// The named slot is answered separately from the total on purpose: a count alone cannot
-// say that *this* certificate stopped at the boundary, only that something did.
+// Read-only observability of finalization attempts and backpressure.
 struct QueryFinalizationState {
   struct Result {
-    size_t blocked_slots = 0;
-    bool slot_is_blocked = false;
     // Finalizations this resolver has entered and finished since it came up. They are
     // reported as a pair rather than as a gauge because the number that matters is the
     // difference: a gap that never closes is a finalization waiting on a verdict nobody is
@@ -171,8 +162,7 @@ struct QueryFinalizationState {
     // Held for a reason retrying cannot mend. Counted apart from the rest because it is the
     // one an operator has to act on rather than wait out.
     size_t finalizations_stalled_permanently = 0;
-    // Conversion attempts made for the queried slot. A slot latched at the boundary must
-    // stay at the attempt that latched it however many times it is asked for again.
+    // Conversion attempts made for the queried slot.
     size_t slot_attempts = 0;
   };
 

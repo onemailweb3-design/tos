@@ -721,13 +721,25 @@ class BlockSignatureSetSimplexPQ final : public BlockSignatureSet {
   }
 
   tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet> tl() const override {
-    // Outbound post-quantum materialization remains deliberately absent until
-    // the production carrier-admission gates land.
-    return {};
+    std::vector<tos::tl_object_ptr<tos::tos_api::tosNode_pqBlockSignature>> signatures;
+    signatures.reserve(signatures_.size());
+    for (const auto& signature : signatures_) {
+      signatures.push_back(tos::create_tl_object<tos::tos_api::tosNode_pqBlockSignature>(
+          signature.validator_id.value, static_cast<td::uint16>(signature.algorithm_id), signature.signature.clone()));
+    }
+    return tos::create_tl_object<tos::tos_api::tosNode_signatureSet_simplexPq>(
+        final_, cc_seqno_, validator_set_hash_, std::move(signatures), session_id_, slot_, clone_tl(candidate_));
   }
   tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet> tl_lite() const override {
-    // The lite carrier remains absent for the same reason.
-    return {};
+    std::vector<tos::tl_object_ptr<tos::lite_api::liteServer_pqSignature>> signatures;
+    signatures.reserve(signatures_.size());
+    for (const auto& signature : signatures_) {
+      signatures.push_back(tos::create_tl_object<tos::lite_api::liteServer_pqSignature>(
+          signature.validator_id.value, static_cast<td::uint16>(signature.algorithm_id), signature.signature.clone()));
+    }
+    return tos::create_tl_object<tos::lite_api::liteServer_signatureSet_simplexPq>(
+        cc_seqno_, validator_set_hash_, std::move(signatures), session_id_, slot_,
+        tos::serialize_tl_object(candidate_, true));
   }
 
   td::Result<std::vector<PQBlockSignature>> export_pq_signatures() const override {

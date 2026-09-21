@@ -74,10 +74,6 @@ std::string Start::contents_to_string() const {
   return PSTRING() << "{state=" << state << "}";
 }
 
-std::string BlockSignatureCarrierMissing::contents_to_string() const {
-  return PSTRING() << "{slot=" << slot << "}";
-}
-
 std::string FinalizationBacklog::contents_to_string() const {
   return PSTRING() << "{over_limit=" << over_limit << ", pending=" << pending << "}";
 }

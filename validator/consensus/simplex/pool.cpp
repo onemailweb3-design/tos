@@ -382,15 +382,8 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
 
   template <>
   void handle(BusHandle, std::shared_ptr<const FinalizationBacklog> event) {
-    // Reversible, unlike the carrier boundary: finality can catch up, and when it does this
-    // group produces again. Held separately from quiescence for that reason -- one is a
-    // condition of this build and the other is a condition of this moment.
+    // Finality can catch up, and when it does this group produces again.
     finality_behind_ = event->over_limit;
-  }
-
-  template <>
-  void handle(BusHandle, std::shared_ptr<const BlockSignatureCarrierMissing>) {
-    quiescent_ = true;
   }
 
   template <>
@@ -880,10 +873,9 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
     auto &bus = *owning_bus();
     CHECK(bus.is_validator());
 
-    if (quiescent_ || finality_behind_) {
-      // The boundary was reached, or finality fell behind, while this vote was being
-      // prepared. Consensus stops producing new ones, but one already in flight arrives
-      // here regardless.
+    if (finality_behind_) {
+      // Finality fell behind while this vote was being prepared. Consensus stops producing
+      // new ones, but one already in flight arrives here regardless.
       co_return td::Unit{};
     }
     if (!vote_journal_failure_.empty()) {
@@ -1212,8 +1204,6 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
   // is a terminal condition for the group: casting a fresh vote would create a second
   // signature for a vote that may already be in a peer's certificate.
   std::string vote_journal_failure_;
-  // Set once this group reaches the block-signature carrier boundary.
-  bool quiescent_ = false;
   // Set while more agreed certificates are waiting to be finalized than the resolver will
   // hold. Producing more would add to a pile nothing is draining.
   bool finality_behind_ = false;

@@ -66,9 +66,8 @@ constexpr double max_finalization_retry_delay = 5.0;
 constexpr size_t finalization_attempts_before_reporting = 4;
 // Fault injection for the retry path, read once. The transient failures that produce it in
 // production -- admission pressure, a dependency not ready yet -- cannot be turned on and
-// off on demand in a build that stops at the carrier boundary after one slot, so the one
-// property that matters cannot otherwise be shown: that a failure outlasting several
-// retries still ends with the same certificate reaching the seam. Unset outside tests; a
+// off on demand, so the one property that matters cannot otherwise be shown: that a failure
+// outlasting several retries still ends with the same certificate being finalized. Unset outside tests; a
 // value of N fails the first N conversion attempts with exactly that class of error.
 size_t injected_transient_finalization_failures() {
   const char* value = std::getenv("TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES");
@@ -79,10 +78,9 @@ size_t injected_transient_finalization_failures() {
   return parsed.is_error() ? 0 : parsed.move_as_ok();
 }
 
-// The same, for the class of failure retrying cannot mend. Nothing before the carrier seam
-// produces one in this build -- the candidate resolver gives up with `notready`, its limiter
-// answers `failure` -- so without this the Permanent branch above would be a guard no input
-// can reach, which is the same as not having written it.
+// The same, for the class of failure retrying cannot mend. The candidate resolver normally
+// gives up with `notready` and its limiter answers `failure`, so without this the Permanent
+// branch would not have a deterministic test input.
 size_t injected_permanent_finalization_failures() {
   const char* value = std::getenv("TOS_SIMPLEX_INJECT_PERMANENT_FINALIZATION_FAILURE");
   if (value == nullptr) {
@@ -123,9 +121,6 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     InFlight,
     // The block is finalized.
     Finalized,
-    // Terminal for this build: the certificate reached the carrier seam and the carrier
-    // refused. The entry is kept precisely so the conversion is not attempted again.
-    BlockedOnCarrier,
     // Terminal for a different reason: the conversion failed in a way retrying cannot mend.
     // The entry and its certificate are kept, and it is reported, because the certificate is
     // still evidence a quorum agreed on -- what stops is the spinning, not the remembering.
@@ -134,8 +129,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
 
   // What to do about a finalization that did not succeed.
   //
-  // "Everything that is not the carrier boundary is transient" was the first shape of this,
-  // and it is not a policy, it is the absence of one: it commits a node to retrying a
+  // Treating every failure as transient commits a node to retrying a
   // protocol violation or a mismatched candidate for as long as it lives. The codes below
   // are the ones this path can actually produce, read out of the code that produces them --
   // the candidate resolver gives up with `notready`, its rate limiter answers `failure`,
@@ -231,9 +225,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
 
   template <>
   td::actor::Task<QueryFinalizationState::Result> process(BusHandle, std::shared_ptr<QueryFinalizationState> query) {
-    QueryFinalizationState::Result result{.blocked_slots = carrier_blocked_slots_,
-                                          .slot_is_blocked = false,
-                                          .finalizations_started = finalizations_started_,
+    QueryFinalizationState::Result result{.finalizations_started = finalizations_started_,
                                           .finalizations_settled = finalizations_settled_,
                                           .finalization_retries = finalization_retries_,
                                           .finalization_retries_at_admission = finalization_retries_at_admission_,
@@ -247,9 +239,6 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         continue;
       }
       result.slot_attempts = std::max(result.slot_attempts, state.attempts);
-      if (state.state == Finalization::BlockedOnCarrier) {
-        result.slot_is_blocked = true;
-      }
     }
     co_return result;
   }
@@ -333,10 +322,10 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         case Finalization::Finalized:
           touch_finalized_cache(id);
           co_return Finalization::Finalized;
-        case Finalization::BlockedOnCarrier:
-          co_return Finalization::BlockedOnCarrier;
         case Finalization::Idle:
           co_return Finalization::Idle;
+        case Finalization::StalledPermanently:
+          co_return Finalization::StalledPermanently;
         case Finalization::InFlight:
           break;
       }
@@ -494,9 +483,6 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   InflightAdmission finalized_inflight_{
       cache_limit_from_env("TOS_SIMPLEX_FINALIZED_INFLIGHT_MAX", DEFAULT_FINALIZED_INFLIGHT_MAX)};
   size_t finalized_admission_rejections_ = 0;
-  // Slots latched at the block-signature carrier boundary. A non-zero value is the explicit, expected
-  // state of a build with no carrier, not a fault to chase.
-  size_t carrier_blocked_slots_ = 0;
   // Finalizations entered and finished. Kept as two counters rather than one gauge so a
   // finalization that never returns is visible as a gap that stops closing.
   size_t finalizations_started_ = 0;
@@ -512,7 +498,6 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   bool backlog_over_limit_ = false;
   const size_t pending_finalizations_max_ =
       cache_limit_from_env("TOS_SIMPLEX_PENDING_FINALIZATIONS_MAX", DEFAULT_PENDING_FINALIZATIONS_MAX);
-  bool carrier_missing_announced_ = false;
   size_t finalized_db_hits_ = 0;
   size_t finalized_db_misses_ = 0;
   size_t finalized_db_skips_ = 0;
@@ -573,7 +558,6 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
                    << " finalized_inflight_admission=" << finalized_inflight_.count() << "/"
                    << finalized_inflight_.capacity()
                    << " finalized_admission_rejections=" << finalized_admission_rejections_
-                   << " carrier_blocked_slots=" << carrier_blocked_slots_
                    << " finalization_retries=" << finalization_retries_
                    << " finalization_retries_at_admission=" << finalization_retries_at_admission_
                    << " finalizations_stalled=" << finalizations_stalled_
@@ -594,12 +578,10 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     switch (co_await finalization_of(id)) {
       case Finalization::Finalized:
         co_return td::Unit{};
-      case Finalization::BlockedOnCarrier:
-        // Already latched. Answer without re-running the conversion and without logging
-        // again, and above all without waiting: nothing will ever move this entry.
-        co_return td::Status::Error(carrier_missing_error_code,
+      case Finalization::StalledPermanently:
+        co_return td::Status::Error(ErrorCode::protoviolation,
                                     PSTRING() << "Simplex state-resolver: slot " << id.slot
-                                              << " is blocked at the block-signature carrier boundary");
+                                              << " is permanently stalled");
       case Finalization::InFlight:
         // The attempt this waited on finished and another has already started. Fall through
         // to the re-read below, which attaches to whichever attempt is now running.
@@ -615,10 +597,6 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         case Finalization::Finalized:
           touch_finalized_cache(id);
           co_return td::Unit{};
-        case Finalization::BlockedOnCarrier:
-          co_return td::Status::Error(carrier_missing_error_code,
-                                      PSTRING() << "Simplex state-resolver: slot " << id.slot
-                                                << " is blocked at the block-signature carrier boundary");
         case Finalization::InFlight: {
           // Someone else owns the attempt; wait for its verdict rather than starting a
           // second conversion of the same certificate.
@@ -628,6 +606,10 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         }
         case Finalization::Idle:
           break;
+        case Finalization::StalledPermanently:
+          co_return td::Status::Error(ErrorCode::protoviolation,
+                                      PSTRING() << "Simplex state-resolver: slot " << id.slot
+                                                << " is permanently stalled");
       }
     }
     // Every attempt is admitted, including a retry of one that failed transiently: an entry
@@ -664,26 +646,6 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       if (result.is_ok()) {
         state.state = Finalization::Finalized;
         touch_finalized_cache(id);
-      } else if (is_carrier_missing(result.error())) {
-        // Not a transient failure: this build has no post-quantum block-signature carrier,
-        // and never will until that carrier exists. Latch the slot as terminally blocked and keep the entry,
-        // so the refusal is neither retried nor re-logged. The actor stays alive and the
-        // manager keeps a healthy group -- stopping it here would recreate the dead-entry
-        // lifecycle bug this design already fixed once.
-        state.state = Finalization::BlockedOnCarrier;
-        ++carrier_blocked_slots_;
-        LOG(ERROR) << "Simplex consensus is blocked at the carrier boundary: the certificate for slot " << id.slot
-                   << " was agreed and verified, but " << result.error().message()
-                   << ". No block was finalized, accepted or persisted. This is expected in a build with no carrier.";
-        // Announced once. The event exists to quiesce the group, which is a thing that
-        // happens once; every later certificate meets the same seam, and telling listeners
-        // again would be telling them something they acted on already. They are idempotent,
-        // so this is not a correctness fix -- it is what makes "published once" a property
-        // of the code rather than a sentence in a document.
-        if (!carrier_missing_announced_) {
-          carrier_missing_announced_ = true;
-          owning_bus().publish<BlockSignatureCarrierMissing>(id.slot);
-        }
       } else {
         switch (classify_failure(result.error())) {
           case FailureKind::Cancelled:
@@ -777,7 +739,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         std::min(finalization_retry_delay * static_cast<double>(attempts), max_finalization_retry_delay);
     co_await td::actor::coro_sleep(td::Timestamp::in(delay));
     auto result = co_await finalize_blocks(id, std::move(final_cert), std::move(final_candidate)).wrap();
-    if (result.is_error() && !is_carrier_missing(result.error()) && result.error().code() != ErrorCode::cancelled) {
+    if (result.is_error() && result.error().code() != ErrorCode::cancelled) {
       LOG(DEBUG) << "Simplex state-resolver: retry of slot " << id.slot
                  << " did not finalize it yet: " << result.error().message();
     }
@@ -814,10 +776,9 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         co_await finalize_blocks(*parent, std::nullopt, std::nullopt);
       }
 
-      // The certificate is verified by this point. Converting it into a block-finality
-      // carrier is the carrier seam and refuses in a build with no carrier; returning that refusal
-      // here means no FinalizeBlock is published, no accept_block is reached, and the
-      // finalized-block marker below is never written.
+      // Conversion preserves the already verified certificate bytes in the post-quantum
+      // block-finality carrier. Any structural disagreement is returned as a status before
+      // FinalizeBlock is published.
       auto sig_set = final_cert ? (*final_cert)->to_signature_set(*final_candidate, bus)
                                 : notar_cert->to_signature_set(candidate, bus);
       if (sig_set.is_error()) {

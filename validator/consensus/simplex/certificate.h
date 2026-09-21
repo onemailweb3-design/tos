@@ -12,24 +12,6 @@
 
 namespace tos::validator::consensus::simplex {
 
-// The carrier boundary, expressed as one distinguishable status code.
-//
-// A verified post-quantum Simplex certificate stops at the conversion into a
-// block::BlockSignatureSet: that carrier does not exist yet, and the legacy one is a fixed 64-byte
-// Ed25519 encoding whose serializer refuses anything else and whose verification refuses a
-// post-quantum validator outright. So the conversion fails, permanently and by design.
-//
-// It must not be mistaken for `timeout`/`notready`. Those mean "try again"; this means
-// "this build cannot do it at all", and the finalization sequencer has to tell them apart
-// so it latches the slot instead of retrying the same refusal forever. The value is
-// deliberately outside the ErrorCode 6xx band. The refusal goes when something installs the
-// post-quantum carrier.
-inline constexpr int carrier_missing_error_code = 4501;
-
-inline bool is_carrier_missing(const td::Status& status) {
-  return status.code() == carrier_missing_error_code;
-}
-
 namespace tl {
 
 using voteSignature = tos_api::consensus_simplex_voteSignature;
@@ -59,10 +41,10 @@ struct Certificate : td::CntObject {
 
   CntObject* make_copy() const override;
 
-  // Convert this certificate into the block-finality carrier. Fallible on purpose: today
-  // this always refuses with `carrier_missing_error_code`, because that carrier does not
-  // exist yet and the legacy one cannot hold a post-quantum signature. The caller must
-  // handle the refusal; it must not be able to get a legacy set by ignoring a status.
+  // Convert the already verified certificate into the post-quantum block-finality carrier.
+  // The conversion is deliberately fallible because certificates can be restored from
+  // persisted or network state. It copies the signature bytes already in the certificate;
+  // it never signs again.
   td::Result<td::Ref<block::BlockSignatureSet>> to_signature_set(const CandidateRef& candidate, const Bus& bus) const
     requires td::OneOf<T, NotarizeVote, FinalizeVote>;
 

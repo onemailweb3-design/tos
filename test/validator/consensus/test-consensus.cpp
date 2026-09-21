@@ -9,6 +9,7 @@
 #include "adnl/utils.hpp"
 #include "auto/tl/tos_api.h"
 #include "block/block.h"
+#include "block/block-parse.h"
 #include "block/mc-config.h"
 #include "block/validator-set.h"
 #include "consensus/candidate-relay-policy.h"
@@ -141,8 +142,8 @@ bool VOTE_JOURNAL_TEST = false;
 bool PQ_FINALITY_E2E_TEST = false;
 // Requires the resolver to keep, report and stop retrying a finalization that failed in a
 // way retrying cannot mend, and to stop the group rather than run ahead of it. Needs
-// TOS_SIMPLEX_INJECT_PERMANENT_FINALIZATION_FAILURE set: nothing in a build with no carrier
-// produces that class of failure on its own.
+// TOS_SIMPLEX_INJECT_PERMANENT_FINALIZATION_FAILURE set: production does not
+// deterministically produce that class of failure.
 bool PERMANENT_FINALIZATION_TEST = false;
 std::atomic<bool> EMPTY_CHAIN_MANAGER_ANCHOR_UNAVAILABLE = false;
 
@@ -585,12 +586,6 @@ struct ObservedFinalization {
 std::mutex finality_log_mutex;
 std::vector<ObservedFinalization> finality_log;
 
-// How many times each running instance announced the carrier boundary. The event quiesces
-// the whole group, so a node has no reason to send it twice however many of its
-// certificates meet the same seam -- and "sent once" is only a property if something counts.
-std::mutex boundary_announcement_mutex;
-std::map<std::pair<size_t, size_t>, size_t> boundary_announcements;
-
 // Only the end-to-end gate reads this, and only that run is short enough for it to be
 // bounded. A stress scenario finalizes for as long as it runs, so it does not record.
 void record_finalization(ObservedFinalization observation) {
@@ -646,15 +641,6 @@ class TestFinalityObserver : public td::actor::SpawnsWith<simplex::Bus>, public 
     if (event->over_limit) {
       ++BACKLOG_OVER_LIMIT_REPORTS;
     }
-  }
-
-  template <>
-  void handle(simplex::BusHandle bus, std::shared_ptr<const BlockSignatureCarrierMissing>) {
-    if (!bus->local_id.has_value()) {
-      return;
-    }
-    std::scoped_lock lock(boundary_announcement_mutex);
-    ++boundary_announcements[{bus->local_id->idx.value(), instance_idx_}];
   }
 
  private:
@@ -753,15 +739,29 @@ class TestConsensus : public td::actor::Actor {
 
   td::actor::Task<> on_block_accepted(size_t node_idx, size_t instance_idx, td::Ref<BlockData> block,
                                       size_t creator_idx, td::Ref<block::BlockSignatureSet> signatures) {
-    // Reaching here at all means a certificate became a block signature set and was
-    // accepted. In a build with no carrier that cannot happen, and the end-to-end gate says so.
     ++accepted_block_count_;
     BlockIdExt block_id = block->block_id();
+    if (PQ_FINALITY_E2E_TEST && signatures->is_final()) {
+      accepted_carriers_.push_back({block_id, signatures});
+    }
     if (signatures->is_final()) {
-      signatures->check_signatures(validator_set_, block_id).ensure();
+      if (signatures->is_pq()) {
+        signatures
+            ->check_pq_signatures_under_carried_session_for_test(validator_set_, block_id, block::FinalityRole::Final)
+            .ensure();
+      } else {
+        signatures->check_signatures(validator_set_, block_id).ensure();
+      }
     } else {
       CHECK(!SHARD.is_masterchain());
-      signatures->check_approve_signatures(validator_set_, block_id).ensure();
+      if (signatures->is_pq()) {
+        signatures
+            ->check_pq_signatures_under_carried_session_for_test(validator_set_, block_id,
+                                                                  block::FinalityRole::Approve)
+            .ensure();
+      } else {
+        signatures->check_approve_signatures(validator_set_, block_id).ensure();
+      }
     }
     BlockSeqno seqno = block_id.seqno();
     if (accepted_blocks_.contains(seqno)) {
@@ -1308,19 +1308,7 @@ class TestConsensus : public td::actor::Actor {
     return result;
   }
 
-  // ===== The post-quantum round, end to end, and the boundary it stops at =====
-
-  size_t finalized_marker_count(const Instance& instance) const {
-    std::scoped_lock lock(instance.db_inner->mutex);
-    const td::uint32 prefix = tos_api::consensus_simplex_db_key_finalizedBlock::ID;
-    size_t result = 0;
-    for (const auto& [key, _] : instance.db_inner->map) {
-      if (key.size() >= sizeof(prefix) && std::memcmp(key.data(), &prefix, sizeof(prefix)) == 0) {
-        ++result;
-      }
-    }
-    return result;
-  }
+  // ===== The post-quantum round and its persisted finality carrier =====
 
   // Check a finality certificate the way a peer would, without reusing the code that
   // produced it: every signature verified against the key the validator set records for
@@ -1357,22 +1345,6 @@ class TestConsensus : public td::actor::Actor {
   td::actor::Task<> run_pq_finality_e2e_test() {
     auto fail = [&](std::string message) { pq_finality_error_ = std::move(message); };
 
-    // --- Whatever adversity this scenario configures happens before anything is judged ---
-    //
-    // What this does and does not establish is worth being exact about, because the
-    // obvious reading is wrong. This build finalizes exactly one slot, at startup, and the
-    // seam stops everything after it; there is no second round. So an injection that
-    // begins even a fraction of a second later cannot be a condition the agreed round ran
-    // under, and no choice of timings changes that -- measured, at every rate and gremlin
-    // period tried. Only an adversity present from the first message, such as packet loss,
-    // is one the round ran under.
-    //
-    // What waiting here does establish is that the injection really happened, and that
-    // everything asserted afterwards -- no second certificate, no accepted block, no
-    // finalized marker, the boundary still latched -- is asserted about a node that has
-    // taken the attack. An attack cannot push a node past the seam; that is the
-    // property this build exists to hold. Each condition below is true only once the effect is in place: the node
-    // down, the network cut, the attack message delivered.
     struct Adversity {
       bool configured;
       std::function<bool()> happened;
@@ -1390,704 +1362,206 @@ class TestConsensus : public td::actor::Actor {
         {BYZANTINE_RELAY_NODE >= 0, [] { return BYZANTINE_RELAYS_SENT.load() > 0; },
          "a validator relaying another's signed vote"},
     };
-    auto adversity_deadline = td::Timestamp::in(DURATION * 0.3);
+    auto deadline = td::Timestamp::in(DURATION * 0.8);
     for (const auto& adversity : adversities) {
       if (!adversity.configured) {
         continue;
       }
-      while (!adversity.happened() && !adversity_deadline.is_in_past()) {
+      while (!adversity.happened() && !deadline.is_in_past()) {
         co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
       }
       if (!adversity.happened()) {
-        fail(PSTRING() << "this scenario configures " << adversity.name
-                       << ", but it had not happened before the round was checked");
+        fail(PSTRING() << "this scenario configures " << adversity.name << ", but it never happened");
         co_return td::Unit{};
       }
     }
 
-    // --- Every node reaches an agreed, verified finality certificate ---
-    //
-    // A slot that every node agreed on, and then nothing past the seam. The gate does not
-    // claim how far the round gets: candidate production continues, several slots may
-    // reach an agreed certificate, and exactly one reaches the carrier boundary -- measured
-    // at four and at a hundred nodes. What it does claim is that the slot every node
-    // agreed on is latched at that boundary, and that no block was accepted and no
-    // finalized marker written on any node.
-    // A slot every node finalized -- the intersection, not the smallest count. Nodes that
-    // each finalized a different slot have not agreed on anything, and counting per node
-    // would not notice.
-    auto slot_finalized_by_every_node = [&]() -> std::optional<td::uint32> {
-      std::map<size_t, std::set<td::uint32>> per_node;
-      for (const auto& observation : read_finality_log()) {
-        per_node[observation.node_idx].insert(observation.id.slot);
-      }
-      if (per_node.size() < N_NODES) {
-        return std::nullopt;
-      }
-      std::set<td::uint32> common = per_node.begin()->second;
-      for (const auto& [_, slots] : per_node) {
-        std::set<td::uint32> shared;
-        std::set_intersection(common.begin(), common.end(), slots.begin(), slots.end(),
-                              std::inserter(shared, shared.begin()));
-        common = std::move(shared);
-      }
-      if (common.empty()) {
-        return std::nullopt;
-      }
-      return *common.begin();
-    };
-
-    auto deadline = td::Timestamp::in(DURATION * 0.5);
-    while (!slot_finalized_by_every_node().has_value() && !deadline.is_in_past()) {
+    while ((read_finality_log().empty() || accepted_carriers_.empty()) && !deadline.is_in_past()) {
       co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
     }
-    auto common_slot = slot_finalized_by_every_node();
-    if (!common_slot.has_value()) {
-      fail(PSTRING() << "there is no slot that all " << N_NODES << " nodes finalized");
+    if (read_finality_log().empty()) {
+      fail("no verified FinalCert was observed");
+      co_return td::Unit{};
+    }
+    if (accepted_carriers_.empty()) {
+      fail("a verified FinalCert never reached the post-quantum block-signature carrier");
       co_return td::Unit{};
     }
 
-    auto observations = read_finality_log();
-    std::map<td::uint32, CandidateId> agreed;
-    size_t observations_of_common_slot = 0;
-    for (const auto& observation : observations) {
-      if (auto defect = certificate_defect(observation.cert); !defect.empty()) {
-        fail(PSTRING() << "node " << observation.node_idx << " accepted a finality certificate for slot "
-                       << observation.id.slot << " where " << defect);
-        co_return td::Unit{};
+    std::optional<AcceptedCarrier> accepted;
+    simplex::FinalCertRef certificate;
+    for (const auto& item : accepted_carriers_) {
+      auto slot = item.signatures->pq_slot();
+      auto candidate_data = item.signatures->pq_candidate_data();
+      if (slot.is_error() || candidate_data.is_error()) {
+        continue;
       }
-      if (observation.cert->vote.id != observation.id) {
-        fail(PSTRING() << "node " << observation.node_idx << " observed a certificate for a different candidate "
-                       << "than the slot it was reported under");
-        co_return td::Unit{};
+      auto candidate_hash = td::sha256_bits256(candidate_data.ok().as_slice());
+      auto item_pairs = item.signatures->export_pq_signatures();
+      if (item_pairs.is_error()) {
+        continue;
       }
-      // Two nodes finalizing different candidates for one slot is the failure the whole
-      // protocol exists to prevent, so it is checked across nodes rather than per node.
-      auto [it, inserted] = agreed.emplace(observation.id.slot, observation.id);
-      if (!inserted && it->second != observation.id) {
-        fail(PSTRING() << "nodes disagreed on the candidate finalized at slot " << observation.id.slot);
-        co_return td::Unit{};
+      std::map<ValidatorId, td::Slice> item_by_id;
+      for (const auto& pair : item_pairs.ok()) {
+        item_by_id.emplace(pair.validator_id, pair.signature.as_slice());
       }
-      if (observation.id.slot == *common_slot) {
-        ++observations_of_common_slot;
-      }
-    }
-    if (observations_of_common_slot < N_NODES) {
-      fail(PSTRING() << "slot " << *common_slot << " was finalized by only " << observations_of_common_slot << " of "
-                     << N_NODES << " nodes");
-      co_return td::Unit{};
-    }
-
-    // --- A restarted node presents its journalled signature, not a new one ---
-    //
-    // This is the end-to-end form of the exact-byte property, and it is the step that ties
-    // the journal to what the network actually holds. The restarted node rebuilds its
-    // finality certificate from persisted records -- which re-verifies every signature in
-    // it -- and the signature it contributes must be the one its journal kept. Had replay
-    // signed again, the certificate would still verify, and nothing outside the journal
-    // would ever reveal that this node now holds different bytes than the peers do.
-    // A scenario that is already stopping and starting nodes of its own owns node 0's
-    // lifecycle, and racing it would only produce a harness crash. Those scenarios are
-    // here for agreement under churn, and the replay evidence comes from the variants that
-    // do not churn; the closing line says which of the two this run was.
-    const bool node_churn_active = GREMLIN_PERIOD.first >= 0.0 || NET_GREMLIN_PERIOD.first >= 0.0;
-    size_t checked_against_journals = 0;
-    // Where the log stood before any node was taken down by this gate. A resolver keeps its
-    // latches in memory, so a slot a node observed before its restart has no live latch
-    // afterwards, and asking about one would fail for a reason that is not a leak.
-    size_t observations_before_restart = 0;
-    if (!node_churn_active) {
-      // Any companion scenario that drives node 0 has already finished: the adversity
-      // block at the top of this gate waited for it, which is also what stops node 0 being
-      // taken away mid-flight and the companion reporting a result it never measured.
-      auto& restarted = nodes_[0].instances[0];
-      auto signed_before = own_vote_journal(restarted);
-      std::erase_if(signed_before, [](const JournalledVote& v) { return !v.is_signed; });
-      if (signed_before.empty()) {
-        fail("the node to restart had journalled no signed votes");
-        co_return td::Unit{};
-      }
-      observations_before_restart = read_finality_log().size();
-      co_await stop_instance(0, 0);
-      start_instance(0, 0);
-
-      auto rejoin_deadline = td::Timestamp::in(DURATION * 0.4);
-      auto observed_again = [&]() {
-        auto log = read_finality_log();
-        return std::any_of(log.begin() + static_cast<long>(observations_before_restart), log.end(),
-                           [](const ObservedFinalization& o) { return o.node_idx == 0; });
-      };
-      while (!observed_again() && !rejoin_deadline.is_in_past()) {
-        co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
-      }
-      if (!observed_again()) {
-        fail("the restarted node did not rebuild a finality certificate from its persisted records");
-        co_return td::Unit{};
-      }
-
-      auto signed_after = own_vote_journal(restarted);
-      std::map<td::Slice, td::Slice> after_by_key;
-      for (const auto& entry : signed_after) {
-        after_by_key.emplace(entry.key.as_slice(), entry.value.as_slice());
-      }
-      for (const auto& entry : signed_before) {
-        auto it = after_by_key.find(entry.key.as_slice());
-        if (it == after_by_key.end() || it->second != entry.value.as_slice()) {
-          fail(PSTRING() << "the restarted node's journalled vote at seqno " << entry.seqno
-                         << " did not survive the restart byte for byte");
-          co_return td::Unit{};
+      for (const auto& observed : read_finality_log()) {
+        if (observed.id.slot != slot.ok() || observed.id.hash != candidate_hash ||
+            observed.cert->vote.id != observed.id || observed.cert->signatures.size() != item_by_id.size()) {
+          continue;
         }
-      }
-
-      // The certificate the restarted node rebuilt must carry this node's journalled bytes.
-      auto rebuilt_log = read_finality_log();
-      const ObservedFinalization* rebuilt = nullptr;
-      for (size_t i = observations_before_restart; i < rebuilt_log.size(); ++i) {
-        if (rebuilt_log[i].node_idx == 0) {
-          rebuilt = &rebuilt_log[i];
-          break;
-        }
-      }
-      CHECK(rebuilt != nullptr);
-      if (auto defect = certificate_defect(rebuilt->cert); !defect.empty()) {
-        fail(PSTRING() << "the certificate rebuilt after the restart is defective: " << defect);
-        co_return td::Unit{};
-      }
-      // Every signature in that certificate must be the one its signer journalled. A quorum
-      // certificate need not contain any particular node's signature -- four nodes reach a
-      // quorum with three -- so this checks whichever signers are in it against their own
-      // journals rather than singling one out. It is also the end-to-end form of the
-      // ordering rule: a signature cannot become observable before its record is committed,
-      // so a signature a peer holds must exist, byte for byte, in its signer's journal.
-      auto wanted_vote = serialize_tl_object(simplex::Vote{rebuilt->cert->vote}.to_tl(), true);
-      for (const auto& [validator, signature] : rebuilt->cert->signatures) {
-        auto signer = validator.value();
-        if (signer >= N_NODES) {
-          fail(PSTRING() << "the rebuilt certificate names signer " << signer << ", which is not a node");
-          co_return td::Unit{};
-        }
-        // The journal is held in a named local: own_vote_journal returns by value, and a
-        // slice into the temporary would outlive the buffers it points at.
-        auto signer_journal = own_vote_journal(nodes_[signer].instances[0]);
-        td::Slice journalled;
-        for (const auto& entry : signer_journal) {
-          if (entry.is_signed && serialize_tl_object(entry.vote, true).as_slice() == wanted_vote.as_slice()) {
-            journalled = entry.signature.as_slice();
+        bool exact_certificate = true;
+        for (const auto& [signer_index, signature] : observed.cert->signatures) {
+          const auto index = signer_index.value();
+          if (index >= validators_.size()) {
+            exact_certificate = false;
+            break;
           }
-        }
-        if (journalled.empty()) {
-          fail(PSTRING() << "node " << signer << " contributed a finalize signature it never journalled");
-          co_return td::Unit{};
-        }
-        if (journalled != signature.as_slice()) {
-          fail(PSTRING() << "node " << signer << " is holding a different signature than the one in the certificate");
-          co_return td::Unit{};
-        }
-        ++checked_against_journals;
-      }
-      if (checked_against_journals == 0) {
-        fail("the rebuilt certificate carried no signatures to check against a journal");
-        co_return td::Unit{};
-      }
-    }  // !node_churn_active
-
-    // --- And none of it crossed the carrier seam ---
-    //
-    // The blocked-slot count belongs to the running process, not to the chain, so the
-    // restarted node starts it again from zero and reaches the boundary a second time when
-    // it replays its certificate. Waiting for that is not weakening the assertion: a node
-    // that never gets there fails on the deadline just the same.
-    // Asked about the slot every node agreed on, not about any slot: a count alone would
-    // be satisfied by some unrelated slot latching, which proves nothing about the
-    // certificate this gate just checked.
-    // Generous on purpose: every node has to latch the agreed slot, and at a hundred nodes
-    // under a loaded machine that took 66 seconds against a 60-second budget once. A gate
-    // that fails on scheduling noise teaches people to re-run it.
-    auto boundary_deadline = td::Timestamp::in(DURATION * 0.4);
-    while (true) {
-      bool every_node_reached_it = true;
-      for (size_t node_idx = 0; node_idx < N_NODES && every_node_reached_it; ++node_idx) {
-        for (auto& instance : nodes_[node_idx].instances) {
-          if (instance.status != Instance::Running) {
-            continue;
-          }
-          auto boundary =
-              co_await instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
-          if (!boundary.slot_is_blocked) {
-            every_node_reached_it = false;
+          auto pair = item_by_id.find(validators_[index].validator_id);
+          if (pair == item_by_id.end() || pair->second != signature.as_slice()) {
+            exact_certificate = false;
             break;
           }
         }
-      }
-      if (every_node_reached_it) {
+        if (!exact_certificate) {
+          continue;
+        }
+        accepted = item;
+        certificate = observed.cert;
         break;
       }
-      if (boundary_deadline.is_in_past()) {
-        fail(PSTRING() << "a node finalized slot " << *common_slot
-                       << " without that slot stopping at the block-signature carrier boundary");
-        co_return td::Unit{};
-      }
-      co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
-    }
-
-    // --- A valid transport is not consensus authority ---
-    //
-    // A validator passed another validator's signed vote on as its own, byte for byte, over
-    // its own correctly authenticated transport. Nothing was forged, and a vote carries no
-    // signer field, so the only thing a receiver could attribute it by is the transport it
-    // arrived over. It must not be enough: the signature has to verify under the key the set
-    // records for whoever the message came from, and here it does not.
-    //
-    // The instrument is where the refusal lands. A vote dropped for being too new, for being
-    // unwanted, or for coming from a banned peer is dropped silently and counts nowhere; a
-    // vote that reached the point where attribution is decided and failed there is counted
-    // as a bad signature. Requiring that counter to move is therefore requiring that the
-    // relay got past every other gate and was stopped by this one.
-    //
-    // The control is the run itself: those same bytes, arriving over their own signer's
-    // transport, are what carried this round to an agreed certificate on every node, which
-    // the gate has already required above.
-    if (BYZANTINE_RELAY_NODE >= 0) {
-      size_t refusals = 0;
-      size_t accepted = 0;
-      for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
-        for (auto& instance : nodes_[node_idx].instances) {
-          if (instance.status != Instance::Running) {
-            continue;
-          }
-          auto ingress = co_await instance.bus.publish(std::make_shared<simplex::QueryVoteIngress>());
-          refusals += ingress.refused_bad_signature;
-          accepted += ingress.accepted;
-        }
-      }
-      if (refusals == 0) {
-        fail(PSTRING() << "validator " << BYZANTINE_RELAY_NODE << " relayed " << BYZANTINE_RELAYS_SENT.load()
-                       << " of other validators' signed votes over its own transport and not one was refused for "
-                       << "carrying a signature that does not verify under the sender's key");
-        co_return td::Unit{};
-      }
-      if (accepted == 0) {
-        fail("no vote was accepted anywhere, so the refusals above say nothing about attribution");
-        co_return td::Unit{};
-      }
-    }
-
-    // --- And the whole group stops, not only the slot that latched ---
-    //
-    // The boundary belongs to the validator group, not to one certificate. A node that keeps
-    // voting and collating after reaching it is producing evidence whose finality can never
-    // be carried, while an operator watches a round that looks alive. The slot latch cannot
-    // say anything about that: it reports one certificate's fate.
-    //
-    // "It stopped" is not observable at an instant, so the instrument is a settle window.
-    // Three things the round produces are read twice, a window apart, and have to be
-    // identical: candidates anywhere in the network, every node's own vote journal, and
-    // finality certificates.
-    //
-    // Those three, and not "nothing further happens". A quiescent pool still accepts votes
-    // and certificates from peers, and can still assemble evidence already in flight into a
-    // notarization or a skip certificate; what it stops doing is producing. So the claim is
-    // exactly: no new candidate, no new locally cast vote, and no new finality certificate
-    // after the window. An earlier version of this gate asserted that the round stops
-    // without measuring it, and the count was still moving when it said so.
-    //
-    // Scenarios that churn nodes are excluded, and only those: quiescence lives in memory,
-    // so a node the gremlin has just restarted is legitimately voting again until it
-    // re-reaches the boundary, and a window that lands on one measures the gremlin.
-    struct RoundActivity {
-      size_t candidates = 0;
-      size_t finality_observations = 0;
-      std::vector<size_t> journalled_votes;
-
-      bool operator==(const RoundActivity&) const = default;
-    };
-    auto round_activity = [&]() {
-      RoundActivity activity;
-      activity.candidates = CANDIDATES_GENERATED.load();
-      activity.finality_observations = read_finality_log().size();
-      for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
-        for (const auto& instance : nodes_[node_idx].instances) {
-          activity.journalled_votes.push_back(own_vote_journal(instance).size());
-        }
-      }
-      return activity;
-    };
-
-    const double settle_window = std::clamp(DURATION * 0.05, 0.3, 2.0);
-    if (!node_churn_active) {
-      co_await td::actor::coro_sleep(td::Timestamp::in(settle_window));
-      auto before = round_activity();
-      co_await td::actor::coro_sleep(td::Timestamp::in(settle_window));
-      auto after = round_activity();
-      if (after.candidates != before.candidates) {
-        fail(PSTRING() << "after every node reached the carrier boundary the network produced "
-                       << (after.candidates - before.candidates) << " further candidates in " << settle_window
-                       << "s; the group has not stopped");
-        co_return td::Unit{};
-      }
-      if (after.journalled_votes != before.journalled_votes) {
-        fail(PSTRING() << "after every node reached the carrier boundary a node cast a further vote of its own in "
-                       << settle_window << "s; the group has not stopped");
-        co_return td::Unit{};
-      }
-      if (after.finality_observations != before.finality_observations) {
-        fail(PSTRING() << "after every node reached the carrier boundary the network agreed "
-                       << (after.finality_observations - before.finality_observations)
-                       << " further finality certificates in " << settle_window << "s; the group has not stopped");
-        co_return td::Unit{};
-      }
-    }
-
-    // --- Asking again about a latched slot is answered, never waited on ---
-    //
-    // The latch is terminal, and the danger in a terminal state is that a reader takes it for
-    // one that has simply not arrived yet. This was three booleans, and a caller that read
-    // "not finalized" off a permanently refused entry added itself to a waiter list nobody
-    // was left to drain; the refusal became a hang, in a path with no timeout above it.
-    //
-    // The instrument is the pair of counters, not a gauge: every finalization entered must
-    // settle. A run of further finalizations of an already-latched certificate has to leave
-    // no gap behind, must not convert that certificate again, and must not latch it twice.
-    //
-    // It is asked of a node that is up and has observed the agreed slot, chosen here rather
-    // than fixed in advance. The probes are skipped where a gremlin owns node lifecycles:
-    // the node chosen can be taken down between the choice and the answer, and the resulting
-    // silence would be reported as a hang that never happened. The property is proven by the
-    // variants that do not churn, the same division the journal-replay phase above makes.
-    constexpr size_t repeated_finalizations = 8;
-    simplex::QueryFinalizationState::Result probed;
-    // The resolver reads this too. Reading it here rather than passing it as a flag keeps
-    // the gate and the thing it measures reading the same number, so a scenario cannot
-    // configure one without the other.
-    const size_t pending_finalizations_max = [] {
-      const char* value = std::getenv("TOS_SIMPLEX_PENDING_FINALIZATIONS_MAX");
-      return value == nullptr ? 0u : static_cast<size_t>(std::max(0, td::to_integer<int>(td::Slice(value))));
-    }();
-    const size_t injected_finalization_failures = [] {
-      const char* value = std::getenv("TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES");
-      return value == nullptr ? 0u : static_cast<size_t>(std::max(0, td::to_integer<int>(td::Slice(value))));
-    }();
-    if (!node_churn_active) {
-      std::optional<ObservedFinalization> latched;
-      for (const auto& observation : read_finality_log()) {
-        if (observation.id.slot != *common_slot) {
-          continue;
-        }
-        if (nodes_[observation.node_idx].instances[observation.instance_idx].status != Instance::Running) {
-          continue;
-        }
-        latched = observation;
+      if (accepted.has_value()) {
         break;
       }
-      if (!latched.has_value()) {
-        fail("no running node had observed the agreed slot when the boundary was probed");
-        co_return td::Unit{};
-      }
-      probe_node_idx_ = latched->node_idx;
-      probe_instance_idx_ = latched->instance_idx;
-      auto& probe_instance = nodes_[probe_node_idx_].instances[probe_instance_idx_];
-
-      auto baseline =
-          co_await probe_instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
-      for (size_t i = 0; i < repeated_finalizations; ++i) {
-        probe_instance.bus.publish<simplex::FinalizationObserved>(latched->id, latched->cert);
-      }
-      auto probe_deadline = td::Timestamp::in(std::max(2.0, settle_window * 2));
-      while (true) {
-        probed = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
-        if (probed.finalizations_started >= baseline.finalizations_started + repeated_finalizations &&
-            probed.finalizations_settled == probed.finalizations_started) {
-          break;
-        }
-        if (probe_deadline.is_in_past()) {
-          fail(PSTRING() << "after " << repeated_finalizations
-                         << " further finalizations of a certificate already latched at the carrier boundary, "
-                         << (probed.finalizations_started - probed.finalizations_settled)
-                         << " were still waiting for a verdict nobody is left to deliver");
-          co_return td::Unit{};
-        }
-        co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
-      }
-      if (!probed.slot_is_blocked) {
-        fail(PSTRING() << "slot " << *common_slot << " stopped being latched at the boundary after being asked again");
-        co_return td::Unit{};
-      }
-      if (probed.slot_attempts != baseline.slot_attempts) {
-        fail(PSTRING() << "a certificate already latched at the carrier boundary was converted again ("
-                       << baseline.slot_attempts << " -> " << probed.slot_attempts << " attempts)");
-        co_return td::Unit{};
-      }
-      if (probed.blocked_slots != baseline.blocked_slots) {
-        fail(PSTRING() << "an already-latched slot was counted at the boundary a second time ("
-                       << baseline.blocked_slots << " -> " << probed.blocked_slots << ")");
-        co_return td::Unit{};
-      }
-
-      // A state resolution that walks through a latched candidate asks the resolver the same
-      // question, and the shape that hung answered it with "not yet, wait here". It is run
-      // detached and polled on purpose: a probe that could hang must not be able to hang the
-      // gate, or the failure arrives as a harness timeout with nothing said about why.
-      blocked_state_resolution_answered_ = false;
-      probe_blocked_state_resolution(latched->id).start().detach();
-      auto resolve_deadline = td::Timestamp::in(std::max(2.0, settle_window * 2));
-      while (!blocked_state_resolution_answered_ && !resolve_deadline.is_in_past()) {
-        co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
-      }
-      if (!blocked_state_resolution_answered_) {
-        fail("resolving state through a candidate latched at the carrier boundary never answered");
-        co_return td::Unit{};
-      }
-
-      // --- A finalization refused at the door is kept, not dropped ---
-      //
-      // The failure that costs the most is the one that happens before anything is recorded.
-      // A concurrent-finalization limit rejects the call, the event that carried the
-      // certificate is already consumed, and unless the resolver holds on to it nothing will
-      // ever ask again -- measured once as slots agreed by every node that reached no
-      // boundary at all, and once blocks are accepted it would be a chain that stops.
-      //
-      // Pressure like that cannot be produced by asking politely, so it is built: with the
-      // limit set to one, two finalizations of candidates this resolver has never seen are
-      // published at once. The first takes the only slot and waits for candidate data that
-      // will never arrive, which is what holds the limit closed; the second is refused at
-      // the door, and has to come back rather than disappear. It is deliberately last in the
-      // gate, because it leaves that first finalization outstanding on purpose.
-
-      // --- A failure that does not clear must stop the group, not pile up behind it ---
-      //
-      // Consensus does not wait for a certificate to be converted: the pool advances the
-      // round as soon as a quorum finalizes a slot. While conversion keeps up that is right,
-      // and it is also how one certificate that cannot be converted becomes an unbounded
-      // problem -- every later slot adds another the resolver must hold, each with its own
-      // retry, while the one at the front never completes. Certificates are never dropped to
-      // make room, so what gives is production.
-      //
-      // Three things are required, and the first is that the pressure was real: with the
-      // hold set low and failures injected for long enough to reach it, some node must
-      // actually report a backlog over its limit. Then no node may produce a candidate while
-      // it is in that state, which is the backpressure. And what is held at the end must be
-      // near the limit rather than tracking however far the round got.
-      if (pending_finalizations_max > 0) {
-        if (BACKLOG_OVER_LIMIT_REPORTS.load() == 0) {
-          fail(PSTRING() << "the finalization hold was set to " << pending_finalizations_max << " and "
-                         << injected_finalization_failures
-                         << " conversions were injected to fail, but no node ever reported a backlog over that "
-                         << "limit; the pressure this gate needs was never applied");
-          co_return td::Unit{};
-        }
-        if (CANDIDATES_WHILE_BACKLOGGED.load() != 0) {
-          fail(PSTRING() << "nodes produced " << CANDIDATES_WHILE_BACKLOGGED.load()
-                         << " candidates while holding more agreed certificates than they will; a round that "
-                         << "keeps producing there is piling up work nothing is draining");
-          co_return td::Unit{};
-        }
-        if (probed.pending_finalizations > pending_finalizations_max + N_NODES) {
-          fail(PSTRING() << probed.pending_finalizations << " certificates are being held against a limit of "
-                         << pending_finalizations_max
-                         << "; the hold is meant to bound what accumulates, not to be a number in a log");
-          co_return td::Unit{};
-        }
-      }
-
-      // --- A failure that outlasts the retries still ends at the seam ---
-      //
-      // The property the retry exists for, and the one a count of retries does not show: a
-      // transient condition that lasts longer than the first few attempts must still end
-      // with *this* certificate, the one every node agreed on, reaching the carrier
-      // boundary -- without anything re-announcing it, because the event that carried it
-      // was consumed by the first attempt.
-      //
-      // The condition is injected, because it cannot be produced on demand: a build that
-      // stops at the boundary after one slot has no natural pressure to turn on and off.
-      // The injection fails a fixed number of conversions and then stops, which is what
-      // makes it a transient condition rather than a permanent one, and the number is set
-      // above the count the first version of this code gave up at -- so an implementation
-      // that gives up cannot reach the boundary at all, and this gate is what says so.
-      if (injected_finalization_failures > 0) {
-        // The number the first version of this code gave up at. The injected failures are
-        // shared across every conversion this resolver runs, so how many of them land on
-        // this particular certificate is not fixed -- what has to hold is that it took more
-        // attempts than the old cap allowed, because that is the run in which the old code
-        // erased the entry and lost the certificate for good.
-        constexpr size_t attempts_the_old_code_gave_up_at = 4;
-        // Asked of every node rather than of the one this probe happens to use: the
-        // injected failures are shared across each resolver's own conversions, so which of
-        // them land on this certificate differs between nodes, and a property that holds
-        // only on the node we looked at is not the property.
-        for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
-          for (auto& instance : nodes_[node_idx].instances) {
-            if (instance.status != Instance::Running) {
-              continue;
-            }
-            auto at = co_await instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
-            if (at.slot_attempts <= attempts_the_old_code_gave_up_at) {
-              fail(PSTRING() << "node " << node_idx << " reached the boundary for slot " << *common_slot << " in "
-                             << at.slot_attempts << " attempts, with " << injected_finalization_failures
-                             << " conversions injected to fail. Either the failures never reached this "
-                             << "certificate, or its record was dropped and begun again by something else -- "
-                             << "a peer re-announcing the certificate, or a restart. One record has to survive "
-                             << "all of them, which is what more than " << attempts_the_old_code_gave_up_at
-                             << " attempts on one entry means");
-              co_return td::Unit{};
-            }
-            if (!at.slot_is_blocked) {
-              fail(PSTRING() << "node " << node_idx << " did not reach the boundary for slot " << *common_slot
-                             << " after the injected failures stopped; the certificate was lost rather than retried");
-              co_return td::Unit{};
-            }
-          }
-        }
-        // That it latched exactly once is not re-asserted here, because it is already
-        // proven above and by a sharper instrument: the eight further finalizations left
-        // both the attempt count and the boundary count where they were. The count of
-        // blocked slots is deliberately not used for it -- it counts every slot this node
-        // latched, and injecting failures lets the round reach more of them before the
-        // group goes quiescent, so it says nothing about any one certificate.
-      }
-
-      // Both doors are required to hold, and they are counted apart because either one alone
-      // satisfies "something was retried": the one refused before the attempt began, and the
-      // one that failed inside it -- here, waiting for candidate data that never comes.
-      if (FINALIZATION_RETRY_PROBE) {
-        auto before = probed;
-        for (td::uint32 offset = 1; offset <= 2; ++offset) {
-          CandidateId unseen = latched->id;
-          unseen.slot = latched->id.slot + 1000 * offset;
-          probe_instance.bus.publish<simplex::FinalizationObserved>(unseen, latched->cert);
-        }
-        auto retry_deadline = td::Timestamp::in(std::max(4.0, settle_window * 4));
-        while (true) {
-          probed = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
-          const bool at_admission = probed.finalization_retries_at_admission > before.finalization_retries_at_admission;
-          const bool inside_attempt = (probed.finalization_retries - probed.finalization_retries_at_admission) >
-                                      (before.finalization_retries - before.finalization_retries_at_admission);
-          if (at_admission && inside_attempt) {
-            break;
-          }
-          if (retry_deadline.is_in_past()) {
-            fail(PSTRING() << "a finalization that failed for a reason that may not recur was dropped instead of "
-                           << "being tried again (refused at the concurrency limit: " << at_admission
-                           << ", failed inside the attempt: " << inside_attempt << ")");
-            co_return td::Unit{};
-          }
-          co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
-        }
-      }
-    }  // !node_churn_active
-
-    // The boundary is announced once per node, not once per certificate that meets it. A
-    // node latches every certificate it agrees on against the same seam, so without that
-    // rule the count rises with the round; with it, a node that reached the boundary says
-    // so exactly once. A node the gate restarted announces again after coming back, which
-    // is a second process rather than a second announcement, so the count is read before
-    // restarts are allowed to have happened -- which is to say, only where none churn.
-    if (!node_churn_active) {
-      std::scoped_lock lock(boundary_announcement_mutex);
-      for (const auto& [instance, announcements] : boundary_announcements) {
-        const size_t allowed = instance == std::pair<size_t, size_t>{0, 0} ? 2 : 1;
-        if (announcements > allowed) {
-          fail(PSTRING() << "node " << instance.first << "." << instance.second << " announced the carrier boundary "
-                         << announcements << " times; it is one announcement per node, whatever else meets the seam");
-          co_return td::Unit{};
-        }
-      }
     }
-
-    for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
-      for (size_t instance_idx = 0; instance_idx < nodes_[node_idx].instances.size(); ++instance_idx) {
-        auto& instance = nodes_[node_idx].instances[instance_idx];
-        if (instance.status != Instance::Running) {
-          continue;
-        }
-        if (auto markers = finalized_marker_count(instance); markers != 0) {
-          fail(PSTRING() << "node " << node_idx << "." << instance_idx << " wrote " << markers
-                         << " finalized-block markers");
-          co_return td::Unit{};
-        }
-      }
-    }
-    // Unlike the two checks above, nothing can currently make this one fire: reaching it
-    // needs a block signature set that verifies, and the legacy carrier refuses a
-    // post-quantum validator outright, so a build that got past the seam would abort in
-    // the harness's own verification before arriving here. It is kept because the carrier is what
-    // makes acceptance possible, and this is the line that should start being able to fail
-    // then -- for the right reason.
-    // Deliberately not asserted: that every slot reaching an agreed certificate is latched
-    // at the boundary. The reason it was not true has since been fixed -- a finalization
-    // that fails for a reason that may not recur is now kept and retried for as long as the
-    // group lives, rather than erased with nothing left to ask for it -- so the shortfall
-    // that was measured here, where a loaded hundred-node run latched slot 0 everywhere and
-    // slots 2 and 3 nowhere, no longer has that cause.
-    //
-    // It stays unasserted because it is still not something this gate can promise. A slot
-    // that reaches an agreed certificate just as the group goes quiescent may simply not
-    // have been converted yet when the run ends, and an assertion that depends on when a
-    // run stops is worse than no assertion. What the gate requires of the boundary is above:
-    // the slot every node agreed on, latched on every node -- and, when failures are
-    // injected, latched after more attempts than the old code would have allowed.
-    std::set<td::uint32> observed_slots;
-    {
-      auto log = read_finality_log();
-      for (size_t i = observations_before_restart; i < log.size(); ++i) {
-        observed_slots.insert(log[i].id.slot);
-      }
-    }
-
-    if (accepted_block_count_ != 0) {
-      fail(PSTRING() << "the network accepted " << accepted_block_count_
-                     << " blocks; a build with no carrier has no carrier to accept one with");
+    if (certificate.is_null()) {
+      fail("no observed FinalCert matches an accepted post-quantum carrier's candidate and exact signature bytes");
       co_return td::Unit{};
     }
-    if (last_accepted_block_ != FIRST_PARENT) {
-      fail("a block was accepted past the genesis parent");
+    if (auto defect = certificate_defect(certificate); !defect.empty()) {
+      fail(PSTRING() << "the accepted FinalCert is defective: " << defect);
       co_return td::Unit{};
     }
 
-    LOG(WARNING) << "PQ finality: " << observed_slots.size() << " slot(s) reached an agreed certificate somewhere; "
-                 << N_NODES << " nodes agreed on the certificate for slot " << *common_slot
-                 << " and verified every signature in it; "
-                 << (node_churn_active ? "the restart phase was skipped because this scenario churns nodes itself"
-                                       : PSTRING() << "a restart rebuilt that certificate from persisted records and "
-                                                      "its "
-                                                   << checked_against_journals
-                                                   << " signatures matched their signers' journals byte for byte")
-                 << "; every node stopped at the carrier boundary with no block accepted and no finalized marker "
-                 << "written"
-                 << (node_churn_active ? std::string("")
-                                       : PSTRING()
-                                             << "; node " << probe_node_idx_ << " answered " << repeated_finalizations
-                                             << " further finalizations of that certificate from the latch, "
-                                             << "resolved state through it, and retried " << probed.finalization_retries
-                                             << " finalization(s) that had failed transiently")
-                 << (pending_finalizations_max == 0
-                         ? std::string("")
-                         : PSTRING() << "; the finalization hold of " << pending_finalizations_max
-                                     << " was reported over " << BACKLOG_OVER_LIMIT_REPORTS.load()
-                                     << " time(s), no candidate was produced while it was, and "
-                                     << probed.pending_finalizations << " certificate(s) are still held");
+    auto carried = accepted->signatures->export_pq_signatures().move_as_ok();
+    auto persisted_cell = accepted->signatures->serialize(validator_set_).move_as_ok();
+    auto persisted_boc = vm::std_boc_serialize(persisted_cell, 31).move_as_ok();
+    auto roundtrip_store = std::make_shared<TestDbImpl::DbInner>();
+    TestDbImpl roundtrip_db(roundtrip_store);
+    td::BufferSlice roundtrip_key("pq-finality-carrier-roundtrip");
+    co_await roundtrip_db.set(roundtrip_key.clone(), persisted_boc.clone());
+    auto loaded_boc = co_await roundtrip_db.get_latest(roundtrip_key.clone());
+    if (!loaded_boc.has_value()) {
+      fail("the database round trip did not return the post-quantum carrier");
+      co_return td::Unit{};
+    }
+    auto loaded_cell = vm::std_boc_deserialize(loaded_boc->as_slice()).move_as_ok();
+    auto db_roundtrip = block::BlockSignatureSet::fetch(loaded_cell, validator_set_).move_as_ok();
+    auto db_pairs = db_roundtrip->export_pq_signatures().move_as_ok();
+
+    vm::CellBuilder proof_builder;
+    td::Ref<vm::Cell> proof_cell;
+    auto proof_payload = vm::CellBuilder{}.finalize_novm();
+    if (!proof_builder.store_long_bool(0xc3, 8)) {
+      fail("could not store the BlockProof constructor");
+      co_return td::Unit{};
+    }
+    if (!block::tlb::t_BlockIdExt.pack(proof_builder, accepted->block_id)) {
+      fail("could not store the BlockProof block id");
+      co_return td::Unit{};
+    }
+    if (!proof_builder.store_ref_bool(std::move(proof_payload))) {
+      fail("could not store the BlockProof payload");
+      co_return td::Unit{};
+    }
+    if (!proof_builder.store_bool_bool(true)) {
+      fail("could not store the BlockProof signature presence bit");
+      co_return td::Unit{};
+    }
+    if (!proof_builder.store_ref_bool(persisted_cell)) {
+      fail("could not store the BlockProof signature set");
+      co_return td::Unit{};
+    }
+    if (!proof_builder.finalize_to(proof_cell)) {
+      fail("could not finalize the BlockProof round-trip fixture");
+      co_return td::Unit{};
+    }
+    block::gen::BlockProof::Record proof;
+    if (!block::gen::t_BlockProof.cell_unpack(proof_cell, proof) || proof.signatures.is_null() ||
+        proof.signatures->size_refs() != 1) {
+      fail("could not load the post-quantum carrier from BlockProof");
+      co_return td::Unit{};
+    }
+    auto proof_set = block::BlockSignatureSet::fetch(proof.signatures->prefetch_ref(), validator_set_).move_as_ok();
+    auto proof_pairs = proof_set->export_pq_signatures().move_as_ok();
+
+    auto by_id = [](const std::vector<block::PQBlockSignature>& pairs) {
+      std::map<ValidatorId, td::Slice> result;
+      for (const auto& pair : pairs) {
+        result.emplace(pair.validator_id, pair.signature.as_slice());
+      }
+      return result;
+    };
+    auto carried_by_id = by_id(carried);
+    auto db_by_id = by_id(db_pairs);
+    auto proof_by_id = by_id(proof_pairs);
+    size_t compared = 0;
+    auto wanted_vote = serialize_tl_object(simplex::Vote{certificate->vote}.to_tl(), true);
+    for (const auto& [signer_index, cert_bytes] : certificate->signatures) {
+      const auto index = signer_index.value();
+      if (index >= nodes_.size()) {
+        fail(PSTRING() << "FinalCert signer " << index << " is outside the node set");
+        co_return td::Unit{};
+      }
+      auto journal = own_vote_journal(nodes_[index].instances[0]);
+      td::Slice journal_bytes;
+      for (const auto& entry : journal) {
+        if (entry.is_signed && serialize_tl_object(entry.vote, true).as_slice() == wanted_vote.as_slice()) {
+          journal_bytes = entry.signature.as_slice();
+        }
+      }
+      const auto validator_id = validators_[index].validator_id;
+      auto carrier_it = carried_by_id.find(validator_id);
+      auto db_it = db_by_id.find(validator_id);
+      auto proof_it = proof_by_id.find(validator_id);
+      if (journal_bytes.empty() || carrier_it == carried_by_id.end() || db_it == db_by_id.end() ||
+          proof_it == proof_by_id.end()) {
+        fail(PSTRING() << "signer " << index << " is missing from exact-byte source(s): journal="
+                       << !journal_bytes.empty() << " carrier=" << (carrier_it != carried_by_id.end())
+                       << " db=" << (db_it != db_by_id.end()) << " block-proof=" << (proof_it != proof_by_id.end()));
+        co_return td::Unit{};
+      }
+      if (journal_bytes != cert_bytes.as_slice() || cert_bytes.as_slice() != carrier_it->second ||
+          carrier_it->second != db_it->second || db_it->second != proof_it->second) {
+        fail(PSTRING() << "EXACT_SIGNATURE_BYTES_MISMATCH signer=" << index
+                       << " journal/final-cert/carrier/db/block-proof are not byte-identical");
+        co_return td::Unit{};
+      }
+      ++compared;
+    }
+    if (compared == 0) {
+      fail("the accepted carrier contained no signatures to compare");
+      co_return td::Unit{};
+    }
+    if (accepted_block_count_ == 0 || last_accepted_block_ == FIRST_PARENT) {
+      fail("the post-quantum carrier was built but no block was accepted");
+      co_return td::Unit{};
+    }
+
+    LOG(WARNING) << "PQ finality carrier: compared " << compared
+                 << " signature(s) byte-for-byte across journal, FinalCert, #13 carrier, database round trip and "
+                    "BlockProof; carrier-missing count=0; accepted blocks="
+                 << accepted_block_count_;
     pq_finality_completed_ = true;
-    co_return td::Unit{};
-  }
-
-  // Ask node 0 to resolve chain state through a candidate that is latched at the carrier
-  // boundary, and record only that an answer came back. Which answer it is does not matter:
-  // a build with no carrier has no accepted chain, so either outcome is legitimate. What is being
-  // measured is that the resolver answers at all.
-  td::actor::Task<> probe_blocked_state_resolution(CandidateId id) {
-    auto ignored = co_await nodes_[probe_node_idx_]
-                       .instances[probe_instance_idx_]
-                       .bus.publish(std::make_shared<simplex::ResolveState>(ParentId{id}))
-                       .wrap();
-    blocked_state_resolution_answered_ = true;
     co_return td::Unit{};
   }
 
   // ===== A failure retrying cannot mend =====
   //
-  // Everything that was not the carrier boundary used to be treated as transient, which is
+  // Every finalization failure used to be treated as transient, which is
   // not a policy but the absence of one: it commits a node to retrying a protocol violation
   // for as long as it lives. The resolver now classifies, and this is the branch nothing in
-  // a build with no carrier can reach on its own -- so it is injected, and what is required of it
+  // production cannot reach deterministically -- so it is injected, and what is required of it
   // is the three things that make the classification worth having.
   //
   // The certificate is kept, because it is still evidence a quorum agreed. It is not
@@ -2303,12 +1777,9 @@ class TestConsensus : public td::actor::Actor {
     // the stop arrived is legitimately left as an intent; that is the state the journal
     // exists to express, and phase 3 shows how it recovers. What must hold here is that
     // every record the node did finish carries a signature it can prove is its own.
-    // Two, because two is all a single validator casts in a build with no carrier: it notarizes
-    // slot 0, is its own quorum, finalizes it, and the group then reaches the carrier
-    // boundary and stops taking new votes. Asking for more would be asking the round to keep
-    // going past the point this build deliberately stops at. Two is still every shape the
-    // later phases need -- one record to compare byte for byte across a restart, and one to
-    // downgrade to an intent and watch be signed again.
+    // Two is the minimum complete local vote pair: notarize and finalize one candidate.
+    // It is also every shape the later phases need -- one record to compare byte for byte
+    // across a restart, and one to downgrade to an intent and watch be signed again.
     constexpr size_t REQUIRED_VOTES = 2;
     auto signed_count = [&] {
       auto journal = own_vote_journal(instance);
@@ -2952,9 +2423,11 @@ class TestConsensus : public td::actor::Actor {
   std::string pq_finality_error_;
   bool permanent_finalization_completed_ = false;
   std::string permanent_finalization_error_;
-  bool blocked_state_resolution_answered_ = false;
-  size_t probe_node_idx_ = 0;
-  size_t probe_instance_idx_ = 0;
+  struct AcceptedCarrier {
+    BlockIdExt block_id;
+    td::Ref<block::BlockSignatureSet> signatures;
+  };
+  std::vector<AcceptedCarrier> accepted_carriers_;
   size_t accepted_block_count_ = 0;
   bool finishing_ = false;
 };
@@ -2975,19 +2448,23 @@ td::actor::Task<> TestManagerFacade::accept_block(BlockIdExt id, td::Ref<BlockDa
     CHECK(decoded->get_id() == tos_api::tosNode_blockFinalityBroadcast::ID);
     auto finality = move_tl_object_as<tos_api::tosNode_blockFinalityBroadcast>(decoded);
     CHECK(create_block_id(finality->id_) == id);
-    auto decoded_signatures = block::BlockSignatureSet::fetch(finality->signature_set_);
-    CHECK(decoded_signatures.not_null());
+    auto decoded_signatures = block::BlockSignatureSet::fetch_node_checked(finality->signature_set_).move_as_ok();
     CHECK(decoded_signatures->is_final());
     CHECK(decoded_signatures->get_catchain_seqno() == signatures->get_catchain_seqno());
     CHECK(decoded_signatures->get_validator_set_hash() == signatures->get_validator_set_hash());
-    decoded_signatures->check_signatures(validator_set_, id).ensure();
+    decoded_signatures
+        ->check_pq_signatures_under_carried_session_for_test(validator_set_, id, block::FinalityRole::Final)
+        .ensure();
     auto tampered_id = id;
     tampered_id.id.seqno++;
-    CHECK(decoded_signatures->check_signatures(validator_set_, tampered_id).is_error());
+    CHECK(decoded_signatures
+              ->check_pq_signatures_under_carried_session_for_test(validator_set_, tampered_id,
+                                                                    block::FinalityRole::Final)
+              .is_error());
 
     auto tampered_signature_tl = signatures->tl();
-    CHECK(tampered_signature_tl->get_id() == tos_api::tosNode_signatureSet_simplex::ID);
-    auto* tampered_signature = static_cast<tos_api::tosNode_signatureSet_simplex*>(tampered_signature_tl.get());
+    CHECK(tampered_signature_tl->get_id() == tos_api::tosNode_signatureSet_simplexPq::ID);
+    auto* tampered_signature = static_cast<tos_api::tosNode_signatureSet_simplexPq*>(tampered_signature_tl.get());
     CHECK(!tampered_signature->signatures_.empty());
     CHECK(!tampered_signature->signatures_.front()->signature_.empty());
     auto original_signature = tampered_signature->signatures_.front()->signature_.as_slice();
@@ -2995,16 +2472,19 @@ td::actor::Task<> TestManagerFacade::accept_block(BlockIdExt id, td::Ref<BlockDa
     std::memcpy(tampered_signature_bytes.data(), original_signature.data(), original_signature.size());
     tampered_signature_bytes.data()[0] ^= 0x01;
     tampered_signature->signatures_.front()->signature_ = std::move(tampered_signature_bytes);
-    auto tampered_signature_set = block::BlockSignatureSet::fetch(tampered_signature_tl);
-    CHECK(tampered_signature_set.not_null());
-    CHECK(tampered_signature_set->check_signatures(validator_set_, id).is_error());
+    auto tampered_signature_set = block::BlockSignatureSet::fetch_node_checked(tampered_signature_tl).move_as_ok();
+    CHECK(tampered_signature_set
+              ->check_pq_signatures_under_carried_session_for_test(validator_set_, id, block::FinalityRole::Final)
+              .is_error());
 
     auto wrong_validator_set_tl = signatures->tl();
-    auto* wrong_validator_set = static_cast<tos_api::tosNode_signatureSet_simplex*>(wrong_validator_set_tl.get());
+    auto* wrong_validator_set = static_cast<tos_api::tosNode_signatureSet_simplexPq*>(wrong_validator_set_tl.get());
     wrong_validator_set->validator_set_hash_ ^= 0x01;
-    auto wrong_validator_set_signatures = block::BlockSignatureSet::fetch(wrong_validator_set_tl);
-    CHECK(wrong_validator_set_signatures.not_null());
-    CHECK(wrong_validator_set_signatures->check_signatures(validator_set_, id).is_error());
+    auto wrong_validator_set_signatures =
+        block::BlockSignatureSet::fetch_node_checked(wrong_validator_set_tl).move_as_ok();
+    CHECK(wrong_validator_set_signatures
+              ->check_pq_signatures_under_carried_session_for_test(validator_set_, id, block::FinalityRole::Final)
+              .is_error());
   }
   td::actor::ask(test_consensus_, &TestConsensus::on_block_accepted, node_idx_, instance_idx_, data, creator_idx,
                  signatures)

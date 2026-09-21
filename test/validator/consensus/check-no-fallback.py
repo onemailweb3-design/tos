@@ -28,7 +28,7 @@ CONSENSUS = ROOT / "validator" / "consensus"
 
 RULES = [
     (
-        re.compile(r"BlockSignatureSet::(create\w*|fetch)"),
+        re.compile(r"BlockSignatureSet::(create(?!_simplex_pq_)\w*|fetch)"),
         "constructs a legacy block signature set",
         None,
     ),

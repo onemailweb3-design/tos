@@ -174,19 +174,9 @@ set_tests_properties(
     PROPERTIES ENVIRONMENT
         "TOS_SIMPLEX_STATE_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_FINALIZED_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_CANDIDATE_RETENTION_SLOTS=8"
 )
-# The post-quantum round end to end, and the boundary it stops at. A slot finalized
-# by every node, every signature in its certificate verified independently, a restart that
-# rebuilds that certificate from persisted records with signatures matching their signers'
-# journals, that slot latched at the carrier boundary, and then nothing: no accepted block
-# and no finalized-block marker on any node.
-#
-# How far the round gets is now part of the claim, because the group stops at the boundary
-# rather than only latching the slot that reached it. Measured after that change: one slot
-# reaches an agreed certificate, at four nodes and at a hundred, and it is slot 0 both times.
-# What the gate requires is that the slot every node agreed on is latched on every node, that
-# the group then produces no further candidate, vote or certificate across a settle window,
-# and that asking about a latched slot again is answered from the latch rather than waited
-# on.
+# The post-quantum round end to end. It observes a verified FinalCert becoming the #13
+# carrier and an accepted block, and compares every carried signature byte-for-byte with
+# its signer journal, the FinalCert, a database round trip and a BlockProof load.
 add_test(
     NAME test-consensus-simplex2-pq-finality-e2e-single
     COMMAND test-consensus --duration 40 --n-nodes 1 --target-rate-ms 100
@@ -213,8 +203,7 @@ add_test(
 # The same gate with the finalization concurrency limit set to one, which is what lets the
 # retry probe build the pressure it needs: a finalization refused before its attempt begins,
 # and one that fails inside it. Both have to come back rather than disappear -- a certificate
-# dropped with nothing left to ask for it again costs nothing in a build with no carrier, where the
-# chain does not advance either way, and is a stuck chain once blocks are accepted.
+# dropped with nothing left to ask for it again becomes a stuck chain once blocks are accepted.
 add_test(
     NAME test-consensus-simplex2-pq-finality-retry
     COMMAND test-consensus --duration 40 --n-nodes 4 --target-rate-ms 100
@@ -226,11 +215,11 @@ set_tests_properties(
 )
 # The property the retry exists for, which a count of retries does not show: a transient
 # condition that outlasts the first several attempts still ends with the certificate every
-# node agreed on reaching the carrier boundary, and nothing re-announces it -- the event
-# that carried it was consumed by the first attempt.
+# node agreed on being finalized, and nothing re-announces it -- the event that carried it
+# was consumed by the first attempt.
 #
 # Twelve injected failures, against the four the first version of this code gave up at. An
-# implementation that gives up loses the certificate here and never reaches the boundary at
+# implementation that gives up loses the certificate here and never finalizes it at
 # all, which is what the gate reports. The condition is injected because a build that stops
 # after one slot has no natural pressure that can be turned on and then off.
 add_test(
@@ -262,7 +251,7 @@ set_tests_properties(
         "TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES=12;TOS_SIMPLEX_PENDING_FINALIZATIONS_MAX=1"
 )
 # The other half of the same policy: a failure retrying cannot mend. Nothing before the
-# carrier seam produces one in this build, so it is injected -- and without that, the branch
+# normal test traffic does not produce one, so it is injected -- and without that, the branch
 # that handles it would be a guard no input can reach, which is the same as not having
 # written it. The certificate is kept, because it is still evidence a quorum agreed; it is
 # not retried, because that is what the classification says is pointless here; and one of
@@ -388,21 +377,9 @@ add_test(
             -s ${CMAKE_CURRENT_SOURCE_DIR}/simplex2-genesis-config.fif
 )
 
-# These scenarios assert that blocks are finalized and accepted, which a build with no carrier
-# cannot do: the carrier seam refuses to turn a post-quantum finality certificate into a
-# block signature set, so no block is ever accepted. They are legacy regression tests for
-# behaviour that only exists once a post-quantum block-signature carrier exists.
-#
-# Eight of the ten originally disabled here have come back as pq- variants above: their
-# attack machinery never needed the carrier, only their `--min-finalized-blocks` assertion did, and
-# the post-quantum gate gives them a liveness floor in its place. What is left are the two
-# whose subject really is the accepted chain -- catching up to a finalized height, and
-# rebuilding after thousands of empty blocks.
-#
-# They are disabled rather than deleted, and disabled rather than left failing: ctest
-# reports a disabled test as disabled, so the gap stays visible instead of turning the
-# suite red for a reason nobody reads, or green for a reason nobody checked. Restoring the carrier removes
-# this block and they must pass again.
+# These are the legacy full-finalization scenarios. Their post-quantum adversarial
+# counterparts run above; the accepted-chain catch-up and empty-chain restart cases remain
+# tracked separately until their harness assumptions are migrated.
 set_tests_properties(
     test-consensus-simplex2-loss
     test-consensus-simplex2-restart

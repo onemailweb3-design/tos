@@ -34,21 +34,6 @@ using StartEvent = std::shared_ptr<const Start>;
 
 struct StopRequested {};
 
-// This group has reached the block-signature carrier boundary: a certificate was agreed and verified,
-// and the conversion into block finality refused because that carrier does not exist yet.
-//
-// It is published once, and it is what makes the boundary a property of the group rather
-// than of one slot. The ruling is that an interim group stays alive but quiescent: the
-// actors keep answering queries and the manager keeps a healthy entry, and nothing new is
-// produced, because producing it would be work on a chain that cannot advance. Latching
-// only the slot left Consensus, Pool and the producer voting and collating past a boundary
-// they had no way to learn about.
-struct BlockSignatureCarrierMissing {
-  td::uint32 slot;
-
-  std::string contents_to_string() const;
-};
-
 // Finality has fallen far enough behind that this group must stop getting further ahead of
 // it, or has caught up again.
 //
@@ -59,7 +44,7 @@ struct BlockSignatureCarrierMissing {
 // one at the front never completes. Certificates are never dropped to make room, so the
 // group stops producing instead, and starts again when the backlog clears.
 //
-// Unlike the carrier boundary this is reversible, and it says which way it went.
+// The condition is reversible, and the event says which way it went.
 struct FinalizationBacklog {
   bool over_limit;
   size_t pending;
@@ -218,7 +203,7 @@ class Bus : public td::actor::Bus {
                               CandidateReceived, ValidationRequest, IncomingProtocolMessage, OutgoingProtocolMessage,
                               IncomingOverlayRequest, OutgoingOverlayRequest, BlockFinalizedInMasterchain,
                               MisbehaviorReport, TraceEvent, NoncriticalParamsUpdated, PrecheckCandidateBroadcast,
-                              BlockSignatureCarrierMissing, FinalizationBacklog>;
+                              FinalizationBacklog>;
 
   Bus() = default;
   ~Bus() override {

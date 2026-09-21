@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: LGPL-2.0-or-later
  */
 
+#include <algorithm>
+
 #include "td/utils/overloaded.h"
 #include "tos/quorum.h"
 #include "validator/consensus/bus.h"
@@ -94,28 +96,78 @@ td::Result<td::Ref<block::BlockSignatureSet>> Certificate<T>::to_signature_set(c
                                                                                const Bus& bus) const
   requires td::OneOf<T, NotarizeVote, FinalizeVote>
 {
-  CHECK(candidate->id == vote.id);
+  if (candidate.is_null()) {
+    return td::Status::Error("pq certificate conversion: missing candidate");
+  }
+  if (candidate->id != vote.id) {
+    return td::Status::Error("pq certificate conversion: vote id does not match candidate id");
+  }
+  if (candidate->hash_data().build_id_with(vote.id.slot) != vote.id) {
+    return td::Status::Error("pq certificate conversion: candidate hash data does not reconstruct candidate id");
+  }
+  if (candidate->hash_data().block() != candidate->block_id()) {
+    return td::Status::Error("pq certificate conversion: candidate hash data does not reconstruct block id");
+  }
 
-  // The carrier seam.
-  //
-  // Everything up to here is this build's: the votes are post-quantum, the quorum is weighted, and
-  // every signature in this certificate has been verified against the key the validator set
-  // records. Turning that certificate into a block::BlockSignatureSet is where the carrier work begins,
-  // and the only carrier that exists today is the legacy one: its serializer writes
-  // `ed25519_signature#5` and takes exactly 64 bytes per signature, and its verification
-  // refuses a post-quantum validator outright. A 2420-byte signature cannot enter it.
-  //
-  // So this refuses, and it refuses *here* -- before any legacy object is constructed. The
-  // construction is not skipped behind a condition, it is absent: there is no branch, flag
-  // or build option in this function that can produce a legacy set from a post-quantum
-  // certificate. The post-quantum carrier replaces this refusal; until then a node
-  // can agree on finality and cannot persist it, which is exactly what a build with no carrier is.
-  return td::Status::Error(
-      carrier_missing_error_code,
-      PSTRING()
-          << "block-signature carrier not implemented: a post-quantum Simplex certificate (session "
-          << bus.session_id.to_hex() << ", slot " << vote.id.slot
-          << ") cannot be converted into a block signature set until a post-quantum block-signature carrier exists");
+  std::vector<const VoteSignature*> ordered;
+  ordered.reserve(signatures.size());
+  for (const auto& signature : signatures) {
+    ordered.push_back(&signature);
+  }
+  std::sort(ordered.begin(), ordered.end(), [](const auto* lhs, const auto* rhs) {
+    return lhs->validator.value() < rhs->validator.value();
+  });
+
+  std::vector<bool> seen(bus.validator_set.size(), false);
+  std::vector<block::PQBlockSignature> carried;
+  carried.reserve(ordered.size());
+  ValidatorWeight weight = 0;
+  for (const auto* item : ordered) {
+    const auto index = item->validator.value();
+    if (index >= bus.validator_set.size()) {
+      return td::Status::Error(PSTRING() << "pq certificate conversion: validator index " << index
+                                         << " is outside the trusted set");
+    }
+    if (seen[index]) {
+      return td::Status::Error(PSTRING() << "pq certificate conversion: duplicate validator index " << index);
+    }
+    seen[index] = true;
+    const auto& descriptor = bus.validator_set[index];
+    if (!tos::pq::valid_public_key(descriptor.consensus_key.algorithm_id,
+                                  descriptor.consensus_key.public_key)) {
+      return td::Status::Error(PSTRING() << "pq certificate conversion: validator " << index
+                                         << " has a malformed or unadmitted consensus descriptor");
+    }
+    auto derived_key_id = tos::pq::derive_key_id(descriptor.consensus_key.algorithm_id,
+                                                  descriptor.consensus_key.public_key);
+    if (!derived_key_id || *derived_key_id != descriptor.consensus_key.key_id) {
+      return td::Status::Error(PSTRING() << "pq certificate conversion: validator " << index
+                                         << " consensus key id disagrees with its public key");
+    }
+    if (!tos::pq::valid_signature(descriptor.consensus_key.algorithm_id,
+                                  std::string_view(item->signature.data(), item->signature.size()))) {
+      return td::Status::Error(PSTRING() << "pq certificate conversion: validator " << index
+                                         << " has a signature of the wrong length");
+    }
+    if (!tos::checked_add_validator_weight(weight, descriptor.weight)) {
+      return td::Status::Error("pq certificate conversion: validator weight sum exceeds protocol cap");
+    }
+    carried.push_back(block::PQBlockSignature{descriptor.validator_id, descriptor.consensus_key.algorithm_id,
+                                               item->signature.clone()});
+  }
+  if (weight < tos::quorum_threshold(bus.total_weight)) {
+    return td::Status::Error("pq certificate conversion: certificate is below weighted quorum");
+  }
+
+  if constexpr (std::same_as<T, FinalizeVote>) {
+    return block::BlockSignatureSet::create_simplex_pq_final(std::move(carried), bus.cc_seqno,
+                                                              bus.validator_set_hash, bus.session_id, vote.id.slot,
+                                                              candidate->hash_data().to_tl());
+  } else {
+    return block::BlockSignatureSet::create_simplex_pq_approve(std::move(carried), bus.cc_seqno,
+                                                                bus.validator_set_hash, bus.session_id, vote.id.slot,
+                                                                candidate->hash_data().to_tl());
+  }
 }
 
 template <ValidVote T>
