@@ -43,17 +43,19 @@ The interesting part is not the total. It is where the total goes.
 
 | | share of the total | share that is the computation |
 | --- | ---: | ---: |
-| Merkle paths | 30% | **0.14%** |
+| Merkle paths | 30% | **12%** |
 | FRI folding | 70% | 87% is extension multiplication, of which **10%** is the multiply |
 
 A Merkle level costs 1,422 gas of which the SHA256 over sixty-four bytes is
-**two**. The rest is `begin_cell()` at 500, cell loads at 100 each, and slice
-handling. One cubic-extension multiplication costs 2,431 gas of which nine
-`muldivmod` instructions are about 234.
+**170**, measured. The rest is `begin_cell()` at 500, cell loads at 100 each,
+and slice handling. One cubic-extension multiplication costs 2,431 gas of
+which nine `muldivmod` instructions are about 234.
 
-So the cost is not the cryptography. It is the interpreter. These
-instructions do not make the arithmetic faster; they remove the interpreter
-from around it.
+So most of the cost is not the cryptography. It is the interpreter -- seven
+eighths of a Merkle level and nine tenths of an extension multiplication.
+These instructions do not make the arithmetic faster; they remove the
+interpreter from around it. What they cannot remove is the hashing itself,
+which section 4.1 prices.
 
 This is also why Groth16 is cheap here and expensive on the EVM: the hard
 part is one native instruction, `BLS_PAIRING`. The question was never
@@ -101,7 +103,11 @@ proof system needs it, and it fixes no FRI parameter.
 combined on the left when bit `i` of `index` is set and on the right
 otherwise, and the pair is hashed as sixty-four bytes.
 
-The hash is **SHA256**, fixed by the opcode.
+The hash is **SHA256**, fixed by the opcode. The instruction already exists
+as `SHA256U` (0xf902) and is not what is being added: what is being added is
+the loop around it. At 170 gas a hash and 1,422 gas a level, an instruction
+that walks the whole path removes about 1,250 gas of bookkeeping per level
+and keeps the 170.
 
 > Poseidon2 must not be used for this. At 3,500 gas a permutation, 3,720
 > levels is 13M gas -- worse than the FunC loop it would replace. The
@@ -141,28 +147,32 @@ MERKLE_PATH_ROOT   base + depth * per_level
 FRI_FOLD8          flat
 ```
 
-### 4.1 A pricing problem this work uncovered, independent of any of the above
+### 4.1 Where SHA256 actually sits, and a correction
 
-Hashing appears to be underpriced relative to the Poseidon2 tariff that was
-frozen at 3,500.
+An earlier draft of this document claimed SHA256 was seven to twelve times
+underpriced against the Poseidon2 tariff and called it a denial-of-service
+surface. **That was wrong, and wrong in the direction that matters.** The
+figure came from the `HASHEXT` formula, `1 + bytes/33`; `SHA256U` is a
+different opcode with different accounting. Measured rather than derived, one
+SHA256 of sixty-four bytes costs **170 gas**.
 
 | | ns per gas |
 | --- | ---: |
 | POSEIDON2_PERM8, C++ VM | 5.5 |
 | POSEIDON2_PERM8, Rust VM | 9.2 |
-| SHA256 at `1 + bytes/33` | about 66 |
+| SHA256U, measured at 170 gas | about 1.2 to 2.9 |
 
-Seven to twelve times cheaper per unit of work than the instruction whose
-price was just set by measurement. That is a denial-of-service surface and it
-has nothing to do with STARKs.
+Fewer nanoseconds per gas means more gas per unit of work, so SHA256U is
+priced **two to seven times more conservatively** than the instruction whose
+price was set by measurement. There is no denial-of-service surface here and
+nothing to fix.
 
-It also makes the estimate in section 5 ambiguous: priced by the existing
-table a native Merkle path is a few thousand gas, priced consistently with
-Poseidon2 it is about 170,000. The estimate below takes the second, because
-consistency is worth more than optimism.
-
-**This should be measured on its own, before and regardless of this
-proposal.**
+What this does change is section 5. Hashing is the largest single item in a
+Merkle level, and a native instruction cannot remove it -- only the
+bookkeeping around it. Priced consistently with Poseidon2 a sixty-four byte
+SHA256 is worth thirty to fifty gas, so the 3,720 levels of a verification
+are 120,000 to 200,000 gas of irreducible hashing whatever instruction wraps
+them.
 
 ## 5. What the three would buy
 
@@ -170,7 +180,7 @@ Priced consistently with the Poseidon2 tariff:
 
 | | gas |
 | --- | ---: |
-| Merkle paths, native | ~170,000 |
+| Merkle paths, native (hashing only; the bookkeeping is what the instruction removes) | ~170,000 |
 | folding, native | ~36,000 |
 | parsing an 88 KB proof, ~700 cells at 100 | ~70,000 |
 | transcript, out-of-domain evaluation, DEEP composition | ~150,000 |

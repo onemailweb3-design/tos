@@ -44,6 +44,13 @@ fn what_a_fri_verifier_would_cost() {
     eprintln!("a Merkle path: {shallow} gas at depth 4, {deep} at depth 16 -> {per_level} a level");
     assert!(per_level > 0, "the path cost does not grow with depth, so it is not being walked");
 
+    // SHA256 already exists; only its price is in question. One hash of
+    // sixty-four bytes, measured as a slope so the loop does not count.
+    let sha_one = probe.sha256_gas(1).expect("one hash");
+    let sha_many = probe.sha256_gas(1001).expect("a thousand and one");
+    let per_hash = (sha_many - sha_one) / 1000;
+    eprintln!("one SHA256 of 64 bytes, measured: {per_hash} gas");
+
     let fold = probe.fold_gas().expect("one folding step");
     eprintln!("one FRI folding step over eight cubic-extension values: {fold} gas");
 
@@ -77,8 +84,19 @@ fn what_a_fri_verifier_would_cost() {
     let loops = merkle + folding;
     eprintln!("the two inner loops together: {loops} gas");
     eprintln!();
-    eprintln!("a Merkle level breaks down as: SHA256 of 64 bytes is 2 gas, creating the cell to");
-    eprintln!("hold the pair is 500, loading cells is 100 each. The hashing is not the cost.");
+    eprintln!("a Merkle level costs {per_level} gas, of which the SHA256 is {per_hash}.");
+    eprintln!("the rest is TVM bookkeeping: creating the cell to hold the pair is 500,");
+    eprintln!("loading cells is 100 each, and the slice handling is the remainder.");
+    // The instruction exists and is not cheap. An earlier reading of this
+    // took SHA256U's price from the HASHEXT formula, which is a different
+    // opcode with different accounting, and concluded the hash was almost
+    // free. It is not: it is the largest single item in a level, and it is
+    // priced more conservatively per unit of work than POSEIDON2_PERM8.
+    assert!(
+        per_hash * 4 < per_level,
+        "the hash is now most of a Merkle level ({per_hash} of {per_level}), so a native \
+         instruction would save far less than this test assumes"
+    );
     eprintln!();
     eprintln!("for comparison: Groth16 verifies in {GROTH16_VERIFY_GAS} gas");
     eprintln!("a whole withdrawal is {WITHDRAWAL_GAS} gas, ceiling {TRANSACT_CEILING}");

@@ -157,6 +157,18 @@ int p_fold(cell values, int a0, int a1, int a2) method_id {
   return gl_add(gl_add(r0, r1), r2);
 }
 
+int p_sha256(int rounds) method_id {
+  slice sixty_four = begin_cell().store_uint(0x1234, 256).store_uint(0x5678, 256)
+                       .end_cell().begin_parse();
+  int acc = 0;
+  int i = 0;
+  while (i < rounds) {
+    acc = acc ^ string_hash(sixty_four);
+    i = i + 1;
+  }
+  return acc;
+}
+
 int p_extmul_fast(int rounds, int a0, int a1, int a2) method_id {
   int i = 0;
   int acc = 0;
@@ -332,6 +344,12 @@ impl StarkSketch {
             "p_extmul",
             vec![Self::integer(rounds)?, Self::integer(7)?, Self::integer(11)?, Self::integer(13)?],
         )
+    }
+
+    /// The gas `rounds` SHA256 hashes of sixty-four bytes cost. The
+    /// instruction already exists; what is in question is only its price.
+    pub fn sha256_gas(&self, rounds: u64) -> Result<i64> {
+        self.call("p_sha256", vec![Self::integer(rounds)?])
     }
 
     /// The same, with the reduction a tuned implementation would use.
