@@ -236,8 +236,14 @@ int main() {
       expected_kind = "measured";
       expected_bytes = measured->second.lite_tl;
     } else if ((verdict.object == "complete-tosNode.blockFinalityBroadcast" && verdict.route == "finality-broadcast") ||
-               (verdict.object == "complete-tosNode.blockBroadcastCompressedV2" && verdict.route == "v2-broadcast") ||
                (verdict.object == "complete-lite-answer" && verdict.route == "lite-forward-proof")) {
+      expected_kind = "measured";
+      const auto separator = verdict.serialized_bytes.find(':');
+      if (separator == std::string::npos) {
+        fail("ROUTE_VERDICT_BAD_COMPLETE_SIZE: object=" + verdict.object);
+      }
+      expected_bytes = number(verdict.serialized_bytes.substr(separator + 1), "complete object serialized bytes");
+    } else if (verdict.object == "complete-tosNode.blockBroadcastCompressedV2" && verdict.route == "v2-broadcast") {
       has_bytes = false;
     } else {
       fail("ROUTE_VERDICT_UNEXPECTED_SUBJECT: object=" + verdict.object + " route=" + verdict.route);

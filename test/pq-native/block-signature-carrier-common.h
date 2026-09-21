@@ -50,6 +50,22 @@ inline tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData> candidate()
       tos::create_tl_object<tos::tos_api::consensus_candidateId>(slot - 1, hash_of("carrier-parent")));
 }
 
+inline tos::BlockIdExt block_id() {
+  return {-1, 0x8000000000000000ULL, 42, hash_of("carrier-root"), hash_of("carrier-file")};
+}
+
+inline tos::tl_object_ptr<tos::tos_api::tosNode_blockIdExt> node_block_id() {
+  return tos::create_tl_object<tos::tos_api::tosNode_blockIdExt>(
+      block_id().id.workchain, static_cast<td::int64>(block_id().id.shard), block_id().id.seqno, block_id().root_hash,
+      block_id().file_hash);
+}
+
+inline tos::tl_object_ptr<tos::lite_api::tosNode_blockIdExt> lite_block_id() {
+  return tos::create_tl_object<tos::lite_api::tosNode_blockIdExt>(
+      block_id().id.workchain, static_cast<td::int64>(block_id().id.shard), block_id().id.seqno, block_id().root_hash,
+      block_id().file_hash);
+}
+
 inline td::Bits256 session_id() {
   return hash_of("persisted-pq-block-signature-session");
 }
@@ -170,27 +186,58 @@ inline td::Ref<vm::Cell> block_proof_cell(const td::Ref<vm::Cell>& signatures) {
   return root.finalize_novm();
 }
 
-inline td::BufferSlice node_tl(const std::vector<SignatureInput>& signatures) {
+inline tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet> node_signature_set(
+    const std::vector<SignatureInput>& signatures) {
   std::vector<tos::tl_object_ptr<tos::tos_api::tosNode_pqBlockSignature>> pairs;
   pairs.reserve(signatures.size());
   for (const auto& signature : signatures) {
-    pairs.push_back(tos::create_tl_object<tos::tos_api::tosNode_pqBlockSignature>(
-        signature.validator_id, algorithm_id, signature.signature.clone()));
+    pairs.push_back(tos::create_tl_object<tos::tos_api::tosNode_pqBlockSignature>(signature.validator_id, algorithm_id,
+                                                                                  signature.signature.clone()));
   }
-  return tos::create_serialize_tl_object<tos::tos_api::tosNode_signatureSet_simplexPq>(
+  return tos::create_tl_object<tos::tos_api::tosNode_signatureSet_simplexPq>(
       true, catchain_seqno, validator_set_hash, std::move(pairs), session_id(), slot, candidate());
 }
 
-inline td::BufferSlice lite_tl(const std::vector<SignatureInput>& signatures) {
+inline td::BufferSlice node_tl(const std::vector<SignatureInput>& signatures) {
+  return tos::serialize_tl_object(node_signature_set(signatures), true);
+}
+
+inline tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet> lite_signature_set(
+    const std::vector<SignatureInput>& signatures) {
   auto candidate_bytes = tos::serialize_tl_object(candidate(), true);
   std::vector<tos::tl_object_ptr<tos::lite_api::liteServer_pqSignature>> pairs;
   pairs.reserve(signatures.size());
   for (const auto& signature : signatures) {
-    pairs.push_back(tos::create_tl_object<tos::lite_api::liteServer_pqSignature>(
-        signature.validator_id, algorithm_id, signature.signature.clone()));
+    pairs.push_back(tos::create_tl_object<tos::lite_api::liteServer_pqSignature>(signature.validator_id, algorithm_id,
+                                                                                 signature.signature.clone()));
   }
-  return tos::create_serialize_tl_object<tos::lite_api::liteServer_signatureSet_simplexPq>(
+  return tos::create_tl_object<tos::lite_api::liteServer_signatureSet_simplexPq>(
       catchain_seqno, validator_set_hash, std::move(pairs), session_id(), slot, std::move(candidate_bytes));
+}
+
+inline td::BufferSlice lite_tl(const std::vector<SignatureInput>& signatures) {
+  return tos::serialize_tl_object(lite_signature_set(signatures), true);
+}
+
+inline td::BufferSlice finality_broadcast_tl(const std::vector<SignatureInput>& signatures) {
+  return tos::create_serialize_tl_object<tos::tos_api::tosNode_blockFinalityBroadcast>(node_block_id(),
+                                                                                       node_signature_set(signatures));
+}
+
+inline td::BufferSlice lite_forward_proof_tl(const std::vector<SignatureInput>& signatures) {
+  vm::CellBuilder proof;
+  proof.store_long(0x51, 8);
+  auto proof_boc = boc(proof.finalize_novm());
+  std::vector<tos::tl_object_ptr<tos::lite_api::liteServer_BlockLink>> links;
+  links.push_back(tos::create_tl_object<tos::lite_api::liteServer_blockLinkForward>(
+      true, lite_block_id(), lite_block_id(), td::BufferSlice{}, std::move(proof_boc), lite_signature_set(signatures)));
+  return tos::create_serialize_tl_object<tos::lite_api::liteServer_partialBlockProof>(
+      true, lite_block_id(), lite_block_id(), std::move(links));
+}
+
+inline td::BufferSlice lite_answer_tl(const std::vector<SignatureInput>& signatures) {
+  return tos::create_serialize_tl_object<tos::tos_api::adnl_message_answer>(hash_of("pq-carrier-lite-query"),
+                                                                            lite_forward_proof_tl(signatures));
 }
 
 inline std::size_t certificate_tl_bytes(const std::vector<SignatureInput>& signatures) {

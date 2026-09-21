@@ -216,6 +216,19 @@ if(TARGET tos_crypto)
     MEASUREMENTS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measurements.tsv"
     SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/../..")
   add_test(NAME block-signature-carrier-routes COMMAND test-block-signature-carrier-routes)
+  # Design section 6.5's node and lite capacity gates.  The code names describe
+  # their subjects and intentionally do not carry execution-plan stage labels.
+  add_executable(test-pq-carrier-capacity
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-carrier-capacity-test.cpp")
+  set_target_properties(test-pq-carrier-capacity PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-pq-carrier-capacity PRIVATE tos_block tos_crypto tos_mldsa44
+    tos_pq_consensus_signer tos_pq_consensus tl_api tl_lite_api tl-utils tl-lite-utils overlay adnl)
+  target_include_directories(test-pq-carrier-capacity PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
+  target_compile_definitions(test-pq-carrier-capacity PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h"
+    ROUTES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-routes.tsv"
+    MEASUREMENTS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measurements.tsv")
+  add_test(NAME pq-node-finality-carrier-capacity COMMAND test-pq-carrier-capacity node)
+  add_test(NAME pq-lite-forward-proof-carrier-capacity COMMAND test-pq-carrier-capacity lite)
   add_executable(test-pq-signature-tl-vectors
     "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-signature-tl-vectors-test.cpp")
   set_target_properties(test-pq-signature-tl-vectors PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
