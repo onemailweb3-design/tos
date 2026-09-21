@@ -63,17 +63,24 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
 
   Closing it needed a message in the window where the difference is visible.
   The window is derived from this chain's ConfigParam 21 rather than written
-  down -- a flat 6,667 for the first hundred gas, then 4,369,067 per 65,536
-  gas -- because a price change would otherwise turn the starved message into
-  one that can afford the path, and the test would pass for the wrong reason.
-  Below roughly 20,000 nanotos the compute phase is skipped outright (`NoGas`)
-  and the VM never runs. A deposit carrying what a thousand gas costs buys a
-  thousand gas, and therefore dies halfway:
+  down -- a flat 667 for the first hundred gas, then 436,907 per 65,536 gas --
+  because a price change would otherwise turn the starved message into one
+  that can afford the path, and the test would pass for the wrong reason. That
+  is not a hypothetical: the constant was written down as 400,000 when gas
+  cost 400 nanotos, and stopped starving anything twice, once when the price
+  was aligned to TON's live value and again when it was cut tenfold. Below the
+  skip threshold the compute phase is skipped outright (`NoGas`) and the VM
+  never runs, which is the other end of the same window. A deposit carrying
+  what a thousand gas costs buys a thousand gas, and therefore dies halfway:
 
   | | exit code | gas used | pool balance |
   |---|---|---|---|
   | as written | `-14`, out of gas | 1,000 — exactly what it bought | unchanged |
-  | with `accept_message()` | 40, reached a check it could not afford | 1,285 | **-114,000 nanotos** |
+  | with `accept_message()` | 40, reached a check it could not afford | 1,285 | **285 gas the message never bought** |
+
+  The last column is stated in gas on purpose. What those 285 gas cost the
+  pool is ConfigParam 21's business: 1,900 nanotos at the current 6.666 a gas,
+  and 114,000 when this row was first measured at 400.
 
   `a_message_that_cannot_pay_for_its_own_gas_never_reaches_the_pools_balance`
   pins that row, and asserts first that the compute phase actually ran, so a
@@ -84,7 +91,7 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   The hash here is a placeholder (`cell_hash`). Nothing in this file depends on
   which hash is used, and nothing in it says anything about gas per transfer.
 
-**The Poseidon2 instruction pair**
+**The Poseidon2 instructions**
 
 - `POSEIDON2_PERM8` (`0xF93200`) and `POSEIDON2_HASH7` (`0xF93201`), implemented
   in both VMs at global version 17, with the earlier signature instruction left
@@ -107,6 +114,25 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   activation, in both VMs at once. It came down from 3,500 when the Rust
   permutation was made proportionate to the C++ one, which moved the bracket
   the tariff is the top of.
+
+- `POSEIDON2_PATH7` (`0xF93202`), at global version **18**, folds a whole
+  Merkle path in one instruction: a leaf, a domain and up to 64 levels of six
+  siblings each, returning the root. It exists because the nullifier tree's
+  two insertions were walking their paths in FunC, and the bookkeeping around
+  the hashing cost more than the hashing -- 52% of an insertion, down to 10%
+  once the VM did the walk. Its tariff is 500 plus 3,000 a level, to which the
+  VM adds the two cell loads a level costs, so a level is 3,200 in total. Like
+  the tariff above, those are assembled numbers rather than benchmarked ones.
+
+  Both VMs implement it and both are held to the same vector, each pinning the
+  other's output by hash. That is not ceremony: the C++ implementation shipped
+  with two defects a single-VM test could not have found. It wrote the domain
+  into the state once before the loop, where the permutation's own output
+  overwrites it, so every level past the first hashed against the wrong
+  domain; and it charged each path cell twice, 50 gas a level more than the
+  Rust VM. The first was caught by a withdrawal refused on a real node, the
+  second by comparing the two VMs' marginal cost per level. Neither had a C++
+  test until then.
 
 **Note commitments and the commitment tree**
 
@@ -132,7 +158,10 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   leaf index, while the chain runs from 127,412 down to 123,544. A sender
   pre-pays the ceiling and a ceiling has to cover the worst age the pool can
   reach, so under the dictionary every sender paid for a maturity most pools
-  will never have. The transact ceiling fell from 1,620,000 to 1,460,000.
+  will never have. The transact ceiling fell from 1,620,000 to 1,460,000 on
+  that change alone, and went back to its present 1,470,000 when the maximum
+  behind it was re-measured on the four denominations a pool is really
+  deployed with rather than the one a fixture found convenient.
 
   `frontier_store_shape.rs` keeps both containers and fails if they stop
   differing that way; `frontier_cost_is_flat.rs` holds the property the
@@ -161,7 +190,7 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   remove the recomputation and has not been done.
 
   `tosctl/src/node-control/contracts/tests/shielded_imt_sandbox.rs` runs all of
-  it in a VM at global version 17: thirteen tests, closing section 19 gate 10.
+  it in a VM at global version 18: thirteen tests, closing section 19 gate 10.
   Two sequential nullifiers both insert, with the second witness taken against
   the root after the first; a bad successor tuple, a non-empty append slot, and
   duplicate or reordered witnesses each fail with a named exit code. A zero
@@ -310,7 +339,7 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   neither would have caught it. These gadgets are an independent third reading,
   written from the profile before the FunC was read. `crosscheck/` compiles the
   shielded FunC library with `build/crypto/func`, deploys it at global version
-  17 and compares get-method results against values pinned in circuit: sixty
+  18 and compares get-method results against values pinned in circuit: sixty
   section 4 values across ten cases, thirteen empty roots, four interior nodes
   and fifteen sequential frontier appends. **All of them agree. No disagreement
   was found.** The comparison can fail — a deliberately wrong expected value is
@@ -335,8 +364,7 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   **What it does not establish**: nothing here is a production artifact. The
   development keys come from a fixed seed, so the toxic waste is known and
   these keys must never verify a real transaction; the fixture says so in its
-  own `warning` field. Two places where the profile is not self-sufficient were
-  reported rather than decided:
+  own `warning` field.
 
   Two places where the profile was not self-sufficient were reported rather
   than decided, and **both have since been ruled** (register A1 and A2):
@@ -371,9 +399,16 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   test go red.
 
   `shielded_pool_sandbox.rs` covers deposit and top-up in eight tests;
-  `shielded_pool_transact_sandbox.rs` covers transact in five. Between them,
-  twenty-six mutations (`test/shielded-pool/mutations-pool.py`), each killed by
-  the test it was aimed at.
+  `shielded_pool_transact_sandbox.rs` covers transact in six. Between them,
+  forty mutations (`test/shielded-pool/mutations-pool.py`), each killed by the
+  test it was aimed at.
+
+  Neither suite writes a gas ceiling down any more. They read each one out of
+  the contract, because a ceiling copied into a test makes the rule an
+  agreement between two numbers in the same file: lowering the contract's
+  deposit ceiling to 180,000 -- above the path at every age, so nothing breaks
+  and no cost test notices -- left the test whose only job is that ceiling
+  green.
 
   A transact is written in the profile's order and the suite requires each step
   to fail with its own code **in its own place**: funding before anything else
@@ -431,12 +466,92 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   calling `POSEIDON2_PATH7`, 99,950 when the Poseidon2 tariff came down from
   3,500 to 2,800, and 120,859 when the frontier changed container.
 
+  **And what the sender actually pays is a price, not a gas count.** A
+  transact cost its sender 0.098 TOS against 0.000356 for an ordinary payment
+  — 275 times — and the target was 0.01. No amount of contract work reaches that
+  while gas is priced as it was: the Groth16 verification alone is 204,493
+  gas, which at 66.66 nanotos is 0.0136 TOS, over the whole budget before the
+  pool does anything. The three engineering levers were measured and offered —
+  a transfer ceiling of its own (−2.5%), a nullifier dictionary instead of an
+  IMT (−400,000 gas, at a pool lifetime capped around 20–65k nullifiers), and
+  1-in/2-out instead of 2-in/3-out (−333,000 gas, and it must be decided
+  before the ceremony fixes the circuit) — and all three together still land
+  at 0.0347. So the basechain gas price was cut tenfold instead, `gas_price`
+  4,369,067 to 436,907 and `flat_gas_price` 6,667 to 667, leaving forwarding,
+  storage and masterchain gas alone.
+
+  | | before | after |
+  |---|---:|---:|
+  | a transact, what the sender attaches — the ceiling, whatever it spends | 0.098000 | **0.009800** |
+  | a withdrawal, the whole fee the chain charged | 0.078382 | **0.008104** |
+  | deposit, ceiling | 0.014667 | 0.001467 |
+  | ordinary payment | 0.000356 | 0.000202 |
+
+  Both middle figures are a withdrawal, which is the transact the harness
+  runs; its charge includes the payout message's forward fee, so it is 295,368
+  nanotos above what its 1,171,374 gas costs on its own. A transact that pays
+  nobody out is cheaper — 1,144,235 gas, 0.007628 in compute — but it attaches
+  the same 0.009800, because the ceiling is one number for both branches. A
+  ceiling of its own would save a transfer about 2.5%; it was offered and not
+  taken.
+
+  The cut lands almost entirely on computation, which is the point: an
+  ordinary payment is about half forwarding, so it falls 43% where a private
+  transfer falls 90%. Nothing about the pool moved — prices live in the
+  chain's zerostate, so `profile_hash`, the genesis state hash `fd9303eb…` and
+  the deployment address are where they were, and every gas figure above is a
+  count of work and unchanged.
+
+**On a real chain, not only in the executor**
+
+- `scripts/shielded-pool-onchain-e2e.py` owns a localnet, deploys the exact
+  state the frozen manifest names, and plays the fixture's messages through
+  it. The executor is the code a validator runs, but running it is not running
+  a chain: it has no block production, no message queue, no forward fees and
+  no account storage.
+
+  Four paths have been through it: a deposit, a withdrawal whose payout is
+  taken, a payout the recipient refuses, and the recovery note that refusal
+  mints. **The chain charged the same gas as the sandbox on every message.**
+  The harness attaches section 14.1's minimum to the nanoton rather than a
+  padded value, because a run that carries more than the funding rule demands
+  is not testing the funding rule.
+
+  `--validators N` builds a set rather than a single node, and both scenarios
+  have been run on three. It is worth keeping separate from the rest: with one
+  validator there is no catchain round and no block anyone has to accept from
+  somebody else, so "the executor runs a transact" and "a validator set agrees
+  on a block containing one" are different claims, and a transact is by a
+  wide margin the heaviest transaction this chain has. On three validators the
+  figures are the same to the gas — a deposit at 155,694 and 157,584, a taken
+  withdrawal at 1,171,374, a refused one at 1,171,462 and its recovery at
+  167,058, each equal to the sandbox and each inside its ceiling — and the
+  withdrawal cost 0.008104 TOS.
+
+  Two things were found here that no sandbox could have found. `POSEIDON2_PATH7`
+  in the C++ VM lost its domain after the first level, so a withdrawal was
+  refused at exit 115 on a node while every sandbox test was green — the Rust
+  VM had a test and the C++ one did not. And an anchor epoch is thirty
+  seconds, so two messages seconds apart can straddle a checkpoint boundary on
+  a chain while the sandbox, whose clock is frozen when the fixture is built,
+  never does; that is 1,896 gas of difference the harness now recognises from
+  the transactions' own timestamps, bounded at 10,000 so the tolerance cannot
+  swallow a real divergence.
+
 **The whole mutation set**, re-run end to end on 2026-09-21 at this branch's tip:
-221 mutations across ten batteries — 9 notes and tree, 34 IMT, 23
-authorization, 23 anchors, 21 state, 22 transact wire, 12 Groth16, 38 pool
+223 mutations across ten batteries — 9 notes and tree, 34 IMT, 23
+authorization, 23 anchors, 21 state, 22 transact wire, 12 Groth16, 40 pool
 contract, 17 payout, 22 recovery — and every one of them was killed by the
 test it was aimed at. The 17 Poseidon2 mutations across both VMs were not
 re-run in that pass, because nothing under `crypto/vm` changed in it.
+
+The batteries themselves had a portability bug worth naming, because it is the
+failure mode this whole document is about. Seven of the ten pointed `TOS_ROOT`
+at a hardcoded path under one person's home directory and the other three at
+the checkout they were run from — so run from a git worktree, which has every
+source and no build of its own, all ten failed at baseline with
+`POSEIDON2_HASH7:-?`. That looks like a broken contract and is a missing
+assembler. They now share one resolver that finds the build.
 
 **Still not built**: the production Groth16 ceremony. Everything this
 paragraph used to list is built — section 15's withdrawal payout and its
@@ -463,13 +578,25 @@ principal it admits is the principal the note is built for, no path calls
 asserted against the end state, and a failure at any step of a transact leaves
 the state untouched.
 
-What is still open is not enforcement but completeness and freezing. A
-withdrawal cannot be paid out yet, no proof that verifies has ever been
-produced, and the numbers that would let a state be frozen — the production
-Poseidon2 gas price, the production verifying key, the canonical anchor-ring
-shape — are all still open questions in the register. A gate is closed by a
-contract obeying a rule *and* by the constants that rule depends on being the
-ones that will ship.
+What is still open is not enforcement but freezing. The paths themselves all
+run: a deposit, a withdrawal with its payout, a payout the recipient refuses
+and the recovery note that refusal mints have each been put through a real
+node — on a three-validator set as well as a single one — and the chain
+charged the same gas as the sandbox on every message. A transfer that pays
+nobody out is the one path proved only in the sandbox; it is the same handler
+taking a cheaper branch, but that is an argument rather than a run, and it is
+recorded as one. What is not settled are the numbers a frozen state depends on —
+the production Poseidon2 tariff, measured on target CPUs rather than
+assembled; the production verifying key, which needs a ceremony; and the
+mainnet parameters, which the profile makes an activation decision. A gate is
+closed by a contract obeying a rule *and* by the constants that rule depends
+on being the ones that will ship.
+
+An earlier version of this paragraph said a withdrawal could not be paid out
+and no proof that verifies had ever been produced. Both had been false for
+some time, and the paragraph twenty-five lines above already said so. It is
+recorded here rather than quietly deleted, because a document contradicting
+itself in two places is exactly what nothing fails on.
 
 Two things do not wait, because their windows close earlier than their
 urgency suggests:

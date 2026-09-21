@@ -7,10 +7,20 @@ runs, but running it is not running a chain: it has no block production, no
 message queue, no forward fees and no account storage.  So the claim "the pool
 works" has never been tested against the thing it will actually live in.
 
-This harness closes that.  It owns a fresh single-validator localnet, deploys
-the exact state the frozen manifest names, sends one real deposit from a real
-wallet, and requires the chain to arrive at the commitment root the circuit
-predicted *before* the message was sent.
+This harness closes that.  It owns a fresh localnet, deploys the exact state
+the frozen manifest names, sends one real deposit from a real wallet, and
+requires the chain to arrive at the commitment root the circuit predicted
+*before* the message was sent.
+
+By default the localnet has one validator, which is enough for everything the
+pool itself does: a contract cannot tell how many nodes agreed on the block it
+ran in.  `--validators N` builds a set of N instead, and is worth running
+before anything is frozen -- with one node there is no catchain round, no
+block a validator has to accept from someone else, and so no way to find out
+that the pool's transactions are fine in an executor and not in a block that
+has to be agreed.  A transact is by far the heaviest transaction this chain
+has, and whether a validator set collects one is a different question from
+whether an executor runs one.
 
 Nothing here re-implements the pool.  The code, the state, the deposit body and
 the expected root all come out of `onchain_fixture`, which builds them from the
@@ -490,7 +500,7 @@ async def run(args) -> int:
         # under ConfigParam 21 as `gen-zerostate.fif` writes it, so a fee
         # measured under the test schedule is a fee on a chain nobody runs;
         # and the test schedule grants a transaction 1,000,000 gas, which is
-        # below the pool's own transact ceiling of 1,460,000 -- under it a
+        # below the pool's own transact ceiling of 1,470,000 -- under it a
         # withdrawal is not slow, it is refused.
         network.config.deployment_fee_schedule = True
         # The chain's global id is eight of the eighteen public inputs, by way
@@ -503,22 +513,43 @@ async def run(args) -> int:
             f"global_id={network.config.global_id}, deployment fee schedule")
 
         dht = network.create_dht_node()
-        node: FullNode = network.create_full_node()
-        node.make_initial_validator()
-        node.announce_to(dht)
+        # Node 0 is the one this script talks to; the rest exist to make the
+        # blocks real. Every one of them is an initial validator, so a block
+        # carrying a transact has to be produced and accepted by a set rather
+        # than asserted by a single node.
+        nodes: list[FullNode] = []
+        for _ in range(args.validators):
+            peer = network.create_full_node()
+            peer.make_initial_validator()
+            peer.announce_to(dht)
+            nodes.append(peer)
+        node = nodes[0]
+        # No `chmod` pass over the keyrings here, although the multi-validator
+        # integration test has one: `tostester.key` already writes every key
+        # file 0600 and the keyring directory 0700. Copying that loop in would
+        # have been a line that does nothing, which is the hardest kind to
+        # ever delete again.
 
         lite_config = chain_dir / "lite-client.json"
         lite_config.write_text(node.liteserver_config.to_json())
         lite = LiteClient(lite_binary, lite_config)
 
         rpc_address = f"127.0.0.1:{args.base_port + 500}"
-        tasks = [
-            asyncio.create_task(dht.run()),
-            asyncio.create_task(node.run(StartOptions(args=["--json-rpc-address", rpc_address]))),
-        ]
+        tasks = [asyncio.create_task(dht.run())]
+        tasks.append(
+            asyncio.create_task(node.run(StartOptions(args=["--json-rpc-address", rpc_address])))
+        )
+        tasks.extend(asyncio.create_task(peer.run()) for peer in nodes[1:])
         try:
-            log("waiting for masterchain block #1 ...")
-            await asyncio.wait_for(network.wait_mc_block(seqno=1), timeout=args.boot_timeout)
+            if args.validators > 1:
+                log(f"waiting for {args.validators} validators to agree on masterchain "
+                    f"block #2 ...")
+                # Block 2 rather than 1: the first block a set produces is the
+                # first one that needed agreeing.
+                await asyncio.wait_for(network.wait_mc_block(seqno=2), timeout=args.boot_timeout)
+            else:
+                log("waiting for masterchain block #1 ...")
+                await asyncio.wait_for(network.wait_mc_block(seqno=1), timeout=args.boot_timeout)
             log("the chain is producing blocks")
 
             client = await node.toslib_client()
@@ -699,6 +730,11 @@ def main() -> int:
                         help="a directory onchain_fixture has already written")
     parser.add_argument("--workdir", default=None)
     parser.add_argument("--base-port", type=int, default=21000)
+    parser.add_argument(
+        "--validators", type=int, default=1,
+        help="how many initial validators the localnet has. One is enough to "
+             "exercise the contract; more than one is what exercises the "
+             "block a transact has to be agreed in.")
     parser.add_argument("--boot-timeout", type=float, default=180.0)
     parser.add_argument("--step-timeout", type=float, default=120.0)
     parser.add_argument(

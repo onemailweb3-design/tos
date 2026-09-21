@@ -21,6 +21,8 @@ import re
 import subprocess
 import sys
 
+from toolchain import toolchain_root
+
 ROOT = Path(__file__).resolve().parents[2]
 IMT = ROOT / 'crypto/smartcont/shielded/imt.fc'
 # The path walk moved into POSEIDON2_PATH7 at global version 18. The two
@@ -217,7 +219,7 @@ def run_suite() -> subprocess.CompletedProcess:
     env['CARGO_TERM_COLOR'] = 'never'
     # TOS_ROOT only tells the sandbox where the built compiler lives; the suite
     # derives the FunC library it compiles from its own manifest directory.
-    env.setdefault('TOS_ROOT', str(Path.home() / 'tos-privacy'))
+    env.setdefault('TOS_ROOT', str(toolchain_root(ROOT)))
     return subprocess.run(['cargo', 'test', '--test', SUITE, '--', '--test-threads=1'],
                           cwd=CONTRACTS, capture_output=True, text=True, timeout=3600, env=env)
 

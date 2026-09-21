@@ -65,13 +65,13 @@ fn transact_gas_ceiling() -> i64 {
 }
 const TRANSACT_MEASURED_MAX_GAS: i64 = 1_175_034;
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
-/// flat 6,667 for the first hundred gas, then 4,369,067 per 65,536 gas with
-/// the division rounded up.
+/// flat 667 for the first hundred gas, then 436,907 per 65,536 gas with the
+/// division rounded up.
 ///
 /// This was `gas * NANOTOS_PER_GAS` with NANOTOS_PER_GAS = 400 while the
-/// price was 26,214,400, which divides by 65,536 exactly. TON mainnet's live
-/// price does not, so a flat multiplier is no longer the same arithmetic the
-/// VM does, and the tests now do the VM's.
+/// price was 26,214,400, which divides by 65,536 exactly. Neither of the two
+/// prices since does, so a flat multiplier is no longer the same arithmetic
+/// the VM does, and the tests now do the VM's.
 const fn compute_fee(gas: u64) -> u64 {
     const FLAT_LIMIT: u64 = 100;
     const FLAT_PRICE: u64 = 667;
@@ -1146,6 +1146,29 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
     assert!(
         ceiling <= BASECHAIN_GAS_LIMIT,
         "the contract's ceiling is above what the chain grants, so it can never take effect"
+    );
+
+    // And the middle term is the one the production rule gives, applied to the
+    // maximum that was actually measured:
+    //
+    //     C = max(10,000, round_up_10,000(ceil(M * 5 / 4)))
+    //
+    // `TRANSACT_MEASURED_MAX_GAS` carried that measurement and nothing read
+    // it -- a number written down, never compared to anything, free to drift
+    // away from both the contract and the measurement it came from. The
+    // crosscheck crate holds the same rule against a pool it has aged, which
+    // is where the measurement is taken; this holds it against the contract,
+    // which is what a reader of this file can see.
+    let by_rule = |measured: i64| -> i64 {
+        let with_headroom = (measured * 5 + 3) / 4;
+        10_000.max((with_headroom + 9_999) / 10_000 * 10_000)
+    };
+    assert_eq!(
+        ceiling,
+        by_rule(TRANSACT_MEASURED_MAX_GAS),
+        "the transact ceiling is {ceiling}, not the {} the production rule gives for a \
+         measured maximum of {TRANSACT_MEASURED_MAX_GAS}",
+        by_rule(TRANSACT_MEASURED_MAX_GAS)
     );
 
     // And a network that grants less than the path needs stops it, which is

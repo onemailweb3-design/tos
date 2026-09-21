@@ -85,13 +85,13 @@ fn topup_gas_ceiling() -> i64 {
 const TOPUP_MEASURED_MAX_GAS: i64 = 2_380;
 /// ConfigParam 21 of this chain's zero state, beyond the flat segment.
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
-/// flat 6,667 for the first hundred gas, then 4,369,067 per 65,536 gas with
-/// the division rounded up.
+/// flat 667 for the first hundred gas, then 436,907 per 65,536 gas with the
+/// division rounded up.
 ///
 /// This was `gas * NANOTOS_PER_GAS` with NANOTOS_PER_GAS = 400 while the
-/// price was 26,214,400, which divides by 65,536 exactly. TON mainnet's live
-/// price does not, so a flat multiplier is no longer the same arithmetic the
-/// VM does, and the tests now do the VM's.
+/// price was 26,214,400, which divides by 65,536 exactly. Neither of the two
+/// prices since does, so a flat multiplier is no longer the same arithmetic
+/// the VM does, and the tests now do the VM's.
 const fn compute_fee(gas: u64) -> u64 {
     const FLAT_LIMIT: u64 = 100;
     const FLAT_PRICE: u64 = 667;

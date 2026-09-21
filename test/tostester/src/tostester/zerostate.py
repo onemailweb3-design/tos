@@ -59,9 +59,13 @@ class NetworkConfig:
     # not use it and must ask for the deployment schedule instead -- the one
     # `crypto/smartcont/gen-zerostate.fif` writes:
     #
-    #   * anything that measures what a transaction costs, because the cheap
-    #     schedule prices gas at 10 nanotos where the deployment prices it at
-    #     66.66, and a fee measured here is a fee on a chain nobody runs;
+    #   * anything that measures what a transaction costs. The test schedule
+    #     prices gas at a round 10 nanotos and the deployment at 6.666, so a
+    #     fee measured here is a fee on a chain nobody runs -- and note which
+    #     way round that is: since the basechain price was cut tenfold on
+    #     2026-09-21 the test schedule is the *dearer* of the two per gas, so
+    #     a cost measured here is an overstatement rather than the flattering
+    #     understatement it used to be. Either way it is the wrong number;
     #   * anything running a contract whose own gas ceiling is above the cheap
     #     schedule's 1,000,000 per-transaction limit. SETGASLIMIT cannot raise
     #     a transaction above the network's limit, so such a contract is not

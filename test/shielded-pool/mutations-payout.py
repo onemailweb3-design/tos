@@ -21,6 +21,8 @@ import sys
 
 # This repository, never another checkout: TOS_ROOT points at the built
 # toolchain, which may live somewhere else entirely.
+from toolchain import toolchain_root
+
 ROOT = Path(__file__).resolve().parents[2]
 PAYOUT = ROOT / 'crypto/smartcont/shielded/payout.fc'
 CONTRACTS = ROOT / 'tosctl/src/node-control/contracts'
@@ -113,7 +115,7 @@ def run_suite() -> subprocess.CompletedProcess:
     env['CARGO_TERM_COLOR'] = 'never'
     # TOS_ROOT only locates the built func/fift toolchain and stdlib.fc; the
     # library under test is found from the crate manifest, inside this tree.
-    env.setdefault('TOS_ROOT', str(Path.home() / 'tos-privacy'))
+    env.setdefault('TOS_ROOT', str(toolchain_root(ROOT)))
     return subprocess.run(['cargo', 'test', '--test', SUITE, '--', '--test-threads=1'],
                           cwd=CONTRACTS, capture_output=True, text=True, timeout=3600, env=env)
 

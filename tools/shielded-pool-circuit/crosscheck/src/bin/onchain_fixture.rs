@@ -62,8 +62,8 @@ const BOUNCE_GAS_CEILING: u64 = 220_000;
 /// a chain to come up and three messages to land.
 const INTENT_LIFETIME: u32 = 1_800;
 
-/// This chain's ConfigParam 21, as the VM applies it: a flat 6,667 for the
-/// first hundred gas, then 4,369,067 per 65,536 gas, the division rounded up.
+/// This chain's ConfigParam 21, as the VM applies it: a flat 667 for the first
+/// hundred gas, then 436,907 per 65,536 gas, the division rounded up.
 fn compute_fee(gas: u64) -> u64 {
     const FLAT_LIMIT: u64 = 100;
     const FLAT_PRICE: u64 = 667;

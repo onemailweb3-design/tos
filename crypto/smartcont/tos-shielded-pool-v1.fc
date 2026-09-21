@@ -27,7 +27,11 @@
 ;;   204 the end state would not be backed
 ;;   205 the anchor kind/id/root is not one this pool preserved
 ;;
-;; Requires the shielded library, and a VM at global version 17.
+;; Requires the shielded library, and a VM at global version 18. The library's
+;; own modules mostly say 17, which was true of them when they were written and
+;; still is: notes.fc and auth.fc need nothing past POSEIDON2_HASH7. imt.fc
+;; does -- it folds a nullifier path with POSEIDON2_PATH7 -- so the whole is
+;; 18 even though most of its parts are not.
 
 int op_deposit() asm "1397248001 PUSHINT";          ;; 0x53485001
 int op_transact() asm "1397248002 PUSHINT";         ;; 0x53485002
