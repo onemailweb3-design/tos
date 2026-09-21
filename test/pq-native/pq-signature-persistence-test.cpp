@@ -17,6 +17,7 @@
 #include "td/utils/Random.h"
 #include "td/utils/filesystem.h"
 #include "vm/cells/CellString.h"
+#include "vm/cells/MerkleProof.h"
 
 #include <array>
 #include <mutex>
@@ -73,6 +74,18 @@ class RootDbRoundTrip {
   td::Ref<block::BlockSignatureSet> load(ConstBlockHandle handle) {
     return ask<td::Ref<block::BlockSignatureSet>>([&](auto promise) {
       td::actor::send_closure(db_.get(), &Db::get_block_signatures, handle, std::move(promise));
+    });
+  }
+
+  void store_proof(BlockHandle handle, td::Ref<Proof> proof) {
+    ask<td::Unit>([&](td::Promise<td::Unit> promise) {
+      td::actor::send_closure(db_.get(), &Db::store_block_proof, handle, std::move(proof), std::move(promise));
+    });
+  }
+
+  td::Ref<Proof> load_proof(ConstBlockHandle handle) {
+    return ask<td::Ref<Proof>>([&](auto promise) {
+      td::actor::send_closure(db_.get(), &Db::get_block_proof, handle, std::move(promise));
     });
   }
 
@@ -291,9 +304,15 @@ void run_corruption_matrix() {
 }
 
 td::Ref<vm::Cell> block_proof_cell(const BlockIdExt& block_id, td::Ref<vm::Cell> signatures) {
+  auto block_root = vm::CellBuilder{}.store_long(0x11ef55aa, 32).finalize_novm();
+  if (RootHash{block_root->get_hash().bits()} != block_id.root_hash) {
+    fail("PQ_SIGNATURE_PERSISTENCE_BLOCK_ROOT_MISMATCH");
+  }
+  auto merkle_proof = require_ok(
+      vm::MerkleProof::generate(block_root, [](const td::Ref<vm::Cell>&) { return false; }), "merkle-proof");
   vm::CellBuilder builder;
   if (!(builder.store_long_bool(0xc3, 8) && block::tlb::t_BlockIdExt.pack(builder, block_id) &&
-        builder.store_ref_bool(vm::CellBuilder{}.finalize_novm()) && builder.store_bool_bool(true) &&
+        builder.store_ref_bool(std::move(merkle_proof)) && builder.store_bool_bool(true) &&
         builder.store_ref_bool(std::move(signatures)))) {
     fail("PQ_SIGNATURE_PERSISTENCE_BLOCK_PROOF_BUILD_FAILED");
   }
@@ -330,6 +349,8 @@ void expect_consumer_error(td::Ref<block::BlockSignatureSet> signatures, Validat
 
 void run_proof_consumers() {
   Fixture fixture;
+  auto block_root = vm::CellBuilder{}.store_long(0x11ef55aa, 32).finalize_novm();
+  fixture.id.root_hash = RootHash{block_root->get_hash().bits()};
   const std::vector<std::size_t> quorum{0, 1, 2};
   auto candidate_data = candidate(fixture.id);
   auto pairs = fixture.sign(quorum, fixture.session, Fixture::slot, candidate_data, true, fixture.id);
@@ -356,7 +377,16 @@ void run_proof_consumers() {
 
   auto proof_root = block_proof_cell(fixture.id, signature_cell);
   auto proof_boc = require_ok(vm::std_boc_serialize(proof_root, 31), "proof-boc");
-  auto proof_loaded = require_ok(vm::std_boc_deserialize(proof_boc.as_slice()), "proof-load");
+  auto proof_object = require_ok(create_proof(fixture.id, proof_boc.clone()), "proof-object");
+  const auto proof_db_root = PSTRING() << "tmp-pq-block-proof-persistence-" << td::Random::fast_uint32();
+  RootDbRoundTrip proof_db(proof_db_root);
+  auto proof_handle = create_empty_block_handle(fixture.id);
+  proof_db.store_proof(proof_handle, proof_object);
+  auto persisted_proof = proof_db.load_proof(proof_handle);
+  if (persisted_proof->data().as_slice() != proof_boc.as_slice()) {
+    fail("PQ_BLOCK_PROOF_PERSISTENCE_BYTES_MISMATCH");
+  }
+  auto proof_loaded = require_ok(vm::std_boc_deserialize(persisted_proof->data()), "proof-load");
   auto proof_envelope = require_ok(parse_block_proof_signature_envelope(proof_loaded), "proof-envelope");
   if (proof_envelope.block_id != fixture.id || proof_envelope.signatures.is_null()) {
     fail("PQ_BLOCK_PROOF_ENVELOPE_ID_OR_SIGNATURES_MISMATCH");
