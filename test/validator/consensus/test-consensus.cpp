@@ -750,7 +750,6 @@ class TestConsensus : public td::actor::Actor {
 
   td::actor::Task<> on_block_accepted(size_t node_idx, size_t instance_idx, td::Ref<BlockData> block,
                                       size_t creator_idx, td::Ref<block::BlockSignatureSet> signatures) {
-    ++accepted_block_count_;
     BlockIdExt block_id = block->block_id();
     if (PQ_FINALITY_E2E_TEST && signatures->is_final()) {
       accepted_carriers_.push_back({block_id, signatures});
@@ -837,6 +836,19 @@ class TestConsensus : public td::actor::Actor {
     CHECK(it != accepted_blocks_.end());
     CHECK(it->second->block_id() == block_id);
     co_return it->second;
+  }
+
+  size_t longest_consecutive_accepted_block_run() const {
+    size_t longest = 0;
+    size_t current = 0;
+    std::optional<BlockSeqno> previous;
+    for (const auto& [seqno, block] : accepted_blocks_) {
+      (void)block;
+      current = previous.has_value() && seqno == *previous + 1 ? current + 1 : 1;
+      longest = std::max(longest, current);
+      previous = seqno;
+    }
+    return longest;
   }
 
  private:
@@ -1405,7 +1417,10 @@ class TestConsensus : public td::actor::Actor {
       }
     }
 
-    while ((read_finality_log().empty() || accepted_carriers_.empty()) && !deadline.is_in_past()) {
+    constexpr size_t required_consecutive_accepted_blocks = 3;
+    while ((read_finality_log().empty() || accepted_carriers_.empty() ||
+            longest_consecutive_accepted_block_run() < required_consecutive_accepted_blocks) &&
+           !deadline.is_in_past()) {
       co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
     }
     if (read_finality_log().empty()) {
@@ -1415,6 +1430,24 @@ class TestConsensus : public td::actor::Actor {
     if (accepted_carriers_.empty()) {
       fail("a verified FinalCert never reached the post-quantum block-signature carrier");
       co_return td::Unit{};
+    }
+    const auto consecutive_accepted_blocks = longest_consecutive_accepted_block_run();
+    if (consecutive_accepted_blocks < required_consecutive_accepted_blocks) {
+      fail(PSTRING() << "post-quantum finality accepted only " << consecutive_accepted_blocks
+                     << " consecutive blocks, expected at least " << required_consecutive_accepted_blocks);
+      co_return td::Unit{};
+    }
+
+    size_t independently_verified_proofs = 0;
+    for (const auto& item : accepted_carriers_) {
+      const block::PQFinalityVerificationContext context{validator_set_, item.block_id, SESSION_ID};
+      auto verified = block::verify_pq_finality(context, *item.signatures, block::FinalityRole::Final);
+      if (verified.is_error()) {
+        fail(PSTRING() << "accepted proof " << item.block_id.to_str()
+                       << " failed independent trusted-context verification: " << verified.error());
+        co_return td::Unit{};
+      }
+      ++independently_verified_proofs;
     }
 
     std::optional<AcceptedCarrier> accepted;
@@ -1572,15 +1605,11 @@ class TestConsensus : public td::actor::Actor {
       fail("the accepted carrier contained no signatures to compare");
       co_return td::Unit{};
     }
-    if (accepted_block_count_ == 0 || last_accepted_block_ == FIRST_PARENT) {
-      fail("the post-quantum carrier was built but no block was accepted");
-      co_return td::Unit{};
-    }
-
     LOG(WARNING) << "PQ finality carrier: compared " << compared
                  << " signature(s) byte-for-byte across journal, FinalCert, #13 carrier, database round trip and "
-                    "BlockProof; carrier-missing count=0; accepted blocks="
-                 << accepted_block_count_;
+                    "BlockProof; carrier-missing count=0; longest consecutive accepted run="
+                 << consecutive_accepted_blocks << "; independently verified accepted proofs="
+                 << independently_verified_proofs;
     pq_finality_completed_ = true;
     co_return td::Unit{};
   }
@@ -2457,7 +2486,6 @@ class TestConsensus : public td::actor::Actor {
     td::Ref<block::BlockSignatureSet> signatures;
   };
   std::vector<AcceptedCarrier> accepted_carriers_;
-  size_t accepted_block_count_ = 0;
   bool finishing_ = false;
 };
 

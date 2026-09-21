@@ -175,8 +175,10 @@ set_tests_properties(
         "TOS_SIMPLEX_STATE_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_FINALIZED_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_CANDIDATE_RETENTION_SLOTS=8"
 )
 # The post-quantum round end to end. It observes a verified FinalCert becoming the #13
-# carrier and an accepted block, and compares every carried signature byte-for-byte with
-# its signer journal, the FinalCert, a database round trip and a BlockProof load.
+# carrier and at least three consecutive accepted blocks, independently verifies every
+# accepted proof under its trusted context, and compares one proof's carried signatures
+# byte-for-byte with its signer journal, the FinalCert, a database round trip and a
+# BlockProof load.
 add_test(
     NAME test-consensus-simplex2-pq-finality-e2e-single
     COMMAND test-consensus --duration 40 --n-nodes 1 --target-rate-ms 100
