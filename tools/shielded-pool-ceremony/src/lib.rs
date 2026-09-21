@@ -48,6 +48,7 @@
 pub mod error;
 pub mod lagrange;
 pub mod layout;
+pub mod phase2;
 pub mod points;
 pub mod slice;
 pub mod verify;
