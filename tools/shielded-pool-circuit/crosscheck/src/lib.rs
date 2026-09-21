@@ -30,11 +30,12 @@ use tos_vm::stack::StackItem;
 pub(crate) const TOS: u64 = 1_000_000_000;
 pub const ACTIVE_VERSION: u32 = 18;
 
+pub mod acceptance;
 pub mod anchor_probe;
-pub mod stark_sketch_probe;
 pub mod frontier_probe;
 pub mod imt_probe;
 pub mod pool;
+pub mod stark_sketch_probe;
 pub mod transact;
 pub mod wire;
 
@@ -220,11 +221,8 @@ impl Probe {
 
     /// Calls `frontier_append` and returns the new store and the new root.
     pub fn append(&self, frontier: Cell, index: u64, leaf: &str) -> Result<(Cell, String)> {
-        let stack = vec![
-            StackItem::Cell(frontier),
-            Self::arg(&index.to_string())?,
-            Self::arg(leaf)?,
-        ];
+        let stack =
+            vec![StackItem::Cell(frontier), Self::arg(&index.to_string())?, Self::arg(leaf)?];
         let result = self
             .bc
             .run_get_method(&self.addr, "p_append", stack)

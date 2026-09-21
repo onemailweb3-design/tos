@@ -123,10 +123,7 @@ pub fn contract_gas_ceiling(name: &str) -> Result<i64> {
     let end = rest
         .find(" PUSHINT")
         .ok_or_else(|| CrossCheckError::Fixture(format!("{name} is not a PUSHINT constant")))?;
-    rest[..end]
-        .trim()
-        .parse()
-        .map_err(|error| CrossCheckError::Fixture(format!("{name}: {error}")))
+    rest[..end].trim().parse().map_err(|error| CrossCheckError::Fixture(format!("{name}: {error}")))
 }
 
 /// The denomination list a pool is really deployed with, from section 12.1.
@@ -157,8 +154,7 @@ fn parameters(denominations: &[u64]) -> Result<shielded_pool_genesis::Parameters
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let mut parameters = shielded_pool_genesis::development_parameters(&root)
         .map_err(|error| CrossCheckError::Fixture(format!("the deployment parameters: {error}")))?;
-    parameters.denominations =
-        denominations.iter().map(|amount| u128::from(*amount)).collect();
+    parameters.denominations = denominations.iter().map(|amount| u128::from(*amount)).collect();
     Ok(parameters)
 }
 
@@ -215,11 +211,39 @@ impl Pool {
     }
 
     pub fn deploy_with_denominations(denominations: &[u64]) -> Result<Self> {
+        Self::deploy_with(denominations, None)
+    }
+
+    /// A pool carrying a verifying key the caller chose.
+    ///
+    /// The one thing a ceremony produces that this chain has to live with is
+    /// 1,248 bytes, and until they exist nothing can be said about them except
+    /// by deploying a pool that carries them and putting a proof through it.
+    /// `None` keeps the development key, which is what every other test wants.
+    ///
+    /// A different key is a different genesis state and therefore a different
+    /// address, which is not a side effect to work around -- it is the reason
+    /// the ceremony has to finish before an address can be published.
+    pub fn deploy_with(denominations: &[u64], verifying_key: Option<&[u8]>) -> Result<Self> {
         let mut bc = Blockchain::with_global_version_and_base_workchain(ACTIVE_VERSION)?;
         bc.set_workchain(0);
         let payer = bc.treasury("relay", 1_000_000 * TOS)?;
         let code = compile_func(&pool_sources())?;
-        let si = StateInit::with_code_and_data(code, genesis_state(denominations)?);
+        let state = match verifying_key {
+            None => genesis_state(denominations)?,
+            Some(bytes) => {
+                let mut parameters = parameters(denominations)?;
+                parameters.verifying_key = bytes.to_vec();
+                shielded_pool_genesis::build(parameters)
+                    .map_err(|error| {
+                        CrossCheckError::Fixture(format!(
+                            "a genesis state carrying that verifying key: {error}"
+                        ))
+                    })?
+                    .state
+            }
+        };
+        let si = StateInit::with_code_and_data(code, state);
         let addr_hash = si
             .write_to_new_cell()
             .and_then(|builder| builder.into_cell())

@@ -48,7 +48,21 @@ pub struct DevelopmentKeys {
 
 /// Runs the circuit-specific setup over the section 11 circuit.
 pub fn development_keys(shape: ShieldedTransactionCircuit) -> Result<DevelopmentKeys> {
-    let mut rng = ChaCha20Rng::from_seed(DEVELOPMENT_SEED);
+    keys_from_seed(shape, DEVELOPMENT_SEED)
+}
+
+/// The same setup under a caller-chosen seed.
+///
+/// Still a single-party setup and still not a ceremony: whoever holds the seed
+/// holds the toxic waste. It exists so that a *second* key pair can be
+/// produced, which is what the ceremony acceptance gate needs -- a gate that
+/// only ever sees one key cannot show that it binds a proof to the key the
+/// pool was deployed with rather than merely to some valid key.
+pub fn keys_from_seed(
+    shape: ShieldedTransactionCircuit,
+    seed: [u8; 32],
+) -> Result<DevelopmentKeys> {
+    let mut rng = ChaCha20Rng::from_seed(seed);
     let (proving, verifying) = Groth16::<Bls12_381>::circuit_specific_setup(shape, &mut rng)
         .map_err(|error| Error::Backend(format!("setup: {error}")))?;
     if verifying.gamma_abc_g1.len() != PUBLIC_INPUT_COUNT + 1 {
