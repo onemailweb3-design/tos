@@ -172,6 +172,25 @@ if(TARGET tos_crypto)
   set_target_properties(test-simplex-carrier-bound PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(test-simplex-carrier-bound PRIVATE tos_block tos_crypto tos_mldsa44 tl_api tl-utils)
   add_test(NAME simplex-carrier-bound COMMAND test-simplex-carrier-bound)
+  # Exact cell/BOC and network-TL costs of the persisted post-quantum finality carrier.
+  add_executable(block-signature-carrier-measure
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measure.cpp")
+  set_target_properties(block-signature-carrier-measure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(block-signature-carrier-measure PRIVATE tos_block tos_crypto tos_mldsa44
+    tos_pq_consensus_signer tos_pq_consensus tl_api tl-utils)
+  target_include_directories(block-signature-carrier-measure PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
+  target_compile_definitions(block-signature-carrier-measure PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
+  target_compile_definitions(block-signature-carrier-measure PRIVATE
+    MEASUREMENTS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measurements.tsv")
+  add_test(NAME block-signature-carrier-measure COMMAND block-signature-carrier-measure)
+  add_executable(test-block-signature-carrier-bound
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-bound-test.cpp")
+  set_target_properties(test-block-signature-carrier-bound PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-block-signature-carrier-bound PRIVATE tos_block tos_crypto tos_mldsa44
+    tos_pq_consensus_signer tos_pq_consensus tl_api tl-utils)
+  target_include_directories(test-block-signature-carrier-bound PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
+  target_compile_definitions(test-block-signature-carrier-bound PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
+  add_test(NAME block-signature-carrier-bound COMMAND test-block-signature-carrier-bound)
   # Configuration parameter 43 encodings both implementations must read identically.
   add_executable(config43-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors-gen.cpp")
   set_target_properties(config43-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

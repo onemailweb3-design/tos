@@ -1,0 +1,13 @@
+# Canonical block_signatures_simplex_pq#13 carrier measurements; BOCs use mode 0.
+# Counts through 100 use real verifier-valid ML-DSA-44 signatures. The 400 row uses
+# distinct deterministic exact-width payloads; this saves 300 signing operations and
+# changes no size because all signature objects remain exactly 2420 bytes.
+# Canonical 400-signer BOC SHA-256: 0C05E72DD2095B0B3497CEF3422DFBC65B42891BB011C75E769AC245FA0B9B63
+signers	cells	depth	block_signatures_boc	block_proof_boc	node_tl	lite_tl	simplex_certificate_tl	boc_minus_certificate	input
+1	24	22	2720	2810	2644	2644	2488	232	valid
+21	484	27	53787	53879	51924	51924	51128	2659	valid
+32	737	27	81860	81952	79028	79028	77880	3980	valid
+64	1473	28	163524	163616	157876	157876	155704	7820	valid
+100	2301	29	255396	255488	246580	246580	243256	12140	valid
+400	9201	31	1020996	1021088	985780	985780	972856	48140	deterministic-size
+401	REFUSED	REFUSED	REFUSED	REFUSED	REFUSED	REFUSED	REFUSED	REFUSED	structural
