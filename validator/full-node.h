@@ -85,8 +85,8 @@ class FullNode : public td::actor::Actor {
 
   virtual void update_dht_node(td::actor::ActorId<dht::Dht> dht) = 0;
 
-  virtual void add_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
-  virtual void del_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
+  virtual void add_validator_adnl_id(adnl::AdnlNodeIdShort id) = 0;
+  virtual void del_validator_adnl_id(adnl::AdnlNodeIdShort id) = 0;
   virtual void add_collator_adnl_id(adnl::AdnlNodeIdShort id) = 0;
   virtual void del_collator_adnl_id(adnl::AdnlNodeIdShort id) = 0;
 

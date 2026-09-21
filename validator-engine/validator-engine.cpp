@@ -1436,16 +1436,36 @@ void ValidatorEngine::alarm() {
         }
       }
       for (auto &x : to_del) {
+        std::vector<tos::adnl::AdnlNodeIdShort> validator_adnl_ids;
+        if (auto it = config_.validators.find(x); it != config_.validators.end()) {
+          for (const auto &[id, _] : it->second.adnl_ids) {
+            validator_adnl_ids.emplace_back(id);
+          }
+        }
         config_.config_del_validator_permanent_key(x);
+        for (auto id : validator_adnl_ids) {
+          del_local_validator_adnl_id(id);
+        }
         if (!validator_manager_.empty()) {
           td::actor::send_closure(validator_manager_, &tos::validator::ValidatorManagerInterface::del_permanent_key, x,
                                   [](td::Result<>) {});
         }
-        if (!full_node_.empty()) {
-          td::actor::send_closure(full_node_, &tos::validator::fullnode::FullNode::del_permanent_key, x,
-                                  [](td::Result<>) {});
-        }
         need_write = true;
+      }
+
+      std::vector<std::pair<tos::PublicKeyHash, tos::PublicKeyHash>> expired_validator_adnl_ids;
+      for (const auto &[permanent_id, validator] : config_.validators) {
+        for (const auto &[adnl_id, expire_at] : validator.adnl_ids) {
+          if (expire_at <= state_->get_unix_time()) {
+            expired_validator_adnl_ids.emplace_back(permanent_id, adnl_id);
+          }
+        }
+      }
+      for (const auto &[permanent_id, adnl_id] : expired_validator_adnl_ids) {
+        if (config_.config_del_validator_adnl_id(permanent_id, adnl_id).move_as_ok()) {
+          del_local_validator_adnl_id(tos::adnl::AdnlNodeIdShort{adnl_id});
+          need_write = true;
+        }
       }
 
       {
@@ -1455,14 +1475,14 @@ void ValidatorEngine::alarm() {
             fs_to_del.insert(x.first);
             continue;
           }
-          auto issued_by = x.second.issued_by().compute_short_id().bits256_value();
-          if (validator_set_.not_null() && validator_set_->is_validator(tos::ValidatorId{issued_by})) {
+          auto issued_by = x.second.issued_by().compute_short_id();
+          if (is_validator_transport_root(issued_by, validator_set_)) {
             continue;
           }
-          if (validator_set_prev_.not_null() && validator_set_prev_->is_validator(tos::ValidatorId{issued_by})) {
+          if (is_validator_transport_root(issued_by, validator_set_prev_)) {
             continue;
           }
-          if (validator_set_next_.not_null() && validator_set_next_->is_validator(tos::ValidatorId{issued_by})) {
+          if (is_validator_transport_root(issued_by, validator_set_next_)) {
             continue;
           }
           fs_to_del.insert(x.first);
@@ -2393,6 +2413,7 @@ void ValidatorEngine::start_validator() {
 }
 
 void ValidatorEngine::finish_start_validator() {
+  local_validator_adnl_ids_.clear();
   for (auto &v : config_.validators) {
     td::actor::send_closure(validator_manager_, &tos::validator::ValidatorManagerInterface::add_permanent_key, v.first,
                             [](td::Result<>) {});
@@ -2400,6 +2421,11 @@ void ValidatorEngine::finish_start_validator() {
     for (auto &t : v.second.temp_keys) {
       td::actor::send_closure(validator_manager_, &tos::validator::ValidatorManagerInterface::add_temp_key, t.first,
                               [](td::Result<>) {});
+    }
+    for (const auto &[id, expire_at] : v.second.adnl_ids) {
+      if (expire_at > td::Clocks::system() && config_.adnl_ids.contains(id)) {
+        add_local_validator_adnl_id(tos::adnl::AdnlNodeIdShort{id});
+      }
     }
   }
 
@@ -2544,9 +2570,10 @@ void ValidatorEngine::start_full_node() {
         rldp2_.get(), quic_.get(),
         default_dht_node_.is_zero() ? td::actor::ActorId<tos::dht::Dht>{} : dht_nodes_[default_dht_node_].get(),
         overlay_manager_.get(), validator_manager_.get(), full_node_client_.get(), db_root_, std::move(P));
-    for (auto &v : config_.validators) {
-      td::actor::send_closure(full_node_, &tos::validator::fullnode::FullNode::add_permanent_key, v.first,
-                              [](td::Result<>) {});
+    for (const auto &[id, references] : local_validator_adnl_ids_) {
+      for (std::size_t i = 0; i < references; ++i) {
+        td::actor::send_closure(full_node_, &tos::validator::fullnode::FullNode::add_validator_adnl_id, id);
+      }
     }
     for (auto &[c, shards] : config_.collators) {
       for (auto &_ : shards) {
@@ -2743,11 +2770,6 @@ void ValidatorEngine::try_add_validator_permanent_key(tos::PublicKeyHash key_has
     td::actor::send_closure(validator_manager_, &tos::validator::ValidatorManagerInterface::add_permanent_key, key_hash,
                             ig.get_promise());
   }
-  if (!full_node_.empty()) {
-    td::actor::send_closure(full_node_, &tos::validator::fullnode::FullNode::add_permanent_key, key_hash,
-                            ig.get_promise());
-  }
-
   write_config(ig.get_promise());
 }
 
@@ -2777,6 +2799,13 @@ void ValidatorEngine::try_add_validator_temp_key(tos::PublicKeyHash perm_key, to
 
 void ValidatorEngine::try_add_validator_adnl_addr(tos::PublicKeyHash perm_key, tos::PublicKeyHash adnl_id,
                                                   td::uint32 ttl, td::Promise<> promise) {
+  const auto now = td::Clocks::system();
+  bool was_active = false;
+  if (auto validator = config_.validators.find(perm_key); validator != config_.validators.end()) {
+    if (auto adnl = validator->second.adnl_ids.find(adnl_id); adnl != validator->second.adnl_ids.end()) {
+      was_active = adnl->second > now && config_.adnl_ids.contains(adnl_id);
+    }
+  }
   auto R = config_.config_add_validator_adnl_id(perm_key, adnl_id, ttl);
   if (R.is_error()) {
     promise.set_error(R.move_as_error());
@@ -2786,6 +2815,13 @@ void ValidatorEngine::try_add_validator_adnl_addr(tos::PublicKeyHash perm_key, t
   if (!R.move_as_ok()) {
     promise.set_value({});
     return;
+  }
+
+  const bool is_active = ttl > now && config_.adnl_ids.contains(adnl_id);
+  if (!was_active && is_active) {
+    add_local_validator_adnl_id(tos::adnl::AdnlNodeIdShort{adnl_id});
+  } else if (was_active && !is_active) {
+    del_local_validator_adnl_id(tos::adnl::AdnlNodeIdShort{adnl_id});
   }
 
   write_config(std::move(promise));
@@ -2920,6 +2956,12 @@ void ValidatorEngine::try_del_dht_node(tos::PublicKeyHash pub, td::Promise<> pro
 }
 
 void ValidatorEngine::try_del_validator_permanent_key(tos::PublicKeyHash pub, td::Promise<> promise) {
+  std::vector<tos::adnl::AdnlNodeIdShort> validator_adnl_ids;
+  if (auto it = config_.validators.find(pub); it != config_.validators.end()) {
+    for (const auto &[id, _] : it->second.adnl_ids) {
+      validator_adnl_ids.emplace_back(id);
+    }
+  }
   auto R = config_.config_del_validator_permanent_key(pub);
   if (R.is_error()) {
     promise.set_error(R.move_as_error());
@@ -2931,15 +2973,14 @@ void ValidatorEngine::try_del_validator_permanent_key(tos::PublicKeyHash pub, td
     return;
   }
 
+  for (auto id : validator_adnl_ids) {
+    del_local_validator_adnl_id(id);
+  }
+
   if (!validator_manager_.empty()) {
     td::actor::send_closure(validator_manager_, &tos::validator::ValidatorManagerInterface::del_permanent_key, pub,
                             [](td::Result<>) {});
   }
-  if (!full_node_.empty()) {
-    td::actor::send_closure(full_node_, &tos::validator::fullnode::FullNode::del_permanent_key, pub,
-                            [](td::Result<>) {});
-  }
-
   write_config(std::move(promise));
 }
 
@@ -2976,6 +3017,8 @@ void ValidatorEngine::try_del_validator_adnl_addr(tos::PublicKeyHash perm, tos::
     promise.set_value({});
     return;
   }
+
+  del_local_validator_adnl_id(tos::adnl::AdnlNodeIdShort{adnl_id});
 
   write_config(std::move(promise));
 }
@@ -3250,14 +3293,14 @@ void ValidatorEngine::try_import_fast_sync_member_certificate(tos::adnl::AdnlNod
   TRY_STATUS_PROMISE_PREFIX(promise, certificate.check_signature(id), "invalid certificate: ");
 
   auto cert_score = [this](tos::overlay::OverlayMemberCertificate &cert) -> td::int64 {
-    auto issued_by = cert.issued_by().compute_short_id().bits256_value();
-    if (validator_set_next_.not_null() && validator_set_next_->is_validator(tos::ValidatorId{issued_by})) {
+    auto issued_by = cert.issued_by().compute_short_id();
+    if (is_validator_transport_root(issued_by, validator_set_next_)) {
       return cert.expire_at() + (1ll << 32);
     }
-    if (validator_set_.not_null() && validator_set_->is_validator(tos::ValidatorId{issued_by})) {
+    if (is_validator_transport_root(issued_by, validator_set_)) {
       return cert.expire_at() + (1ll << 32);
     }
-    if (validator_set_prev_.not_null() && validator_set_prev_->is_validator(tos::ValidatorId{issued_by})) {
+    if (is_validator_transport_root(issued_by, validator_set_prev_)) {
       return cert.expire_at() + (0ll << 32);
     }
     return -1;
@@ -3337,7 +3380,7 @@ void ValidatorEngine::try_import_shard_overlay_certificate(tos::adnl::AdnlNodeId
   auto issuer = certificate->issuer_hash();
   bool issuer_is_validator = false;
   for (const auto &val_set : {validator_set_, validator_set_prev_, validator_set_next_}) {
-    if (val_set.not_null() && val_set->is_validator(tos::ValidatorId{issuer.bits256_value()})) {
+    if (is_validator_transport_root(issuer, val_set)) {
       issuer_is_validator = true;
       break;
     }
@@ -3494,17 +3537,47 @@ tos::PublicKeyHash ValidatorEngine::find_local_validator_for_cert_issuing() {
   if (state_.is_null()) {
     return tos::PublicKeyHash{};
   }
+  std::vector<tos::PublicKeyHash> roots;
   for (auto &val_set : {validator_set_, validator_set_next_, validator_set_prev_}) {
     if (val_set.is_null()) {
       continue;
     }
-    for (auto &[val_id, _] : config_.validators) {
-      if (val_set->is_validator(tos::ValidatorId{val_id.bits256_value()})) {
-        return val_id;
-      }
+    for (const auto &descr : val_set->export_vector()) {
+      roots.push_back(tos::validator::validator_transport_root(descr));
     }
   }
-  return tos::PublicKeyHash::zero();
+  return tos::validator::select_validator_transport_signer(
+      tos::validator::canonical_validator_transport_roots(std::move(roots)), local_validator_adnl_ids_);
+}
+
+void ValidatorEngine::add_local_validator_adnl_id(tos::adnl::AdnlNodeIdShort id) {
+  tos::validator::add_validator_adnl_reference(local_validator_adnl_ids_, id);
+  if (!full_node_.empty()) {
+    td::actor::send_closure(full_node_, &tos::validator::fullnode::FullNode::add_validator_adnl_id, id);
+  }
+}
+
+void ValidatorEngine::del_local_validator_adnl_id(tos::adnl::AdnlNodeIdShort id) {
+  if (!local_validator_adnl_ids_.contains(id)) {
+    return;
+  }
+  tos::validator::del_validator_adnl_reference(local_validator_adnl_ids_, id);
+  if (!full_node_.empty()) {
+    td::actor::send_closure(full_node_, &tos::validator::fullnode::FullNode::del_validator_adnl_id, id);
+  }
+}
+
+bool ValidatorEngine::is_validator_transport_root(tos::PublicKeyHash id,
+                                                  const td::Ref<block::ValidatorSet> &set) const {
+  if (set.is_null()) {
+    return false;
+  }
+  for (const auto &descr : set->export_vector()) {
+    if (tos::validator::validator_transport_root(descr) == id) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void ValidatorEngine::load_custom_overlays_config() {

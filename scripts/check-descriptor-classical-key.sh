@@ -55,3 +55,8 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 echo "classical-key inventory matches the tree"
+if grep -q $'\taborts-on-pq\t' "$manifest"; then
+  echo "classical-key check failed: aborts-on-pq inventory rows remain" >&2
+  exit 1
+fi
+echo "classical-key inventory has no aborts-on-pq rows"

@@ -789,6 +789,12 @@ target_include_directories(test-node-consensus-membership PRIVATE ${CMAKE_CURREN
 target_link_libraries(test-node-consensus-membership PRIVATE tos_block keys tos_crypto tos_crypto_core tl_api tdutils tdactor
                       tos_pq_consensus_signer tos_pq_consensus)
 
+add_executable(test-validator-transport-authority test/pq-native/validator-transport-authority-test.cpp)
+target_include_directories(test-validator-transport-authority PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                           ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
+target_link_libraries(test-validator-transport-authority PRIVATE overlay tos_block tos_crypto keys tdutils tdactor adnl
+                      tl_api dht)
+
 add_executable(test-validator-cleanup-integration test/test-validator-cleanup-integration.cpp)
 target_include_directories(test-validator-cleanup-integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                            ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
@@ -1174,6 +1180,7 @@ tos_test(test-overlay-broadcast-capacity)
 tos_test(test-download-state-budget)
 tos_test(test-pq-network-parser-resource)
 tos_test(test-pq-signature-persistence)
+tos_test(test-validator-transport-authority)
 tos_test(test-download-next-blocks-validation)
 tos_test(test-ext-message-pool)
 tos_test(test-msg-envelope)

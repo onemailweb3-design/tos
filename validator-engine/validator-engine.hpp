@@ -47,6 +47,7 @@
 #include "validator/full-node-master.h"
 #include "validator/full-node.h"
 #include "validator/manager.h"
+#include "validator/validator-transport-authority.h"
 #include "validator/validator.h"
 
 #include "json-rpc-server.h"
@@ -189,6 +190,7 @@ class ValidatorEngine : public td::actor::Actor {
   td::actor::ActorOwn<tos::adnl::AdnlExtClient> full_node_client_;
   td::actor::ActorOwn<tos::validator::fullnode::FullNode> full_node_;
   tos::adnl::AdnlNodeIdShort full_node_id_ = tos::adnl::AdnlNodeIdShort::zero();
+  tos::validator::ValidatorAdnlRefCounts local_validator_adnl_ids_;
   std::map<td::uint16, td::actor::ActorOwn<tos::validator::fullnode::FullNodeMaster>> full_node_masters_;
   td::actor::ActorOwn<tos::adnl::AdnlExtServer> control_ext_server_;
   td::actor::ActorOwn<tos::PrometheusExporter> exporter_;
@@ -665,6 +667,9 @@ class ValidatorEngine : public td::actor::Actor {
   void issue_shard_overlay_certificates();
   std::vector<tos::ShardIdFull> get_shards_for_overlay_certificates();
   tos::PublicKeyHash find_local_validator_for_cert_issuing();
+  void add_local_validator_adnl_id(tos::adnl::AdnlNodeIdShort id);
+  void del_local_validator_adnl_id(tos::adnl::AdnlNodeIdShort id);
+  bool is_validator_transport_root(tos::PublicKeyHash id, const td::Ref<block::ValidatorSet> &set) const;
 
   std::string custom_overlays_config_file() const {
     return db_root_ + "/custom-overlays.json";

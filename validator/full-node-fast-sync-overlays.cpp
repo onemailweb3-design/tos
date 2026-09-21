@@ -20,7 +20,6 @@
 #include "auto/tl/tos_api_json.h"
 #include "block/validator-session-members.h"
 #include "common/delay.h"
-#include "interfaces/validator-full-id.h"
 #include "td/utils/JsonBuilder.h"
 #include "td/utils/port/Stat.h"
 #include "td/utils/port/path.h"
@@ -30,6 +29,7 @@
 #include "checksum.h"
 #include "full-node-fast-sync-overlays.hpp"
 #include "full-node-serializer.hpp"
+#include "validator-transport-authority.h"
 
 namespace tos::validator::fullnode {
 
@@ -639,8 +639,7 @@ void FullNodeFastSyncOverlays::update_overlays(
         continue;
       }
       for (const ValidatorDescr &val : val_set->export_vector()) {
-        PublicKeyHash public_key_hash = ValidatorFullId{val.classical_key()}.compute_short_id();
-        root_public_keys_.push_back(public_key_hash);
+        root_public_keys_.push_back(validator_transport_root(val));
         current_validators_adnl_.emplace_back(block::validator_adnl_identity(val));
       }
     }

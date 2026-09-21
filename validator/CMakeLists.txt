@@ -143,6 +143,7 @@ set(HARDFORK_VALIDATOR_SOURCE
 )
 
 set(FULL_NODE_SOURCE
+  validator-transport-authority.h
   full-node.h
   full-node.hpp
   full-node.cpp
