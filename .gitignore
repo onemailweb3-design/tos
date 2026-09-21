@@ -61,3 +61,9 @@ test/integration/.toscan-*/
 # here by default and pins the expected hash itself, so the artifact is checked
 # rather than stored.
 crypto/smartcont/artifacts/
+
+# The phase-1 slice: eighteen megabytes of somebody else's ceremony, fetched by
+# scripts/shielded-pool-phase1-slice.py. Not stored here -- it is identified by
+# the hashes in doc/shielded-pool-ceremony.md and reproducible from the
+# published transcript with five range reads.
+artifacts/phase1/

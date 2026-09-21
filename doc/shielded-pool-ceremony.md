@@ -50,7 +50,22 @@ degree-2^15 SRS is a prefix of every section rather than a prefix of the file:
 | `beta_tau_g1` | 32,768 | 3,145,728 | 64,424,509,408 |
 | `beta_g2` | 1 | 192 | 77,309,411,296 |
 
-18,874,464 bytes, fetched with five HTTP range requests.
+18,874,464 bytes, fetched with five HTTP range requests. **Done, on
+2026-09-21.** The slice is `d161614630b0504bd02075a9f57e7ca18d24f0c7c911c5cda5a686e91b8ced75`,
+its sections hash to
+
+```
+tau_g1        5fe833e989076843642fc5da26126951d54245829725d1f83aade91a2d22e602
+tau_g2        97f86b31a42c362421d1bdfee64ca71357dd78e0aa7ac95adc1fcb02ffbdb502
+alpha_tau_g1  bb92e0d55af3219da27a6675d3d9bba18f0b42e2c66c27e196f9ad7771b71491
+beta_tau_g1   fc3dae175498ce1c7027b4749a6a944ed92b230c05ebd20c1be321ff8e92c617
+beta_g2       605833ebc3b3227c2e4c8c35401eb5caca504ee68c54aaf4fd98571badf1d3ba
+```
+
+and anyone holding the transcript can reproduce them with five reads, because
+the slice file is those ranges end to end with nothing added. The artifact is
+not committed: eighteen megabytes of someone else's ceremony belongs beside a
+build, not in the history, and the hashes above are what identifies it.
 
 Getting those offsets wrong is the worst error available here: the bytes would
 parse, the points would be on the curve and in the right subgroup, and
@@ -87,6 +102,22 @@ Nine tests build strings broken one way at a time and require the check aimed
 at each to catch it, including the two that every other check passes: a string
 of consistent powers of the *wrong generator*, and alpha and beta sections
 swapped.
+
+**And it has been run against the real slice, both ways.** The 18 MB fetched
+from the transcript verifies: 131,839 points, all in the prime-order subgroup,
+every ratio holding. Then two genuine powers from that same transcript,
+`tau_g1[40000]` and `tau_g1[40001]`, were swapped — every point still valid,
+every point still in the subgroup, the file still hashing to its record — and
+it was refused:
+
+```
+REFUSED: structure: the G1 powers of tau are not consecutive powers of one tau
+```
+
+A single flipped bit is caught earlier and more cheaply, by `blst` with
+`BLST_POINT_NOT_ON_CURVE`, which is why the swap is the interesting case: it is
+the one a corrupted or hostile transcript could survive everything but the
+pairing checks with.
 
 ### What it does not establish
 
