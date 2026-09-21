@@ -29,6 +29,7 @@
 #include "tos/quorum.h"
 #include "validator/consensus/candidate-codec.h"
 #include "validator/finality-cache-policy.h"
+#include "validator/impl/accept-block.hpp"
 #include "validator/manager-resource-policy.h"
 #include "vm/boc-compression.h"
 #include "vm/boc.h"
@@ -2440,6 +2441,13 @@ td::actor::Task<> TestManagerFacade::accept_block(BlockIdExt id, td::Ref<BlockDa
                                                   bool send_shard_block_desc, bool apply) {
   if (signatures->is_pq() && signatures->pq_session_id().move_as_ok() != expected_session_id) {
     co_return td::Status::Error("manager facade received a PQ carrier for an unexpected session");
+  }
+  auto prepared = prepare_accepted_block_signatures(validator_set_, signatures, id, expected_session_id);
+  if (prepared.is_error()) {
+    co_return prepared.move_as_error();
+  }
+  if (signatures->is_final() && prepared.ok().is_null()) {
+    co_return td::Status::Error("accept block did not materialize final signatures");
   }
   CHECK(id.shard_full() == SHARD);
   CHECK(!send_shard_block_desc);

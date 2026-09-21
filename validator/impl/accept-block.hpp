@@ -33,6 +33,10 @@ namespace tos {
 namespace validator {
 using td::Ref;
 
+td::Result<td::Ref<vm::Cell>> prepare_accepted_block_signatures(
+    td::Ref<block::ValidatorSet> validator_set, td::Ref<block::BlockSignatureSet> signatures, BlockIdExt block_id,
+    ValidatorSessionId expected_session_id);
+
 /*
  *
  * block data (if not given) can be obtained from:

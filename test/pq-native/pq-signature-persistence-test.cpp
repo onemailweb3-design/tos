@@ -5,6 +5,7 @@
 #include "block/block-parse.h"
 #include "validator/db/rootdb.hpp"
 #include "validator/fabric.h"
+#include "validator/impl/accept-block.hpp"
 #include "validator/impl/check-proof.hpp"
 #include "validator/impl/top-shard-descr.hpp"
 #include "validator/interfaces/db.h"
@@ -339,6 +340,19 @@ void run_proof_consumers() {
                                "consumer-carrier");
   auto signature_cell = require_ok(signatures->serialize(fixture.validator_set), "consumer-serialize");
   auto context = block::PQFinalityVerificationContext{fixture.validator_set, fixture.id, fixture.session};
+
+  auto accepted_cell = require_ok(
+      prepare_accepted_block_signatures(fixture.validator_set, signatures, fixture.id, fixture.session),
+      "accept-block-prepare");
+  if (accepted_cell->get_hash() != signature_cell->get_hash()) {
+    fail("PQ_ACCEPT_BLOCK_SIGNATURE_BYTES_MISMATCH");
+  }
+  auto wrong_expected_session = fixture.session;
+  wrong_expected_session.as_slice()[0] ^= 1;
+  expect_error(prepare_accepted_block_signatures(fixture.validator_set, signatures, fixture.id,
+                                                 wrong_expected_session),
+               "carried session_id does not match trusted expected session_id", "accept_block_wrong_session");
+  std::fprintf(stderr, "PQ_ACCEPT_BLOCK_BOUNDARY_OK\n");
 
   auto proof_root = block_proof_cell(fixture.id, signature_cell);
   auto proof_boc = require_ok(vm::std_boc_serialize(proof_root, 31), "proof-boc");

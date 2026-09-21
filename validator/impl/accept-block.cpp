@@ -39,6 +39,34 @@ namespace tos {
 namespace validator {
 using namespace std::literals::string_literals;
 
+td::Result<td::Ref<vm::Cell>> prepare_accepted_block_signatures(
+    td::Ref<block::ValidatorSet> validator_set, td::Ref<block::BlockSignatureSet> signatures, BlockIdExt block_id,
+    ValidatorSessionId expected_session_id) {
+  if (validator_set.is_null()) {
+    return td::Status::Error("accept block: trusted validator set is missing");
+  }
+  if (signatures.is_null()) {
+    return td::Status::Error("accept block: signature set is missing");
+  }
+  td::Result<ValidatorWeight> verified;
+  if (signatures->is_pq()) {
+    const block::PQFinalityVerificationContext context{validator_set, block_id, expected_session_id};
+    verified = block::verify_pq_finality(context, *signatures,
+                                         signatures->is_final() ? block::FinalityRole::Final
+                                                                : block::FinalityRole::Approve);
+  } else if (signatures->is_final()) {
+    verified = signatures->check_signatures(validator_set, block_id);
+  } else {
+    verified = signatures->check_approve_signatures(validator_set, block_id);
+  }
+  TRY_RESULT(ignored_weight, std::move(verified));
+  static_cast<void>(ignored_weight);
+  if (!signatures->is_final()) {
+    return td::Ref<vm::Cell>{};
+  }
+  return signatures->serialize(std::move(validator_set));
+}
+
 AcceptBlockQuery::AcceptBlockQuery(BlockIdExt id, td::Ref<BlockData> data, std::vector<BlockIdExt> prev,
                                    td::Ref<block::ValidatorSet> validator_set,
                                    td::Ref<block::BlockSignatureSet> signatures,
@@ -250,36 +278,14 @@ bool AcceptBlockQuery::create_new_proof() {
   }
   // 7. check signatures
   if (!is_fake_) {
-    td::Result<td::uint64> sign_chk;
-    if (signatures_->is_pq()) {
-      block::PQFinalityVerificationContext context{validator_set_, id_, expected_session_id_};
-      sign_chk = block::verify_pq_finality(context, *signatures_,
-                                           signatures_->is_final() ? block::FinalityRole::Final
-                                                                   : block::FinalityRole::Approve);
-    } else if (signatures_->is_final()) {
-      sign_chk = signatures_->check_signatures(validator_set_, id_);
-    } else {
-      sign_chk = signatures_->check_approve_signatures(validator_set_, id_);
-    }
-    if (sign_chk.is_error()) {
-      auto err = sign_chk.move_as_error();
+    auto prepared = prepare_accepted_block_signatures(validator_set_, signatures_, id_, expected_session_id_);
+    if (prepared.is_error()) {
+      auto err = prepared.move_as_error();
       VLOG(VALIDATOR_WARNING) << "signature check failed : " << err.to_string();
       abort_query(std::move(err));
       return false;
     }
-  }
-  if (!is_fake_ && signatures_->is_final()) {
-    // 8. serialize signatures
-    if (!is_fake_) {
-      vm::CellBuilder cb2;
-      auto r_sign_cell = signatures_->serialize(validator_set_);
-      if (r_sign_cell.is_error()) {
-        abort_query(
-            r_sign_cell.move_as_error_prefix("cannot serialize BlockSignatures for the newly-accepted block: "));
-        return false;
-      }
-      signatures_cell_ = r_sign_cell.move_as_ok();
-    }
+    signatures_cell_ = prepared.move_as_ok();
   }
   Ref<vm::Cell> bs_cell;
   if (is_masterchain()) {
