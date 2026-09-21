@@ -60,13 +60,27 @@ computations that resolve it, is in
 
 ```
 constraints 18,107   instance 19   witness 18,215
-QAP degree 18,234 -> domain 2^15 = 32,768        (14,534 to spare)
+QAP degree = constraints + instance = 18,126
+          -> domain 2^15 = 32,768             (14,642 to spare)
 ```
 
-`tools/shielded-pool-ceremony/tests/degree.rs` holds that against the circuit
+`constraints + instance_variables`, not `max(constraints, variables)`. The
+setup gives every instance variable a Lagrange coefficient of its own at index
+`num_constraints + i` — those are the input-consistency rows — so the domain
+has to reach past the constraints by exactly the number of inputs. This
+document said 18,234 and 14,534 until the formula was checked against a key
+`ark-groth16` actually built; both round to 2^15, so the slice was right
+either way, but the headroom was not, and the headroom is the number somebody
+adding constraints reads.
+
+`tools/shielded-pool-ceremony/tests/degree.rs` holds this against the circuit
 on every run, and it is a gate rather than a note: every byte offset below is a
 function of the exponent, so a circuit that grew past 32,768 would make an
-already-fetched slice *the wrong bytes* rather than too few of them.
+already-fetched slice *the wrong bytes* rather than too few of them. One of
+those tests builds a real key and reads the domain back out of it; another
+pins the formula on a shape where the two candidates disagree, because for
+*this* circuit they do not, and a test that cannot tell them apart is not
+evidence about which is right.
 
 ### Eighteen megabytes, and where they sit in each file
 

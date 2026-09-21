@@ -15,25 +15,35 @@
 //! What lives here is everything about that ceremony which does not need
 //! participants:
 //!
-//! * [`degree`] -- the QAP domain this circuit needs, measured from the
-//!   circuit rather than written down, because every byte of the phase-1
-//!   slice is located by it;
-//! * [`layout`] -- where in the published 72-gibibyte transcript that slice
-//!   is, and the arithmetic that has to agree with the published file size
-//!   before any offset is trusted;
+//! * [`Shape`] -- the QAP domain this circuit needs, measured from the circuit
+//!   rather than written down, because every byte of the phase-1 slice is
+//!   located by it;
+//! * [`layout`] -- which published ceremony a deployment inherits, and where in
+//!   its file the slice is, with arithmetic that has to agree with the
+//!   published file size before any offset is trusted;
+//! * [`lagrange`] -- the basis change between a verified slice and something a
+//!   setup can consume, and the `h` query that goes with it;
 //! * [`points`] -- transcript bytes into curve points, with this chain's own
 //!   BLS library deciding what a point is;
 //! * [`verify`] -- the pairing checks that say the slice is a powers-of-tau
 //!   string and not merely a list of valid points.
 //!
-//! **What is deliberately absent: the phase-2 multi-party computation.** It
-//! is the one remaining engineering task and `doc/shielded-pool-ceremony.md`
-//! says why it is not sketched here. `ark-groth16` 0.5 has no MPC module --
-//! checked, not assumed -- and the two mature implementations, Filecoin's
-//! `phase2` and gnark's `mpcsetup`, both want the circuit expressed in their
-//! own constraint system. A second implementation of an 18,107-constraint
-//! circuit is a worse risk than it sounds, so that is a decision to take
-//! deliberately rather than a gap to fill quickly.
+//! **The phase-2 multi-party computation is being built, and is not here
+//! yet.** `ark-groth16` 0.5 has no MPC module -- checked in its source, not
+//! assumed -- and the two mature implementations, Filecoin's `phase2` and
+//! gnark's `mpcsetup`, both want the circuit expressed in their own constraint
+//! system; a second implementation of an 18,107-constraint circuit is a worse
+//! risk than it sounds. So it is being written against arkworks, in stages,
+//! each one with a check that can fail rather than an argument that sounds
+//! right.
+//!
+//! What the first stage established is already load-bearing. The setup's
+//! evaluation domain is `constraints + instance_variables` and not, as
+//! [`Shape::qap_degree`] used to compute, `max(constraints, variables)` --
+//! both round to 2^15 for this circuit, so nothing downstream was wrong, but
+//! the headroom was. And the key's dimensions line up with what [`lagrange`]
+//! produces: the `h` query is 32,767 long and so is the transform's, because
+//! they are the same object.
 
 pub mod error;
 pub mod lagrange;
@@ -57,10 +67,23 @@ pub struct Shape {
 }
 
 impl Shape {
-    /// The QAP degree: the larger of the constraint count and the variable
-    /// count, since the setup interpolates over a domain big enough for both.
+    /// The QAP degree: **constraints plus instance variables**.
+    ///
+    /// Not `max(constraints, variables)`, which is what this computed until it
+    /// was checked against the setup that actually consumes it. The extra
+    /// instance terms are the input-consistency rows: `instance_map_with_evaluation`
+    /// gives each instance variable its own Lagrange coefficient at index
+    /// `num_constraints + i`, so the domain has to reach past the constraints
+    /// by exactly the number of inputs.
+    ///
+    /// For this circuit both formulas round to 2^15, so the phase-1 slice was
+    /// right either way -- but the headroom was not, and the headroom is the
+    /// number somebody adding constraints will read.
+    ///
+    /// `the_domain_is_the_one_the_setup_uses` holds this against a key
+    /// arkworks actually built, rather than against a reading of its source.
     pub fn qap_degree(&self) -> usize {
-        self.constraints.max(self.instance_variables + self.witness_variables)
+        self.constraints + self.instance_variables
     }
 
     /// The power of two the domain rounds up to, which is the exponent the

@@ -102,3 +102,95 @@ fn the_slice_the_exponent_implies_is_the_one_the_layout_produces() {
         assert_eq!(ranges[4].points, 1);
     }
 }
+
+/// The domain is the one the setup uses, not the one a formula says.
+///
+/// `qap_degree` used to be `max(constraints, variables)`, which is a plausible
+/// reading of what a QAP needs and is not what `ark-groth16` does: its
+/// `instance_map_with_evaluation` gives every instance variable a Lagrange
+/// coefficient of its own at index `num_constraints + i`, so the domain is
+/// `constraints + instance_variables`. Both formulas round to 2^15 here, so
+/// nothing downstream was wrong -- but the headroom was, and headroom is the
+/// number somebody adding constraints reads.
+///
+/// This does not re-read that source. It builds a real key and asks it: the
+/// `h` query is one short of the domain, so the key states the domain it was
+/// built over.
+#[test]
+fn the_domain_is_the_one_the_setup_uses() {
+    use ark_bls12_381::{Bls12_381, G1Projective, G2Projective};
+    use ark_ff::UniformRand;
+    use ark_groth16::Groth16;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+    use shielded_pool_circuit::field::Fr;
+
+    let (_pool, public, witness) = scenario::valid_withdrawal().expect("a withdrawal");
+    let circuit = ShieldedTransactionCircuit::new(public, witness);
+    let mut rng = ChaCha20Rng::from_seed(*b"the-domain-a-real-key-was-built!");
+    let key = Groth16::<Bls12_381>::generate_parameters_with_qap(
+        circuit,
+        Fr::rand(&mut rng),
+        Fr::rand(&mut rng),
+        Fr::rand(&mut rng),
+        Fr::rand(&mut rng),
+        G1Projective::rand(&mut rng),
+        G2Projective::rand(&mut rng),
+        &mut rng,
+    )
+    .expect("a key");
+
+    let measured = measured();
+    let domain_the_key_used = key.h_query.len() + 1;
+    assert_eq!(
+        domain_the_key_used,
+        1usize << measured.domain_exponent(),
+        "the setup built over a domain of {domain_the_key_used} and this crate plans the slice \
+         for 2^{}",
+        measured.domain_exponent()
+    );
+    assert!(
+        measured.qap_degree() <= domain_the_key_used,
+        "a QAP degree of {} does not fit the domain the setup chose",
+        measured.qap_degree()
+    );
+
+    // And the key's other dimensions, so the shapes a phase-2 construction has
+    // to produce are written down somewhere that can go red.
+    assert_eq!(key.vk.gamma_abc_g1.len(), measured.instance_variables, "IC is one per input");
+    assert_eq!(key.l_query.len(), measured.witness_variables, "L is one per witness");
+    assert_eq!(
+        key.a_query.len(),
+        measured.instance_variables + measured.witness_variables,
+        "A is one per variable"
+    );
+    assert_eq!(key.b_g1_query.len(), key.a_query.len());
+    assert_eq!(key.b_g2_query.len(), key.a_query.len());
+    eprintln!(
+        "a real key: domain {domain_the_key_used}, h {}, a {}, l {}, ic {}",
+        key.h_query.len(),
+        key.a_query.len(),
+        key.l_query.len(),
+        key.vk.gamma_abc_g1.len()
+    );
+}
+
+/// The formula itself, on a shape where the two candidates disagree.
+///
+/// The test above pins the *exponent*, and for this circuit both the old
+/// formula and the right one round to 2^15 -- so it would not have caught the
+/// error, and saying otherwise would claim coverage that is not there. What
+/// catches it is a shape chosen so the two answers differ: `max(9, 8) = 9`
+/// rounds to a domain of 16, `9 + 8 = 17` rounds to 32.
+#[test]
+fn the_degree_is_constraints_plus_inputs_not_the_larger_of_the_two() {
+    let shape = Shape { constraints: 9, instance_variables: 8, witness_variables: 0 };
+    assert_eq!(shape.qap_degree(), 17, "the QAP reaches past the constraints by one per input");
+    assert_eq!(shape.domain_exponent(), 5, "17 needs a domain of 32, not 16");
+
+    // And the shape that let the old formula look right: with no inputs the
+    // two agree, which is why a test shaped like this circuit could not tell
+    // them apart.
+    let inputless = Shape { constraints: 9, instance_variables: 0, witness_variables: 40 };
+    assert_eq!(inputless.qap_degree(), 9);
+}
