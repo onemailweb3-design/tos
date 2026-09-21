@@ -113,7 +113,9 @@ def build_fixture(out: Path, build: Path) -> Path:
 
 def load_fixture(directory: Path) -> dict:
     fixture = json.loads((directory / "fixture.json").read_text())
-    for name in ("code.boc", "data.boc", "deposit.boc"):
+    names = ["code.boc", "data.boc", fixture["destination"]["code"]]
+    names += [step["body"] for step in fixture["steps"]]
+    for name in names:
         path = directory / name
         if not path.exists():
             raise Failed(f"the fixture has no {name}")
@@ -243,6 +245,59 @@ def compare(name: str, expected: str, produced: str, failures: list[str]) -> Non
         failures.append(f"{name}: the chain says {produced}, the circuit predicted {expected}")
 
 
+def report_cost(lite, rpc_address, account, step, workdir, failures) -> None:
+    """What the chain charged for the message just sent, against what the
+    sandbox charged for the same bytes.
+
+    Every gas figure this project quotes comes from the sandbox, on the
+    understanding that it is the code a validator runs. This is the one place
+    the understanding is checked rather than assumed.
+    """
+    transaction = describe_transaction(rpc_address, account)
+    if transaction is None:
+        log("  the JSON-RPC returned no transaction for the pool account")
+        return
+    name = step["body"].replace(".boc", "")
+    (workdir / f"{name}-transaction.json").write_text(json.dumps(transaction, indent=2))
+
+    compute = transaction.get("compute", {})
+    action = transaction.get("action", {})
+    log(f"  {'fee charged':<34} {transaction.get('fee')}")
+    log(f"  {'compute exit code':<34} {compute.get('exit_code')}")
+    if transaction.get("aborted"):
+        failures.append(f"{step['name']}: the transaction was aborted")
+    if compute.get("exit_code") not in (0, None):
+        failures.append(f"{step['name']}: the compute phase exited {compute.get('exit_code')}")
+    if action and action.get("success") is False:
+        failures.append(f"{step['name']}: the action phase failed, code {action.get('result_code')}")
+
+    identifier = transaction.get("transaction_id", {})
+    lt = identifier.get("lt")
+    digest = identifier.get("hash")
+    if not (lt and digest):
+        return
+    gas = lite.transaction_gas(account, str(lt), base64.b64decode(digest).hex())
+    if gas is None:
+        log("  the transaction dump did not say how much gas was used")
+        return
+    ceiling = int(step["gas_ceiling"])
+    sandbox = int(step["sandbox_gas_used"])
+    log(f"  {'gas_used, on the chain':<34} {gas}")
+    log(f"  {'gas_used, in the sandbox':<34} {sandbox}")
+    log(f"  {'the ceiling it ran under':<34} {ceiling}")
+    if gas > ceiling:
+        failures.append(
+            f"{step['name']}: the chain charged {gas} gas under a ceiling of {ceiling}, "
+            f"so SETGASLIMIT did not bind"
+        )
+    if gas != sandbox:
+        failures.append(
+            f"{step['name']}: the chain charged {gas} gas and the sandbox charged {sandbox} "
+            f"for the same message. Every gas figure in this project comes from the sandbox, "
+            f"so the difference is the error bar on all of them."
+        )
+
+
 async def run(args) -> int:
     workdir = Path(args.workdir) if args.workdir else Path(tempfile.mkdtemp(prefix="tos-shielded-"))
     build = Path(args.build_dir)
@@ -250,6 +305,18 @@ async def run(args) -> int:
         Path(args.fixture) if args.fixture else build_fixture(workdir / "fixture", build)
     )
     fixture = load_fixture(fixture_dir)
+    # Section 9's intent window is an hour, so a fixture is perishable: its
+    # transact carries a `valid_until` the contract compares against the
+    # chain's clock. Refused here rather than on the chain, where it would
+    # look like a proof failure.
+    remaining = int(fixture["valid_until"]) - int(time.time())
+    if remaining < args.step_timeout + 60:
+        raise Failed(
+            f"this fixture's intent expires in {remaining}s, which is not enough to bring a "
+            f"chain up and send three messages. Rebuild it: drop --fixture, or rerun "
+            f"onchain_fixture."
+        )
+    log(f"the fixture's intent is good for another {remaining}s")
     address_text = fixture["address"]
     log(f"pool address {address_text}")
     log(f"state hash   {fixture['state_hash']}")
@@ -278,8 +345,14 @@ async def run(args) -> int:
         # below the pool's own transact ceiling of 1,460,000 -- under it a
         # withdrawal is not slow, it is refused.
         network.config.deployment_fee_schedule = True
+        # The chain's global id is eight of the eighteen public inputs, by way
+        # of the execution domain. The fixture was proved for one value, so
+        # the chain is built with that value; a proof made for another chain
+        # is refused, and would look like a broken proof rather than a
+        # mismatched chain.
+        network.config.global_id = int(fixture["global_id"])
         log(f"localnet at global_version={network.config.global_version}, "
-            f"deployment fee schedule")
+            f"global_id={network.config.global_id}, deployment fee schedule")
 
         dht = network.create_dht_node()
         node: FullNode = network.create_full_node()
@@ -341,85 +414,89 @@ async def run(args) -> int:
             compare("native_liability", "0",
                     lite.get_method(address_text, "native_liability"), failures)
 
-            # --- one deposit ------------------------------------------------
-            body = cell_from(fixture_dir / "deposit.boc")
-            value = int(fixture["deposit"]["message_value_nanotos"]) + args.fee_allowance
-            log(f"depositing {int(fixture['deposit']['amount_nanotos'])/TOS:.9f} TOS, "
-                f"attaching {value/TOS:.9f} ...")
+            # --- the scenario ----------------------------------------------
+            #
+            # Three messages: two deposits and one proved withdrawal. Each one
+            # is compared against what the circuit said the chain would hold
+            # afterwards, computed before any of them was sent.
+            destination_address = Address(fixture["destination"]["address"])
+            log(f"deploying the payout destination {fixture['destination']['address']} ...")
             await faucet.send(
-                internal(faucet.address, destination, value, body, None, bounce=True)
+                internal(
+                    faucet.address,
+                    destination_address,
+                    int(fixture["destination"]["deploy_value_nanotos"]),
+                    Cell.empty(),
+                    StateInit(
+                        split_depth=None,
+                        special=None,
+                        code=cell_from(fixture_dir / fixture["destination"]["code"]),
+                        data=Cell.empty(),
+                        library=None,
+                    ),
+                    bounce=False,
+                )
             )
-            after = fixture["expected_after_deposit"]
             await wait_for(
-                "the deposit to be accepted",
-                lambda: lite.get_method(address_text, "commitment_next_index") == str(
-                    after["commitment_next_index"]
-                ),
+                "the destination account to become active",
+                lambda: lite.account_exists(fixture["destination"]["address"]),
                 timeout=args.step_timeout,
             )
-            log("after the deposit:")
-            compare("commitment_root", after["commitment_root"],
-                    lite.get_method(address_text, "commitment_root"), failures)
-            compare("commitment_next_index", str(after["commitment_next_index"]),
-                    lite.get_method(address_text, "commitment_next_index"), failures)
-            compare("native_liability", str(after["native_liability"]),
-                    lite.get_method(address_text, "native_liability"), failures)
 
-            # What the chain actually charged, read through the other
-            # interface. Every fee figure this project has is a sandbox
-            # figure, and the sandbox charges no forward fee at all.
-            transaction = describe_transaction(rpc_address, address_text)
-            if transaction is None:
-                log("the JSON-RPC returned no transaction for the pool account")
-            else:
-                (workdir / "deposit-transaction.json").write_text(json.dumps(transaction, indent=2))
-                log("what the deposit cost on chain:")
-                flat = {}
-
-                def collect(prefix, value):
-                    if isinstance(value, dict):
-                        for key, inner in value.items():
-                            collect(f"{prefix}{key}." if prefix else f"{key}.", inner)
-                    elif not isinstance(value, list):
-                        flat[prefix.rstrip(".")] = value
-
-                collect("", transaction)
-                for key, value in flat.items():
-                    if any(word in key.lower() for word in ("fee", "gas", "exit", "success",
-                                                            "aborted", "credit", "balance")):
-                        log(f"  {key:<34} {value}")
-                identifier = transaction.get("transaction_id", {})
-                lt = identifier.get("lt")
-                digest = identifier.get("hash")
-                if lt and digest:
-                    gas = lite.transaction_gas(
-                        address_text, str(lt), base64.b64decode(digest).hex()
+            for step in fixture["steps"]:
+                expect = step["expect"]
+                body = cell_from(fixture_dir / step["body"])
+                value = int(step["value_nanotos"]) + args.fee_allowance
+                log(f"{step['name']}: attaching {value/TOS:.9f} TOS ...")
+                await faucet.send(
+                    internal(faucet.address, destination, value, body, None, bounce=True)
+                )
+                try:
+                    await wait_for(
+                        f"{step['name']} to be accepted",
+                        lambda expect=expect: lite.get_method(
+                            address_text, "commitment_next_index"
+                        ) == str(expect["commitment_next_index"]),
+                        timeout=args.step_timeout,
                     )
-                    if gas is None:
-                        log("  the transaction dump did not say how much gas was used")
-                    else:
-                        ceiling = int(fixture["deposit"]["gas_ceiling"])
-                        sandbox = int(fixture["deposit"]["sandbox_gas_used"])
-                        log(f"  {'gas_used, on the chain':<34} {gas}")
-                        log(f"  {'gas_used, in the sandbox':<34} {sandbox}")
-                        log(f"  {'the ceiling it ran under':<34} {ceiling}")
-                        if gas > ceiling:
-                            failures.append(
-                                f"the chain charged {gas} gas for a deposit whose ceiling is "
-                                f"{ceiling}: SETGASLIMIT did not bind"
+                except Failed:
+                    log(f"{step['name']} did not land. Dumping what the chain has:")
+                    for who, account in (("pool", address_text),
+                                         ("wallet", faucet.address.to_str())):
+                        answer = rpc(rpc_address, "getTransactions", address=account, limit=3)
+                        path = workdir / f"failure-{who}-transactions.json"
+                        path.write_text(json.dumps(answer, indent=2))
+                        log(f"  {path}")
+                        for transaction in answer.get("result", []):
+                            log(
+                                f"  {who} lt={transaction.get('transaction_id', {}).get('lt')} "
+                                f"fee={transaction.get('fee')} "
+                                f"aborted={transaction.get('aborted')} "
+                                f"compute={transaction.get('compute')} "
+                                f"in_value={transaction.get('in_msg', {}).get('value')} "
+                                f"out={len(transaction.get('out_msgs', []))}"
                             )
-                        # The claim every measurement in this project rests on.
-                        # The sandbox is said to be the code a validator runs;
-                        # this is the one place that is checked rather than
-                        # assumed, for one identical message.
-                        if gas != sandbox:
-                            failures.append(
-                                f"the chain charged {gas} gas and the sandbox charged {sandbox} "
-                                f"for the same message. Every gas figure in this project comes "
-                                f"from the sandbox, so the difference is the error bar on all "
-                                f"of them."
-                            )
-                log(f"  the whole transaction is in {workdir / 'deposit-transaction.json'}")
+                    raise
+                log(f"after {step['name']}:")
+                for field in ("commitment_root", "commitment_next_index", "nullifier_root",
+                              "nullifier_next_index", "native_liability"):
+                    if field in expect:
+                        compare(field, str(expect[field]),
+                                lite.get_method(address_text, field), failures)
+                report_cost(lite, rpc_address, address_text, step, workdir, failures)
+
+            # The money left the pool and arrived. A withdrawal that moved
+            # every root correctly and paid nobody would pass every check
+            # above, so the destination's balance is read as well.
+            paid = int(fixture["destination"]["expects_nanotos"])
+            balance = rpc(rpc_address, "getAddressBalance",
+                          address=fixture["destination"]["address"]).get("result")
+            log(f"the destination holds {int(balance)/TOS:.9f} TOS")
+            if int(balance) < paid:
+                failures.append(
+                    f"the destination holds {balance} nanotos, which is less than the "
+                    f"{paid} the withdrawal was supposed to pay it"
+                )
         finally:
             for task in tasks:
                 task.cancel()

@@ -368,6 +368,186 @@ void check_opcode_registration() {
   }
 }
 
+// --- POSEIDON2_PATH7 ---------------------------------------------------------
+//
+// The path fold had no test here at all, and that is how it shipped wrong.
+// `poseidon2::permute` works in place, so the permutation's own output lands
+// in lane 0; the instruction wrote the domain there once, before the loop, and
+// from the second level onwards folded the previous output in place of the
+// domain. Every contract test runs in the Rust VM, which writes the domain at
+// every level, so nothing disagreed until a pool was deployed on a node and
+// its first withdrawal was refused at the nullifier witness.
+//
+// `reference_fold` below is a second, deliberately plain reading of section
+// 7.2. The pinned constant beside it is what the Rust VM produces for the same
+// inputs, so the two implementations cannot drift apart again.
+
+// Section 7.2's fold, written out: a fresh state each level, the domain in
+// lane 0, the carry at the path digit and the siblings in ascending order.
+std::array<unsigned char, 32> reference_fold(const unsigned char leaf[32], const unsigned char domain[32],
+                                             const std::vector<std::array<unsigned char, 6 * 32>>& levels,
+                                             unsigned long long index) {
+  unsigned char carry[32];
+  std::memcpy(carry, leaf, 32);
+  for (const auto& level : levels) {
+    unsigned char state[8][32];
+    std::memcpy(state[0], domain, 32);
+    const int digit = static_cast<int>(index % 7);
+    index /= 7;
+    int taken = 0;
+    for (int slot = 0; slot < 7; ++slot) {
+      if (slot == digit) {
+        std::memcpy(state[1 + slot], carry, 32);
+      } else {
+        std::memcpy(state[1 + slot], level.data() + taken * 32, 32);
+        ++taken;
+      }
+    }
+    vm::poseidon2::permute(state);
+    std::memcpy(carry, state[0], 32);
+  }
+  std::array<unsigned char, 32> out{};
+  std::memcpy(out.data(), carry, 32);
+  return out;
+}
+
+// A sibling that is a field element and distinguishable from every other one.
+std::array<unsigned char, 32> sibling(int level, int position) {
+  std::array<unsigned char, 32> value{};
+  value[29] = static_cast<unsigned char>(level + 1);
+  value[30] = static_cast<unsigned char>(position + 1);
+  value[31] = 0x5b;
+  return value;
+}
+
+// The path as the instruction reads it: two cells a level, three field
+// elements each, chained, the last one carrying no reference.
+td::Ref<vm::Cell> build_path(const std::vector<std::array<unsigned char, 6 * 32>>& levels) {
+  td::Ref<vm::Cell> next;
+  for (auto it = levels.rbegin(); it != levels.rend(); ++it) {
+    vm::CellBuilder second;
+    for (int i = 3; i < 6; ++i) {
+      second.store_bytes(it->data() + i * 32, 32);
+    }
+    if (next.not_null()) {
+      second.store_ref(next);
+    }
+    auto second_cell = second.finalize();
+    vm::CellBuilder first;
+    for (int i = 0; i < 3; ++i) {
+      first.store_bytes(it->data() + i * 32, 32);
+    }
+    first.store_ref(second_cell);
+    next = first.finalize();
+  }
+  return next;
+}
+
+void check_path7() {
+  constexpr int kDepth = 4;
+  // Digits 3, 1, 6, 0 in base seven, so no two levels share a position and the
+  // top level's digit is zero.
+  constexpr unsigned long long kIndex = 3 + 7 * (1 + 7 * (6 + 7 * 0));
+
+  unsigned char leaf[32] = {};
+  leaf[31] = 0x11;
+  unsigned char domain[32] = {};
+  domain[30] = 0x07;
+  domain[31] = 0x2b;
+
+  std::vector<std::array<unsigned char, 6 * 32>> levels;
+  for (int level = 0; level < kDepth; ++level) {
+    std::array<unsigned char, 6 * 32> packed{};
+    for (int position = 0; position < 6; ++position) {
+      const auto value = sibling(level, position);
+      std::memcpy(packed.data() + position * 32, value.data(), 32);
+    }
+    levels.push_back(packed);
+  }
+
+  const auto expected = reference_fold(leaf, domain, levels, kIndex);
+  td::Ref<vm::Stack> stack{true};
+  stack.write().push_int(int_of(leaf));
+  stack.write().push_int(int_of(domain));
+  stack.write().push_cell(build_path(levels));
+  stack.write().push_int(td::make_refint(static_cast<long long>(kIndex)));
+  stack.write().push_int(td::make_refint(kDepth));
+  vm::VmState state{vm::load_cell_slice_ref(opcode_cell(vm::poseidon2_path7_opcode)), 18, std::move(stack),
+                    vm::GasLimits{1000000, 1000000}};
+  const int exit = ~state.run();
+  require(exit == 0, "POSEIDON2_PATH7 did not run: exit " + std::to_string(exit));
+  if (exit != 0) {
+    return;
+  }
+  unsigned char produced[32];
+  auto top = state.get_stack().pop_int_finite();
+  require(top->export_bytes(produced, 32, false), "the path root does not fit 256 unsigned bits");
+
+  require(std::memcmp(produced, expected.data(), 32) == 0,
+          "POSEIDON2_PATH7 produced " + hex(produced, 32) + ", section 7.2's fold gives " +
+              hex(expected.data(), 32) +
+              ". The likeliest cause is the domain: `permute` works in place, so lane 0 has to be "
+              "rewritten at every level.");
+
+  // And the value the Rust VM produces for the same inputs, pinned by
+  // `tosctl/src/vm/src/tests/test_poseidon2.rs`. Two VMs that disagree here do
+  // not agree about the chain's state.
+  const std::string kRustVm = "12d4dd5748fd48cd8a53067a28ca130a52134c5877c81426b8328cdacfa0ee35";
+  require(hex(produced, 32) == kRustVm,
+          "POSEIDON2_PATH7 gives " + hex(produced, 32) + " where the Rust VM gives " + kRustVm +
+              " for the same path. The two VMs do not agree about the chain's state.");
+}
+
+// What one more level of path costs, which has to be the same number in both
+// VMs or the two do not agree about how much a transaction spent.
+//
+// Measured as a difference rather than an absolute, because the fixed overhead
+// of running a one-instruction continuation is this harness's, not the
+// instruction's. The Rust VM pins the absolute in
+// `tosctl/src/vm/tests/test_poseidon2.rs` as
+// `500 + depth * 3000 + 2 * depth * 100`: a level is one permutation at the
+// tariff plus the two cells it reads, at the ordinary first-load price.
+long long path7_gas(int depth) {
+  std::vector<std::array<unsigned char, 6 * 32>> levels;
+  for (int level = 0; level < depth; ++level) {
+    std::array<unsigned char, 6 * 32> packed{};
+    for (int position = 0; position < 6; ++position) {
+      const auto value = sibling(level, position);
+      std::memcpy(packed.data() + position * 32, value.data(), 32);
+    }
+    levels.push_back(packed);
+  }
+  unsigned char leaf[32] = {};
+  leaf[31] = 0x11;
+  unsigned char domain[32] = {};
+  domain[31] = 0x2b;
+  td::Ref<vm::Stack> stack{true};
+  stack.write().push_int(int_of(leaf));
+  stack.write().push_int(int_of(domain));
+  stack.write().push_cell(build_path(levels));
+  stack.write().push_int(td::make_refint(0));
+  stack.write().push_int(td::make_refint(depth));
+  vm::VmState state{vm::load_cell_slice_ref(opcode_cell(vm::poseidon2_path7_opcode)), 18, std::move(stack),
+                    vm::GasLimits{10000000, 10000000}};
+  const int exit = ~state.run();
+  require(exit == 0, "POSEIDON2_PATH7 did not run at depth " + std::to_string(depth));
+  return state.gas_consumed();
+}
+
+void check_path7_gas() {
+  // A level is the tariff plus the two cells it reads. `cell_load_gas_price`
+  // is 100, and both cells are new to this transaction.
+  constexpr long long kPerLevel = 3000 + 2 * 100;
+  const long long four = path7_gas(4);
+  const long long five = path7_gas(5);
+  require(five - four == kPerLevel,
+          "one more level of POSEIDON2_PATH7 costs " + std::to_string(five - four) + ", not " +
+              std::to_string(kPerLevel) +
+              ". The Rust VM charges the tariff plus two cell loads a level, and a chain whose two "
+              "VMs price an instruction differently does not agree with itself about how much a "
+              "transaction spent.");
+}
+
 }  // namespace
 
 int main() {
@@ -379,6 +559,8 @@ int main() {
       {"fail closed", check_fail_closed},
       {"gas", check_gas},
       {"opcode registration", check_opcode_registration},
+      {"path7", check_path7},
+      {"path7 gas", check_path7_gas},
   };
   // The VM narrates every instruction at info level; only failures matter here.
   SET_VERBOSITY_LEVEL(VERBOSITY_NAME(ERROR));

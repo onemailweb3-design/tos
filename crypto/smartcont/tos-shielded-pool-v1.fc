@@ -87,6 +87,15 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 ;; The top-up's ceiling is the rule's floor rather than its measurement: that
 ;; path reads no state, so its cost does not move with the pool's age.
 ;;
+;; OPEN: these maxima were measured against a pool configured with ONE
+;; denomination, and the deployed genesis carries four. The same withdrawal
+;; against the deployed configuration measures 1,171,462 in the sandbox and
+;; on a real node -- 4,305 above the figure below -- so M for the transact
+;; path has to be re-measured on the deployed configuration before this
+;; ceiling can be said to follow the rule. It still binds: the ceiling is
+;; 1,460,000 and every measurement is far under it, so what is at stake is
+;; the 25% headroom, not whether the path runs.
+;;
 ;; The recovery ceiling is bounded above as well as below. The withdrawal fee
 ;; has to cover the payout message plus a recovery at this ceiling, so raising
 ;; it past what the fee affords fails every withdrawal at exit 243.

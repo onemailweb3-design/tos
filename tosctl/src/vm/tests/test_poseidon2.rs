@@ -305,6 +305,48 @@ fn a_path_is_the_same_fold_done_with_hash7() {
     }
 }
 
+/// The one vector both VMs are pinned to.
+///
+/// The C++ VM had no path test at all, and shipped a fold that wrote the
+/// domain into lane 0 once before the loop rather than at every level --
+/// `permute` works in place there, so from the second level on it folded its
+/// own previous output in place of the domain. Nothing disagreed until a pool
+/// was deployed on a node: every contract test runs in this VM.
+///
+/// So the two now share a vector. `test/poseidon2/test.cpp` computes the same
+/// path and asserts the same constant; if either implementation moves, both
+/// tests say so.
+#[test]
+fn the_vector_the_cpp_vm_is_pinned_to() {
+    // Byte for byte what `check_path7` in test/poseidon2/test.cpp builds.
+    let leaf = small(0x11);
+    let domain = small(0x072b);
+    let siblings: Vec<[[u8; 32]; 6]> = (0..4)
+        .map(|level: u64| {
+            core::array::from_fn(|position| {
+                small(((level + 1) << 16) | ((position as u64 + 1) << 8) | 0x5b)
+            })
+        })
+        .collect();
+    // Digits 3, 1, 6, 0 in base seven.
+    let index = 3 + 7 * (1 + 7 * (6 + 7 * 0));
+
+    let produced = fold_with_hash7(leaf, domain, &siblings, index);
+    assert_eq!(
+        hex::encode(produced),
+        CPP_VM_VECTOR,
+        "this VM's path fold no longer matches the vector the C++ VM is pinned to"
+    );
+    test_case("POSEIDON2_PATH7")
+        .with_block_version(PATH7_VERSION)
+        .with_stack(path_stack(leaf, domain, path_cells(&siblings, None, false), index, 4))
+        .expect_success()
+        .expect_stack(&stack_of(&[produced]));
+}
+
+/// Pinned in `test/poseidon2/test.cpp` as `kRustVm`.
+const CPP_VM_VECTOR: &str = "12d4dd5748fd48cd8a53067a28ca130a52134c5877c81426b8328cdacfa0ee35";
+
 #[test]
 fn a_path_costs_its_base_plus_a_level() {
     let siblings = sample(DEPTH);

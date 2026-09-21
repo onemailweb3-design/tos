@@ -252,15 +252,19 @@ int exec_poseidon2_hash7(VmState* st) {
 // this replaces depends on exactly that, and a forged path built out of
 // pruned branches would otherwise be an attack on every caller of this
 // instruction at once.
-Ref<Cell> read_siblings(VmState* st, const Ref<Cell>& cell, bool last, unsigned char out[6][32]) {
+Ref<Cell> read_siblings(const Ref<Cell>& cell, bool last, unsigned char out[6][32]) {
   if (cell.is_null()) {
     throw VmError{Excno::cell_und, "Poseidon2 path ends before its depth"};
   }
-  // Charged the way the VM charges every other cell it reads, with the same
-  // first-load and reload prices and the same set of already-loaded cells.
-  // The Rust VM's loader does this for it; here it is explicit, and the two
-  // have to agree to the gas or they do not agree at all.
-  st->register_cell_load(cell->get_hash());
+  // The cell load is charged by `load_cell_slice` itself, which calls
+  // `register_cell_load` through the VM state interface -- the same
+  // first-load and reload prices and the same set of already-loaded cells as
+  // every other cell the VM reads.
+  //
+  // Registering it here as well was this function's second bug: the cell was
+  // charged 100 for the first load and then 25 again as a reload, 50 a level
+  // more than the Rust VM, which was found by putting a withdrawal through a
+  // real node and comparing.
   CellSlice cs = load_cell_slice(cell);
   if (cs.size() != 768) {
     throw VmError{Excno::cell_und, "a Poseidon2 path cell is not three field elements"};
@@ -302,9 +306,16 @@ int exec_poseidon2_path7(VmState* st) {
   auto path = stack.pop_cell();
 
   unsigned char state[8][32];
-  // The domain sits in lane 0 and stays there for every level, exactly as
-  // HASH7 places it.
-  pop_field_element(stack, state[0]);
+  // The domain goes into lane 0 at every level, exactly as HASH7 places it.
+  //
+  // It is kept in a variable of its own because `poseidon2::permute` works in
+  // place: the permutation's own output lands in lane 0, so a domain written
+  // once before the loop is gone from the second level onwards. That was this
+  // function's first bug, and nothing caught it -- the contract tests run in
+  // the Rust VM, which writes the domain each level, and the C++ path was not
+  // executed by anything until a pool was deployed on a node.
+  unsigned char domain[32];
+  pop_field_element(stack, domain);
   unsigned char carry[32];
   pop_field_element(stack, carry);
 
@@ -317,9 +328,9 @@ int exec_poseidon2_path7(VmState* st) {
     // way in rather than after it fails.
     st->consume_gas_chk(poseidon2_path7_level_gas_price);
 
-    Ref<Cell> next = read_siblings(st, node, false, siblings);
+    Ref<Cell> next = read_siblings(node, false, siblings);
     unsigned char rest[6][32];
-    Ref<Cell> after = read_siblings(st, next, level == depth - 1, rest);
+    Ref<Cell> after = read_siblings(next, level == depth - 1, rest);
     for (int i = 0; i < 3; ++i) {
       std::memcpy(siblings[3 + i], rest[i], 32);
     }
@@ -332,6 +343,7 @@ int exec_poseidon2_path7(VmState* st) {
     // The carry goes back into position d and the six siblings fill the rest
     // in ascending child position, which is what makes a reordered witness
     // produce a different root.
+    std::memcpy(state[0], domain, 32);
     int taken = 0;
     for (int slot = 0; slot < 7; ++slot) {
       if (slot == d) {
