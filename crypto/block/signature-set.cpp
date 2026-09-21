@@ -74,7 +74,10 @@ static td::Status check_carrier_compatibility(const BlockSignatureSet* sig_set,
 }
 
 td::Result<tos::ValidatorWeight> BlockSignatureSet::check_signatures(td::Ref<ValidatorSet> vset,
-                                                                    tos::BlockIdExt block_id) const {
+                                                                     tos::BlockIdExt block_id) const {
+  if (is_pq()) {
+    return td::Status::Error("pq finality: trusted expected session context is required");
+  }
   TRY_STATUS(check_carrier_compatibility(this, vset));
   if (!is_final()) {
     return td::Status::Error(tos::ErrorCode::protoviolation, "not final signatures");
@@ -83,12 +86,49 @@ td::Result<tos::ValidatorWeight> BlockSignatureSet::check_signatures(td::Ref<Val
 }
 
 td::Result<tos::ValidatorWeight> BlockSignatureSet::check_approve_signatures(td::Ref<ValidatorSet> vset,
-                                                                            tos::BlockIdExt block_id) const {
+                                                                             tos::BlockIdExt block_id) const {
+  if (is_pq()) {
+    return td::Status::Error("pq finality: trusted expected session context is required");
+  }
   TRY_STATUS(check_carrier_compatibility(this, vset));
   if (is_final()) {
     return td::Status::Error(tos::ErrorCode::protoviolation, "not approve signatures");
   }
   return check_signatures_impl(std::move(vset), block_id);
+}
+
+td::Result<tos::ValidatorWeight> BlockSignatureSet::check_pq_signatures_under_carried_session_for_test(
+    td::Ref<ValidatorSet> vset, tos::BlockIdExt block_id, FinalityRole role) const {
+  TRY_STATUS(check_carrier_compatibility(this, vset));
+  if (!is_pq()) {
+    return td::Status::Error("pq finality: post-quantum carrier required");
+  }
+  if ((role == FinalityRole::Final) != is_final()) {
+    return td::Status::Error(
+        std::string{role == FinalityRole::Final ? "not final signatures" : "not approve signatures"});
+  }
+  return check_signatures_impl(std::move(vset), block_id);
+}
+
+td::Result<tos::ValidatorWeight> verify_pq_finality(const PQFinalityVerificationContext& context,
+                                                    const BlockSignatureSet& signature_set, FinalityRole role) {
+  if (context.validator_set.is_null()) {
+    return td::Status::Error("pq finality: trusted validator set is missing");
+  }
+  if (!signature_set.is_pq()) {
+    return td::Status::Error("pq finality: post-quantum carrier required");
+  }
+  TRY_STATUS(check_carrier_compatibility(&signature_set, context.validator_set));
+  TRY_STATUS(check_vset(&signature_set, context.validator_set));
+  if ((role == FinalityRole::Final) != signature_set.is_final()) {
+    return td::Status::Error(
+        std::string{role == FinalityRole::Final ? "not final signatures" : "not approve signatures"});
+  }
+  TRY_RESULT(carried_session_id, signature_set.pq_session_id());
+  if (carried_session_id != context.expected_session_id) {
+    return td::Status::Error("pq finality: carried session_id does not match trusted expected session_id");
+  }
+  return signature_set.check_signatures_impl(context.validator_set, context.block_id);
 }
 
 static tos::tl_object_ptr<tos::tos_api::consensus_CandidateParent> clone_tl(

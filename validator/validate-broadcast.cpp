@@ -19,6 +19,7 @@
 */
 #include "adnl/utils.hpp"
 #include "tos/tos-io.hpp"
+#include "validator/pq-finality-verification.h"
 
 #include "apply-block.hpp"
 #include "fabric.h"
@@ -242,7 +243,17 @@ void ValidateBroadcast::check_signatures_common(td::Ref<ConfigHolder> conf) {
     }
   }
   td::Result<td::uint64> S;
-  if (broadcast_.sig_set->is_final()) {
+  if (broadcast_.sig_set->is_pq()) {
+    auto context = derive_pq_finality_context(*conf, val_set, broadcast_.block_id, header_info_.vertical_seqno,
+                                              header_info_.prev_key_mc_seqno);
+    if (context.is_error()) {
+      abort_query(context.move_as_error_prefix("failed to derive trusted finality context: "));
+      return;
+    }
+    S = block::verify_pq_finality(
+        context.ok(), *broadcast_.sig_set,
+        broadcast_.sig_set->is_final() ? block::FinalityRole::Final : block::FinalityRole::Approve);
+  } else if (broadcast_.sig_set->is_final()) {
     S = broadcast_.sig_set->check_signatures(val_set, broadcast_.block_id);
   } else {
     S = broadcast_.sig_set->check_approve_signatures(val_set, broadcast_.block_id);

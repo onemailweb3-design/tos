@@ -45,6 +45,15 @@ class ConfigHolderQ : public ConfigHolder {
   td::Ref<block::ValidatorSet> get_total_validator_set(int next) const override;  // next = -1 -> prev, next = 0 -> cur
   td::Ref<block::ValidatorSet> get_validator_set(ShardIdFull shard, UnixTime utime, CatchainSeqno seqno) const override;
   std::pair<UnixTime, UnixTime> get_validator_set_start_stop(int next) const override;
+  td::int32 get_global_id() const override {
+    return config_->get_global_blockchain_id();
+  }
+  ValidatorSessionConfig get_consensus_config() const override {
+    return config_->get_consensus_config();
+  }
+  td::optional<SelectedNewConsensusConfig> get_selected_new_consensus_config(WorkchainId wc) const override {
+    return config_->get_selected_new_consensus_config(wc);
+  }
 };
 
 }  // namespace validator

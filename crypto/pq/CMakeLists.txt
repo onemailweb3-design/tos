@@ -235,6 +235,9 @@ if(TARGET tos_crypto)
   target_compile_definitions(test-pq-block-signature-conformance PRIVATE
     MLD_CONFIG_FILE="consensus-signer-config.h")
   add_test(NAME pq-block-signature-conformance COMMAND test-pq-block-signature-conformance)
+  add_test(NAME pq-finality-boundary-source
+    COMMAND "${CMAKE_COMMAND}" -E env python3
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/check-pq-finality-boundary.py)
   add_executable(test-pq-block-signature-no-legacy
     "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-block-signature-no-legacy-test.cpp")
   set_target_properties(test-pq-block-signature-no-legacy PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

@@ -88,7 +88,10 @@ td::Result<std::unique_ptr<Config>> Config::extract_from_key_block(Ref<vm::Cell>
         tlb::unpack_cell(extra.custom->prefetch_ref(), mc_extra) && mc_extra.key_block && mc_extra.config.not_null())) {
     return td::Status::Error(-400, "cannot unpack extra header of key block to extract configuration");
   }
-  return block::Config::unpack_config(std::move(mc_extra.config), mode);
+  const auto global_id = blk.global_id;
+  TRY_RESULT(config, block::Config::unpack_config(std::move(mc_extra.config), mode));
+  config->global_id_ = global_id;
+  return std::move(config);
 }
 
 td::Result<std::unique_ptr<Config>> Config::extract_from_state(Ref<vm::Cell> mc_state_root, int mode) {
@@ -98,7 +101,10 @@ td::Result<std::unique_ptr<Config>> Config::extract_from_state(Ref<vm::Cell> mc_
         tlb::unpack_cell(state.custom->prefetch_ref(), extra))) {
     return td::Status::Error("cannot extract configuration from masterchain state extra information");
   }
-  return unpack_config(std::move(extra.config), mode);
+  const auto global_id = state.global_id;
+  TRY_RESULT(config, unpack_config(std::move(extra.config), mode));
+  config->global_id_ = global_id;
+  return std::move(config);
 }
 
 td::Result<std::unique_ptr<ConfigInfo>> ConfigInfo::extract_config(Ref<vm::Cell> mc_state_root,

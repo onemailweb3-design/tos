@@ -107,6 +107,7 @@ class CheckProof : public td::actor::Actor {
 
   BlockHandle handle_;
   td::Ref<MasterchainState> state_;
+  td::Ref<ConfigHolder> governing_config_;
   td::Ref<block::ValidatorSet> vset_;
   Ref<vm::Cell> proof_root_, old_proof_root_;
   td::Ref<block::BlockSignatureSet> sig_set_;
@@ -120,6 +121,7 @@ class CheckProof : public td::actor::Actor {
   BlockSeqno prev_key_seqno_{~0U};
   CatchainSeqno catchain_seqno_{0};
   td::uint32 validator_hash_{0};
+  td::uint32 vertical_seqno_{0};
   ValidatorWeight sig_weight_{0};
   bool skip_check_signatures_{false};
   bool sig_ok_{false};

@@ -25,6 +25,7 @@
 #include "tos/tos-io.hpp"
 #include "tos/tos-tl.hpp"
 #include "validator/invariants.hpp"
+#include "validator/pq-finality-verification.h"
 #include "vm/boc.h"
 #include "vm/cells/MerkleProof.h"
 
@@ -192,6 +193,7 @@ bool CheckProof::init_parse(bool is_aux) {
   want_split_ = info.want_split;
   is_key_block_ = info.key_block;
   prev_key_seqno_ = info.prev_key_block_seqno;
+  vertical_seqno_ = info.vert_seq_no;
   {
     auto res = block::unpack_block_prev_blk_ext(virt_root, proof_blk_id, prev_, mc_blkid_, after_split_);
     if (res.is_error()) {
@@ -258,8 +260,10 @@ bool CheckProof::init_parse(bool is_aux) {
     if (!config) {
       return fatal_error("cannot extract configuration from previous key block " + key_id_.to_str());
     }
+    auto shared_config = std::shared_ptr<block::Config>(std::move(config));
+    governing_config_ = td::make_ref<ConfigHolderQ>(shared_config);
     block::ValidatorSetCompute vs_comp;
-    auto res = vs_comp.init(config.get());
+    auto res = vs_comp.init(shared_config.get());
     if (res.is_error()) {
       return fatal_error(std::move(res));
     }
@@ -419,7 +423,22 @@ void CheckProof::check_signatures() {
                                                                        << validator_hash_));
     return;
   }
-  auto result = sig_set_->check_signatures(vset_, id_);
+  td::Result<ValidatorWeight> result;
+  if (sig_set_->is_pq()) {
+    td::Result<block::PQFinalityVerificationContext> context =
+        state_.not_null() ? derive_pq_finality_context(*state_, vset_, id_, vertical_seqno_, prev_key_seqno_)
+        : governing_config_.not_null()
+            ? derive_pq_finality_context(*governing_config_, vset_, id_, vertical_seqno_, prev_key_seqno_)
+            : td::Result<block::PQFinalityVerificationContext>(
+                  td::Status::Error("pq finality context: governing configuration is unavailable"));
+    if (context.is_error()) {
+      abort_query(context.move_as_error());
+      return;
+    }
+    result = block::verify_pq_finality(context.ok(), *sig_set_, block::FinalityRole::Final);
+  } else {
+    result = sig_set_->check_signatures(vset_, id_);
+  }
   if (result.is_error()) {
     abort_query(result.move_as_error());
     return;

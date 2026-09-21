@@ -39,6 +39,9 @@ class ConfigHolder : public td::CntObject {
   virtual td::Ref<block::ValidatorSet> get_validator_set(ShardIdFull shard, UnixTime utime,
                                                          CatchainSeqno seqno) const = 0;
   virtual std::pair<UnixTime, UnixTime> get_validator_set_start_stop(int next) const = 0;
+  virtual td::int32 get_global_id() const = 0;
+  virtual ValidatorSessionConfig get_consensus_config() const = 0;
+  virtual td::optional<SelectedNewConsensusConfig> get_selected_new_consensus_config(WorkchainId wc) const = 0;
 };
 
 }  // namespace validator

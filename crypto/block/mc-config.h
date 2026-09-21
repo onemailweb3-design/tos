@@ -615,6 +615,7 @@ class Config {
   long long capabilities_{-1};
 
  protected:
+  int global_id_{0};
   std::unique_ptr<vm::Dictionary> special_smc_dict;
 
  public:
@@ -698,6 +699,9 @@ class Config {
   }
   std::pair<tos::UnixTime, tos::UnixTime> get_validator_set_start_stop(int next = 0) const;
   tos::ValidatorSessionConfig get_consensus_config() const;
+  int get_global_blockchain_id() const {
+    return global_id_;
+  }
   td::optional<tos::SelectedNewConsensusConfig> get_selected_new_consensus_config(tos::WorkchainId wc) const;
   td::optional<tos::NewConsensusConfig> get_new_consensus_config(tos::WorkchainId wc) const;
   bool foreach_config_param(std::function<bool(int, Ref<vm::Cell>)> scan_func) const;
@@ -749,7 +753,6 @@ class ConfigInfo : public Config, public ShardConfig {
   static constexpr int needAccountsRoot = 64;
   static constexpr int needPrevBlocks = 128;
   tos::BlockSeqno vert_seqno{~0U};
-  int global_id_{0};
   tos::UnixTime utime{0};
   tos::LogicalTime lt{0};
   tos::BlockSeqno min_ref_mc_seqno_{std::numeric_limits<tos::BlockSeqno>::max()};
@@ -776,9 +779,6 @@ class ConfigInfo : public Config, public ShardConfig {
   bool set_block_id_ext(const tos::BlockIdExt& block_id_ext);
   bool rotated_all_shards() const {
     return nx_cc_updated;
-  }
-  int get_global_blockchain_id() const {
-    return global_id_;
   }
   tos::ZeroStateIdExt get_zerostate_id() const {
     return zerostate_id_;

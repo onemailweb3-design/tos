@@ -1094,11 +1094,6 @@ void ValidatorManagerImpl::update_shard_blocks() {
   }
 }
 
-ValidatorSessionId ValidatorManagerImpl::get_validator_set_id(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set) {
-  return create_hash_tl_object<tos_api::tosNode_sessionId>(shard.workchain, shard.shard, val_set->get_catchain_seqno(),
-                                                           td::Bits256::zero());
-}
-
 void ValidatorManagerImpl::update_shard_client_state(BlockIdExt masterchain_block_id, td::Promise<td::Unit> promise) {
   td::actor::send_closure(db_, &Db::update_shard_client_state, masterchain_block_id, std::move(promise));
 }

@@ -23,6 +23,7 @@
 #include "block/validator-set.h"
 #include "common/errorcode.h"
 #include "downloaders/wait-block-data.hpp"
+#include "validator/pq-finality-verification.h"
 #include "vm/boc.h"
 #include "vm/cells.h"
 #include "vm/cells/MerkleProof.h"
@@ -442,7 +443,17 @@ td::Result<int> ShardTopBlockDescrQ::validate_internal(BlockIdExt last_mc_block_
         -666, std::string{"ShardTopBlockDescr for "} + block_id_.to_str() + " does not have valid signatures");
   }
   CHECK(sig_set_.not_null());
-  auto result = sig_set_->check_signatures(vset, block_id_);
+  td::Result<ValidatorWeight> result;
+  if (sig_set_->is_pq()) {
+    auto context = derive_pq_finality_context(*state, vset, block_id_, vert_seqno_, state->last_key_block_id().seqno());
+    if (context.is_error()) {
+      res_flags |= (ResFlags::invalid | ResFlags::sig_bad);
+      return context.move_as_error_prefix("cannot derive trusted finality context: ");
+    }
+    result = block::verify_pq_finality(context.ok(), *sig_set_, block::FinalityRole::Final);
+  } else {
+    result = sig_set_->check_signatures(vset, block_id_);
+  }
   if (result.is_error()) {
     res_flags |= (ResFlags::invalid | ResFlags::sig_bad);
     return td::Status::Error(-666, std::string{"ShardTopBlockDescr for "} + block_id_.to_str() +
@@ -614,9 +625,10 @@ td::actor::Task<GeneratedProofRoot> get_proof_root(BlockHandle handle, td::Times
 
 }  // namespace
 
-td::actor::Task<td::BufferSlice> generate_shard_block_description(
-    BlockIdExt block_id, Ref<block::BlockSignatureSet> signatures, td::Timestamp timeout,
-    td::actor::ActorId<ValidatorManager> manager) {
+td::actor::Task<td::BufferSlice> generate_shard_block_description(BlockIdExt block_id,
+                                                                  Ref<block::BlockSignatureSet> signatures,
+                                                                  td::Timestamp timeout,
+                                                                  td::actor::ActorId<ValidatorManager> manager) {
   co_await td::actor::detach_from_actor();
   CHECK(td::actor::detail::get_current_actor_id().empty());
   if (block_id.is_masterchain()) {
@@ -644,8 +656,7 @@ td::actor::Task<td::BufferSlice> generate_shard_block_description(
   auto config = CO_TRY(mc_state->get_config_holder());
   Ref<block::ValidatorSet> validator_set =
       config->get_validator_set(shard, first_proof.gen_utime, signatures->get_catchain_seqno());
-  if (validator_set.is_null() ||
-      validator_set->get_catchain_seqno() != signatures->get_catchain_seqno() ||
+  if (validator_set.is_null() || validator_set->get_catchain_seqno() != signatures->get_catchain_seqno() ||
       validator_set->get_validator_set_hash() != signatures->get_validator_set_hash()) {
     co_return td::Status::Error("validator set mismatch");
   }

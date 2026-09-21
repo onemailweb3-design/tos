@@ -33,6 +33,14 @@ struct PQBlockSignature {
   td::BufferSlice signature;
 };
 
+enum class FinalityRole { Final, Approve };
+
+struct PQFinalityVerificationContext {
+  td::Ref<ValidatorSet> validator_set;
+  tos::BlockIdExt block_id;
+  tos::ValidatorSessionId expected_session_id;
+};
+
 class BlockSignatureSet : public td::CntObject {
  public:
   virtual size_t get_size() const = 0;
@@ -46,8 +54,14 @@ class BlockSignatureSet : public td::CntObject {
   virtual bool is_final() const = 0;
 
   td::Result<tos::ValidatorWeight> check_signatures(td::Ref<ValidatorSet> vset, tos::BlockIdExt block_id) const;
-  td::Result<tos::ValidatorWeight> check_approve_signatures(td::Ref<ValidatorSet> vset,
-                                                            tos::BlockIdExt block_id) const;
+  td::Result<tos::ValidatorWeight> check_approve_signatures(td::Ref<ValidatorSet> vset, tos::BlockIdExt block_id) const;
+
+  // Test-only cryptographic primitive: verifies a PQ set under the session id
+  // carried by that set. Production proof consumers must instead call
+  // verify_pq_finality with a session id derived from trusted chain context.
+  td::Result<tos::ValidatorWeight> check_pq_signatures_under_carried_session_for_test(td::Ref<ValidatorSet> vset,
+                                                                                      tos::BlockIdExt block_id,
+                                                                                      FinalityRole role) const;
 
   // The one Simplex vote-envelope builder shared by the historical and
   // post-quantum verification paths. It deliberately binds the carried session,
@@ -79,6 +93,9 @@ class BlockSignatureSet : public td::CntObject {
   }
 
  protected:
+  friend td::Result<tos::ValidatorWeight> verify_pq_finality(const PQFinalityVerificationContext& context,
+                                                             const BlockSignatureSet& signature_set,
+                                                             FinalityRole role);
   tos::CatchainSeqno cc_seqno_;
   td::uint32 validator_set_hash_;
 
@@ -121,5 +138,10 @@ class BlockSignatureSet : public td::CntObject {
 
   static constexpr size_t MAX_SIGNATURES = 1024;
 };
+
+// The production verification boundary for persisted post-quantum finality.
+// The expected session is trusted input; it is never inferred from the proof.
+td::Result<tos::ValidatorWeight> verify_pq_finality(const PQFinalityVerificationContext& context,
+                                                    const BlockSignatureSet& signature_set, FinalityRole role);
 
 }  // namespace block
