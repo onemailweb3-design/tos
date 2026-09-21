@@ -7,6 +7,11 @@
 
 namespace block {
 
+// The canonical hash of ConfigParam 29's validator session options.  This is
+// kept with the complete session derivation so non-consensus proof consumers
+// do not acquire a dependency on the live consensus implementation.
+td::Bits256 validator_session_options_hash(const tos::ValidatorSessionConfig& config);
+
 // Commits a consensus session to the governing state's intrinsic network id,
 // its Param29 options, and the exact selected ConfigParam 30 cell.
 td::Bits256 validator_session_config_hash(td::int32 global_id, const td::Bits256& validator_options_hash,

@@ -12,6 +12,35 @@
 
 namespace block {
 
+td::Bits256 validator_session_options_hash(const tos::ValidatorSessionConfig& config) {
+  const auto& catchain = config.catchain_opts;
+  if (config.proto_version == 0) {
+    if (!config.new_catchain_ids) {
+      return tos::create_hash_tl_object<tos::tos_api::validatorSession_config>(
+          catchain.idle_timeout, catchain.max_deps, config.round_candidates, config.next_candidate_delay,
+          config.round_attempt_duration, config.max_round_attempts, config.max_block_size,
+          config.max_collated_data_size);
+    }
+    return tos::create_hash_tl_object<tos::tos_api::validatorSession_configNew>(
+        catchain.idle_timeout, catchain.max_deps, config.round_candidates, config.next_candidate_delay,
+        config.round_attempt_duration, config.max_round_attempts, config.max_block_size,
+        config.max_collated_data_size, config.new_catchain_ids);
+  }
+  if (config.proto_version == 1) {
+    return tos::create_hash_tl_object<tos::tos_api::validatorSession_configVersioned>(
+        catchain.idle_timeout, catchain.max_deps, config.round_candidates, config.next_candidate_delay,
+        config.round_attempt_duration, config.max_round_attempts, config.max_block_size,
+        config.max_collated_data_size, config.proto_version);
+  }
+  return tos::create_hash_tl_object<tos::tos_api::validatorSession_configVersionedV2>(
+      tos::create_tl_object<tos::tos_api::validatorSession_catchainOptions>(
+          catchain.idle_timeout, catchain.max_deps, static_cast<td::uint32>(catchain.max_serialized_block_size),
+          catchain.block_hash_covers_data, static_cast<td::uint32>(catchain.max_block_height_coeff),
+          catchain.debug_disable_db),
+      config.round_candidates, config.next_candidate_delay, config.round_attempt_duration, config.max_round_attempts,
+      config.max_block_size, config.max_collated_data_size, config.proto_version);
+}
+
 td::Bits256 validator_session_config_hash(td::int32 global_id, const td::Bits256& validator_options_hash,
                                           const td::Bits256& simplex_config_cell_hash) {
   static constexpr char domain[] = "TOS-VALIDATOR-SESSION-CONFIG-v1";

@@ -3,7 +3,6 @@
 
 #include "block/signature-set.h"
 #include "block/validator-session-id.h"
-#include "validator/consensus/session-compat.h"
 #include "validator/interfaces/config.h"
 #include "validator/interfaces/shard.h"
 
@@ -24,11 +23,11 @@ inline td::Result<block::PQFinalityVerificationContext> derive_pq_finality_conte
   if (!selected_config.value().config.protocol_version_supported()) {
     return td::Status::Error("pq finality context: selected ConfigParam 30 protocol version is unsupported");
   }
-  consensus::ValidatorSessionOptions options(session_config);
   auto identity = block::derive_validator_session_identity(
-      global_id, options.get_hash(), selected_config.value().cell_hash, block_id.shard_full(),
+      global_id, block::validator_session_options_hash(session_config), selected_config.value().cell_hash,
+      block_id.shard_full(),
       validator_set->get_catchain_seqno(), validator_set->export_vector(), vertical_seqno, previous_key_block_seqno,
-      options.new_catchain_ids);
+      session_config.new_catchain_ids);
   return block::PQFinalityVerificationContext{std::move(validator_set), block_id, identity.session_id};
 }
 

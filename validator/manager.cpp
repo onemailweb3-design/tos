@@ -2889,7 +2889,7 @@ void ValidatorManagerImpl::update_shards() {
   auto exp_vec = last_masterchain_state_->get_shards();
   auto config = last_masterchain_state_->get_consensus_config();
   consensus::ValidatorSessionOptions opts{config};
-  auto opts_hash = opts.get_hash();
+  auto opts_hash = block::validator_session_options_hash(config);
   const auto global_id = last_masterchain_state_->get_global_id();
 
   std::map<ShardIdFull, std::vector<BlockIdExt>> new_shards;
