@@ -27,6 +27,9 @@ test/pq-native/pq-block-signature-test-common.h	*	1	historical	shared persisted-
 test/pq-native/pq-block-signature-vectors-test.cpp	*	2	historical	shared #13 structural vectors retain classical parser coverage for reject cases
 test/pq-native/pq-network-parser-resource-test.cpp	cpp_fetch	1	historical	resource-gate fixture proves malformed PQ network carriers stop before crypto and decompression
 test/pq-native/pq-network-parser-resource-test.cpp	cpp_node_tl	1	historical	one explicitly classical pair pins the corrected 100-byte signature-volume accounting
+test/pq-native/pq-signature-persistence-test.cpp	carrier_io	2	historical	persistence and proof-consumer gate serializes #13 and uses classical carriers only as explicit rejection inputs
+test/pq-native/pq-signature-persistence-test.cpp	cpp_factory	1	historical	explicit empty #11 fixture proves proof consumers reject classical finality under a PQ validator set
+test/pq-native/pq-signature-persistence-test.cpp	cpp_fetch	3	historical	checked structural parsing for persisted #13 and explicit carrier-incompatibility coverage
 test/validator/consensus/test-consensus.cpp	*	8	historical	legacy full-finalization regression and explicit classical TL mutation coverage
 tl/generate/auto/tl/lite_api.cpp	*	34	definition	generated C++ implementation of the classical lite signature-set variants
 tl/generate/auto/tl/lite_api.h	*	8	definition	generated C++ declarations for the classical lite signature-set variants
