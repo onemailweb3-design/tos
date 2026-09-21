@@ -40,6 +40,22 @@ namespace block {
 
 static_assert(pq::pq_candidate_data_max_bytes == vm::CellString::max_bytes);
 
+static td::Result<std::size_t> tl_bytes_field_size(std::size_t bytes) {
+  const std::size_t prefix = bytes < 254 ? 1 : 4;
+  if (bytes > std::numeric_limits<std::size_t>::max() - prefix - 3) {
+    return td::Status::Error("TL bytes size overflow");
+  }
+  return (prefix + bytes + 3) & ~std::size_t{3};
+}
+
+static td::Status add_size_checked(std::size_t& total, std::size_t value) {
+  if (value > std::numeric_limits<std::size_t>::max() - total) {
+    return td::Status::Error("signature data size overflow");
+  }
+  total += value;
+  return td::Status::OK();
+}
+
 static td::Status check_vset(const BlockSignatureSet* sig_set, const td::Ref<ValidatorSet>& vset) {
   if (vset->get_catchain_seqno() != sig_set->get_catchain_seqno()) {
     return td::Status::Error(tos::ErrorCode::protoviolation, PSTRING() << "catchain seqno mismatch: expected "
@@ -209,6 +225,17 @@ class BlockSignatureSetBase : public BlockSignatureSet {
 
   size_t get_size() const override {
     return signatures_.size();
+  }
+
+  td::Result<std::size_t> get_signature_data_size() const override {
+    std::size_t total = 0;
+    for (const auto& signature : signatures_) {
+      constexpr std::size_t identity_bytes = 32;
+      TRY_RESULT(encoded_signature_bytes, tl_bytes_field_size(signature.signature.size()));
+      TRY_STATUS(add_size_checked(total, identity_bytes));
+      TRY_STATUS(add_size_checked(total, encoded_signature_bytes));
+    }
+    return total;
   }
 
   td::Result<tos::ValidatorWeight> get_weight(td::Ref<ValidatorSet> vset) const override {
@@ -634,6 +661,16 @@ class BlockSignatureSetSimplexPQ final : public BlockSignatureSet {
   std::size_t get_size() const override {
     return signatures_.size();
   }
+  td::Result<std::size_t> get_signature_data_size() const override {
+    std::size_t total = 0;
+    for (const auto& signature : signatures_) {
+      constexpr std::size_t identity_and_algorithm_bytes = 32 + 4;
+      TRY_RESULT(encoded_signature_bytes, tl_bytes_field_size(signature.signature.size()));
+      TRY_STATUS(add_size_checked(total, identity_and_algorithm_bytes));
+      TRY_STATUS(add_size_checked(total, encoded_signature_bytes));
+    }
+    return total;
+  }
   bool is_pq() const override {
     return true;
   }
@@ -684,12 +721,12 @@ class BlockSignatureSetSimplexPQ final : public BlockSignatureSet {
   }
 
   tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet> tl() const override {
-    // The post-quantum node carrier is deliberately absent until its checked
-    // network parser and generated schema land together.
+    // Outbound post-quantum materialization remains deliberately absent until
+    // the production carrier-admission gates land.
     return {};
   }
   tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet> tl_lite() const override {
-    // The post-quantum lite carrier is deliberately absent for the same reason.
+    // The lite carrier remains absent for the same reason.
     return {};
   }
 
@@ -1070,8 +1107,8 @@ td::Ref<BlockSignatureSet> BlockSignatureSet::fetch(const tos::tl_object_ptr<tos
               },
               [&](const tos::tos_api::tosNode_signatureSet_simplexPq&) {
                 // The legacy adapter cannot report why a variable-size PQ
-                // carrier is malformed. Production callers stay fail-closed
-                // until they move to fetch_pq_node_checked.
+                // carrier is malformed. Production callers use
+                // fetch_node_checked instead.
                 sig_set = {};
               }));
   return sig_set;
@@ -1079,34 +1116,7 @@ td::Ref<BlockSignatureSet> BlockSignatureSet::fetch(const tos::tl_object_ptr<tos
 
 td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch(
     const tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>& f) {
-  td::Result<td::Ref<BlockSignatureSet>> sig_set;
-  tos::lite_api::downcast_call(
-      *f, td::overloaded(
-              [&](const tos::lite_api::liteServer_signatureSet_ordinary& obj) {
-                std::vector<tos::BlockSignature> signatures;
-                for (auto& s : obj.signatures_) {
-                  signatures.emplace_back(s->node_id_short_, s->signature_.clone());
-                }
-                sig_set = create_ordinary(std::move(signatures), obj.catchain_seqno_, obj.validator_set_hash_);
-              },
-              [&](const tos::lite_api::liteServer_signatureSet_simplex& obj) {
-                std::vector<tos::BlockSignature> signatures;
-                for (auto& s : obj.signatures_) {
-                  signatures.emplace_back(s->node_id_short_, s->signature_.clone());
-                }
-                auto r_candidate =
-                    tos::fetch_tl_object<tos::tos_api::consensus_CandidateHashData>(obj.candidate_, true);
-                if (r_candidate.is_error()) {
-                  sig_set = r_candidate.move_as_error_prefix("failed to unpack candidate data: ");
-                  return;
-                }
-                sig_set = create_simplex(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_, obj.session_id_,
-                                         obj.slot_, r_candidate.move_as_ok());
-              },
-              [&](const tos::lite_api::liteServer_signatureSet_simplexPq&) {
-                sig_set = td::Status::Error("post-quantum lite carrier requires checked parsing");
-              }));
-  return sig_set;
+  return fetch_lite_checked(f);
 }
 
 template <class Signature>
@@ -1174,6 +1184,168 @@ td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_pq_lite_checked(
   }
   return create_simplex_pq_final(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_, obj.session_id_,
                                  obj.slot_, candidate.move_as_ok());
+}
+
+static td::Status validate_classical_tl_signatures(const std::vector<tos::BlockSignature>& signatures) {
+  if (signatures.size() > BlockSignatureSet::MAX_SIGNATURES) {
+    return td::Status::Error("classical tl: signer_count");
+  }
+  std::set<tos::NodeIdShort> validators;
+  for (const auto& signature : signatures) {
+    if (signature.signature.size() != 64) {
+      return td::Status::Error("classical tl: signature_length");
+    }
+    if (!validators.insert(signature.node).second) {
+      return td::Status::Error("classical tl: duplicate_validator_id");
+    }
+  }
+  return td::Status::OK();
+}
+
+td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_legacy_checked(
+    const std::vector<tos::tl_object_ptr<tos::tos_api::tosNode_blockSignature>>& input,
+    tos::CatchainSeqno cc_seqno, td::uint32 validator_set_hash) {
+  std::vector<tos::BlockSignature> signatures;
+  signatures.reserve(input.size());
+  for (const auto& signature : input) {
+    if (signature == nullptr) {
+      return td::Status::Error("classical tl: null_signature_pair");
+    }
+    signatures.emplace_back(signature->who_, signature->signature_.clone());
+  }
+  TRY_STATUS(validate_classical_tl_signatures(signatures));
+  return create_ordinary(std::move(signatures), cc_seqno, validator_set_hash);
+}
+
+td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_node_checked(
+    const tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>& f) {
+  if (f == nullptr) {
+    return td::Status::Error("node signature set: null constructor");
+  }
+  try {
+    if (f->get_id() == tos::tos_api::tosNode_signatureSet_simplexPq::ID) {
+      return fetch_pq_node_checked(f);
+    }
+    td::Result<td::Ref<BlockSignatureSet>> result{td::Status::Error("node signature set: unknown constructor")};
+    tos::tos_api::downcast_call(
+        *f, td::overloaded(
+                [&](const tos::tos_api::tosNode_signatureSet_ordinary& obj) {
+                  std::vector<tos::BlockSignature> signatures;
+                  signatures.reserve(obj.signatures_.size());
+                  for (const auto& signature : obj.signatures_) {
+                    if (signature == nullptr) {
+                      result = td::Status::Error("classical tl: null_signature_pair");
+                      return;
+                    }
+                    signatures.emplace_back(signature->who_, signature->signature_.clone());
+                  }
+                  auto status = validate_classical_tl_signatures(signatures);
+                  if (status.is_error()) {
+                    result = std::move(status);
+                    return;
+                  }
+                  result = create_ordinary(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_);
+                },
+                [&](const tos::tos_api::tosNode_signatureSet_simplex& obj) {
+                  if (obj.candidate_ == nullptr) {
+                    result = td::Status::Error("classical tl: candidate_missing");
+                    return;
+                  }
+                  std::vector<tos::BlockSignature> signatures;
+                  signatures.reserve(obj.signatures_.size());
+                  for (const auto& signature : obj.signatures_) {
+                    if (signature == nullptr) {
+                      result = td::Status::Error("classical tl: null_signature_pair");
+                      return;
+                    }
+                    signatures.emplace_back(signature->who_, signature->signature_.clone());
+                  }
+                  auto status = validate_classical_tl_signatures(signatures);
+                  if (status.is_error()) {
+                    result = std::move(status);
+                    return;
+                  }
+                  result = td::Ref<BlockSignatureSetSimplex>(true, std::move(signatures), obj.cc_seqno_,
+                                                              obj.validator_set_hash_, obj.session_id_, obj.slot_,
+                                                              clone_tl(obj.candidate_), obj.final_);
+                },
+                [&](const tos::tos_api::tosNode_signatureSet_simplexPq&) {
+                  result = td::Status::Error("node signature set: internal dispatch error");
+                }));
+    return result;
+  } catch (const vm::VmError& error) {
+    return error.as_status().move_as_error_prefix("node signature set: ");
+  } catch (const std::exception& error) {
+    return td::Status::Error(PSTRING() << "node signature set: " << error.what());
+  } catch (...) {
+    return td::Status::Error("node signature set: unknown exception");
+  }
+}
+
+td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_lite_checked(
+    const tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>& f) {
+  if (f == nullptr) {
+    return td::Status::Error("lite signature set: null constructor");
+  }
+  try {
+    if (f->get_id() == tos::lite_api::liteServer_signatureSet_simplexPq::ID) {
+      return fetch_pq_lite_checked(f);
+    }
+    td::Result<td::Ref<BlockSignatureSet>> result{td::Status::Error("lite signature set: unknown constructor")};
+    tos::lite_api::downcast_call(
+        *f, td::overloaded(
+                [&](const tos::lite_api::liteServer_signatureSet_ordinary& obj) {
+                  std::vector<tos::BlockSignature> signatures;
+                  signatures.reserve(obj.signatures_.size());
+                  for (const auto& signature : obj.signatures_) {
+                    if (signature == nullptr) {
+                      result = td::Status::Error("classical tl: null_signature_pair");
+                      return;
+                    }
+                    signatures.emplace_back(signature->node_id_short_, signature->signature_.clone());
+                  }
+                  auto status = validate_classical_tl_signatures(signatures);
+                  if (status.is_error()) {
+                    result = std::move(status);
+                    return;
+                  }
+                  result = create_ordinary(std::move(signatures), obj.catchain_seqno_, obj.validator_set_hash_);
+                },
+                [&](const tos::lite_api::liteServer_signatureSet_simplex& obj) {
+                  std::vector<tos::BlockSignature> signatures;
+                  signatures.reserve(obj.signatures_.size());
+                  for (const auto& signature : obj.signatures_) {
+                    if (signature == nullptr) {
+                      result = td::Status::Error("classical tl: null_signature_pair");
+                      return;
+                    }
+                    signatures.emplace_back(signature->node_id_short_, signature->signature_.clone());
+                  }
+                  auto status = validate_classical_tl_signatures(signatures);
+                  if (status.is_error()) {
+                    result = std::move(status);
+                    return;
+                  }
+                  auto candidate =
+                      tos::fetch_tl_object<tos::tos_api::consensus_CandidateHashData>(obj.candidate_.clone(), true);
+                  if (candidate.is_error()) {
+                    result = candidate.move_as_error_prefix("failed to unpack candidate data: ");
+                    return;
+                  }
+                  result = create_simplex(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_,
+                                          obj.session_id_, obj.slot_, candidate.move_as_ok());
+                },
+                [&](const tos::lite_api::liteServer_signatureSet_simplexPq&) {
+                  result = td::Status::Error("lite signature set: internal dispatch error");
+                }));
+    return result;
+  } catch (const vm::VmError& error) {
+    return error.as_status().move_as_error_prefix("lite signature set: ");
+  } catch (const std::exception& error) {
+    return td::Status::Error(PSTRING() << "lite signature set: " << error.what());
+  } catch (...) {
+    return td::Status::Error("lite signature set: unknown exception");
+  }
 }
 
 }  // namespace block

@@ -48,6 +48,11 @@ void FullNodeFastSyncOverlay::process_broadcast(PublicKeyHash src, tos_api::tosN
 }
 
 void FullNodeFastSyncOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNode_blockBroadcastCompressedV2 &query) {
+  auto R_block_wo_data = get_block_broadcast_without_data(query);
+  if (R_block_wo_data.is_error()) {
+    LOG(DEBUG) << "Dropped V2 broadcast because of malformed signatures: " << R_block_wo_data.move_as_error();
+    return;
+  }
   auto R_requires_state = need_state_for_decompression(query);
   if (R_requires_state.is_error()) {
     LOG(DEBUG) << "Failed to check if state is required for broadcast: " << R_requires_state.move_as_error();
@@ -55,7 +60,7 @@ void FullNodeFastSyncOverlay::process_broadcast(PublicKeyHash src, tos_api::tosN
   }
 
   if (R_requires_state.move_as_ok()) {
-    auto block_wo_data = get_block_broadcast_without_data(query);
+    auto block_wo_data = R_block_wo_data.move_as_ok();
     auto P = td::PromiseCreator::lambda([SelfId = actor_id(this), src,
                                          query = std::move(query)](td::Result<td::Unit> R) mutable {
       if (R.is_error()) {
@@ -92,7 +97,13 @@ void FullNodeFastSyncOverlay::process_block_broadcast(PublicKeyHash src, tos_api
 void FullNodeFastSyncOverlay::process_block_finality_broadcast(
     PublicKeyHash src, tos_api::tosNode_blockFinalityBroadcast &query) {
   auto block_id = create_block_id(query.id_);
-  BlockFinalityBroadcast finality{block_id, block::BlockSignatureSet::fetch(query.signature_set_)};
+  auto R_signature_set = block::BlockSignatureSet::fetch_node_checked(query.signature_set_);
+  if (R_signature_set.is_error()) {
+    LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: "
+               << R_signature_set.move_as_error();
+    return;
+  }
+  BlockFinalityBroadcast finality{block_id, R_signature_set.move_as_ok()};
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in fast sync overlay from " << src << ": "
                         << block_id.to_str();
   td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(finality),

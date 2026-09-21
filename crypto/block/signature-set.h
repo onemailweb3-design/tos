@@ -44,6 +44,9 @@ struct PQFinalityVerificationContext {
 class BlockSignatureSet : public td::CntObject {
  public:
   virtual size_t get_size() const = 0;
+  // TL bytes occupied by signer identities, algorithm selectors and framed
+  // signature byte strings, excluding the surrounding carrier metadata.
+  virtual td::Result<std::size_t> get_signature_data_size() const = 0;
   virtual td::Result<tos::ValidatorWeight> get_weight(td::Ref<ValidatorSet> vset) const = 0;
   virtual bool is_ordinary() const {
     return false;
@@ -132,13 +135,20 @@ class BlockSignatureSet : public td::CntObject {
   static td::Ref<BlockSignatureSet> fetch(
       const std::vector<tos::tl_object_ptr<tos::tos_api::tosNode_blockSignature>>& f, tos::CatchainSeqno cc_seqno,
       td::uint32 validator_set_hash);
+  static td::Result<td::Ref<BlockSignatureSet>> fetch_legacy_checked(
+      const std::vector<tos::tl_object_ptr<tos::tos_api::tosNode_blockSignature>>& f, tos::CatchainSeqno cc_seqno,
+      td::uint32 validator_set_hash);
+  // Legacy adapter for already-trusted/test-owned objects. Untrusted network
+  // callers must use fetch_node_checked.
   static td::Ref<BlockSignatureSet> fetch(const tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>& f);
+  static td::Result<td::Ref<BlockSignatureSet>> fetch_node_checked(
+      const tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>& f);
   static td::Result<td::Ref<BlockSignatureSet>> fetch(
       const tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>& f);
+  static td::Result<td::Ref<BlockSignatureSet>> fetch_lite_checked(
+      const tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>& f);
 
-  // Checked adapters for the generated post-quantum network carriers. They are
-  // deliberately separate from the legacy unchecked node adapter until every
-  // untrusted production boundary is converted in the parser-wiring unit.
+  // Checked post-quantum adapters used by the dual-carrier entry points above.
   static td::Result<td::Ref<BlockSignatureSet>> fetch_pq_node_checked(
       const tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>& f);
   static td::Result<td::Ref<BlockSignatureSet>> fetch_pq_lite_checked(

@@ -17,14 +17,16 @@
 #
 # file	marker	sites	status	why
 crypto/block/check-proof.cpp	*	1	historical	lite proof-chain verification; classical carriers are admitted only with an explicitly classical trusted set
-crypto/block/signature-set.cpp	*	31	definition	the C++ factories, #11/#12 codecs, node/lite adapters and guarded classical verifier
+crypto/block/signature-set.cpp	*	34	definition	the C++ factories, #11/#12 codecs, checked node/lite adapters and guarded classical verifier
 crypto/block/signature-set.h	*	2	definition	the public classical verification boundary declarations
-lite-client/lite-client-common.cpp	*	1	reachable	the generated PQ lite variant exists, but production checked-parser wiring remains owned by the parser-boundary unit
+lite-client/lite-client-common.cpp	*	1	reachable	the checked lite parser accepts classical history and PQ carriers; trusted carrier verification remains downstream
 sdk/js/packages/client/src/types.ts	*	2	reachable	the public client response model has only ordinary/simplex classical signature shapes; the API carrier unit owns it
 test/pq-native/pq-block-signature-conformance-test.cpp	*	1	historical	crypto conformance exercises the explicitly test-only carried-session verifier
 test/pq-native/pq-block-signature-no-legacy-test.cpp	*	11	historical	negative fixtures prove classical carriers are refused under a post-quantum set
 test/pq-native/pq-block-signature-test-common.h	*	1	historical	shared persisted-carrier fixture parser
 test/pq-native/pq-block-signature-vectors-test.cpp	*	2	historical	shared #13 structural vectors retain classical parser coverage for reject cases
+test/pq-native/pq-network-parser-resource-test.cpp	cpp_fetch	1	historical	resource-gate fixture proves malformed PQ network carriers stop before crypto and decompression
+test/pq-native/pq-network-parser-resource-test.cpp	cpp_node_tl	1	historical	one explicitly classical pair pins the corrected 100-byte signature-volume accounting
 test/validator/consensus/test-consensus.cpp	*	15	historical	legacy full-finalization regression and explicit classical TL mutation coverage
 tl/generate/auto/tl/lite_api.cpp	*	34	definition	generated C++ implementation of the classical lite signature-set variants
 tl/generate/auto/tl/lite_api.h	*	8	definition	generated C++ declarations for the classical lite signature-set variants
@@ -57,10 +59,10 @@ toslib/toslib/ToslibClient.cpp	*	3	reachable	the generated PQ node variant exist
 validator-engine/json-rpc-server-blocks.cpp	*	4	reachable	the generated PQ lite variant exists, but JSON-RPC conversion remains owned by the parser/API wiring unit
 validator/db/rootdb.cpp	*	1	historical	persisted cell parser supports #13; #11/#12 remain for historical and explicitly classical databases
 validator/downloaders/wait-block-data.cpp	*	1	historical	generic persisted serializer carries #13 too; classical output is limited to explicitly classical sets
-validator/full-node-custom-overlays.cpp	*	2	reachable	finality overlay has the generated PQ carrier available but awaits checked-parser boundary conversion
-validator/full-node-fast-sync-overlays.cpp	*	2	reachable	fast-sync overlay has the generated PQ carrier available but awaits checked-parser boundary conversion
-validator/full-node-serializer.cpp	*	5	reachable	block/finality broadcast codec has the generated PQ variant but keeps the carrier-missing seam pending checked parsing
-validator/full-node-shard.cpp	*	2	reachable	shard finality overlay has the generated PQ carrier available but awaits checked-parser boundary conversion
+validator/full-node-custom-overlays.cpp	*	1	reachable	custom overlay uses the checked dual-carrier parser; outbound PQ materialization remains at the carrier-missing seam
+validator/full-node-fast-sync-overlays.cpp	*	1	reachable	fast-sync overlay uses the checked dual-carrier parser; outbound PQ materialization remains at the carrier-missing seam
+validator/full-node-serializer.cpp	*	1	reachable	broadcast deserialization accepts both carriers through checked parsing before V2 decompression; serialization retains the carrier-missing seam
+validator/full-node-shard.cpp	*	1	reachable	public overlay uses the checked dual-carrier parser; outbound PQ materialization remains at the carrier-missing seam
 validator/impl/accept-block.cpp	cpp_factory	2	placeholder	the two is_fake constructors use an empty #11 set as a null object; typed no-signatures persistence owns them
 validator/impl/accept-block.cpp	tlb_tag	1	placeholder	the is_fake persistence path writes an empty #11 object rather than evidence
 validator/impl/accept-block.cpp	carrier_io	1	historical	generic persistence serialization can emit #13; classical output remains for explicitly classical sets
