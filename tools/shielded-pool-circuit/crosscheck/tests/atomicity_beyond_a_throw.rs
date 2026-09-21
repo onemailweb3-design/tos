@@ -194,13 +194,17 @@ fn a_withdrawal_whose_payout_cannot_be_sent_changes_nothing() {
         paid.action
     );
 
-    // Enough for the reserve, not for the payout. Three things have a claim
-    // on the balance -- the gas the compute phase burned, the reserve, and
-    // the payout -- and this leaves the first two covered and the third
-    // short by less than the liability the reserve holds back. So it is the
-    // liability's share of the reserve, and nothing else, that decides
-    // whether the payout can go.
-    let unpaid = drained(7 * TOS);
+    // Enough for the reserve and the payout to the nanoton, and therefore not
+    // enough, because the gas the compute phase burned has to come out of the
+    // same balance. Whatever that gas costs, the payout is short by exactly
+    // it.
+    //
+    // This used to be a round 7 TOS, which worked only while the gas happened
+    // to cost more than the 50 millitos of slack that left. It stopped
+    // working the moment the basechain gas price was cut, and a test that
+    // depends on the price to express "not quite enough" is measuring the
+    // price. Written this way there is no window to fall out of.
+    let unpaid = drained(reserved + DENOMINATION);
     assert_eq!(
         unpaid.exit, 0,
         "the compute phase did not get through, so this is not the action-phase failure it was \

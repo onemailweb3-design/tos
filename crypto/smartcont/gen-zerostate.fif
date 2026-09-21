@@ -166,18 +166,35 @@ config.special!
 
 // gas_price gas_limit special_gas_limit gas_credit block_gas_limit freeze_due_limit delete_due_limit flat_gas_limit flat_gas_price
 //
-// Prices are TON mainnet's live basechain values, read from ConfigParam21 on
-// 2026-09-21 rather than from the upstream zerostate: that file still carries
-// the genesis price of 1000 nanotons a gas, mainnet has since been governed
-// down to 66.66, and the values here were the 400 from before that cut.
+// 436,907 per 65,536 gas is 6.666 nanotos a gas: TON mainnet's live basechain
+// price divided by ten, and 667 is the flat segment's hundred gas at the same
+// rate. The alignment with TON was only ever a way of not inventing a number;
+// what a TOS gas unit is worth is our decision and not TON's, and the price
+// was cut on 2026-09-21 for one reason:
 //
-// The two LIMITS deliberately do not match. Mainnet grants a transaction
-// 1,000,000 gas; a shielded-pool withdrawal is 1,222,633, so at mainnet's
-// limit the pool cannot run at all. 30,000,000 is what makes it possible and
-// is a considered divergence, not a value nobody got round to aligning.
-// Anyone tempted to "finish the alignment" by lowering it should read
-// `crypto/smartcont/shielded/` first.
-4369067 30 *M 30 *M 10000 60 *M TM$0.1 TM$1.0 100 6667 config.gas_prices!
+//   a private transfer verifies a Groth16 proof on chain. At the aligned
+//   price that one verification alone cost 0.0136 TOS and a whole transfer
+//   0.098, against 0.000356 for an ordinary payment -- 275 times. No amount
+//   of contract work reaches 0.01 while a pairing check is priced that way,
+//   because the verification by itself is already over the budget.
+//
+// The cut lands almost entirely on computation. Forwarding and storage are
+// ConfigParam 25 and 18 and are untouched, and an ordinary payment is roughly
+// half forwarding, so it falls by about 43% while a private transfer falls by
+// 90%. Masterchain gas is untouched as well: elections and configuration are
+// meant to be expensive.
+//
+// The two LIMITS deliberately do not match TON's. Mainnet grants a
+// transaction 1,000,000 gas; a shielded-pool withdrawal is over 1,170,000, so
+// at mainnet's limit the pool cannot run at all. 30,000,000 is what makes it
+// possible and is a considered divergence, not a value nobody got round to
+// aligning. Anyone tempted to "finish the alignment" by lowering it should
+// read `crypto/smartcont/shielded/` first.
+//
+// What this does NOT change: the pool's own state. Gas prices live in the
+// chain's zerostate, not in the contract, so `profile_hash`, the genesis
+// state hash and the deployment address are all unmoved.
+436907 30 *M 30 *M 10000 60 *M TM$0.1 TM$1.0 100 667 config.gas_prices!
 // masterchain gas (aligned with production)
 655360000 1 *M 70 *M 10000 2500000 TM$0.1 TM$1.0 100 1000000 config.mc_gas_prices!
 // lump_price bit_price cell_price ihr_factor first_frac next_frac

@@ -34,16 +34,33 @@ const TOS: u64 = 1_000_000_000;
 const GAS_BUDGET: u64 = 50_000_000;
 const RESERVE_FLOOR: u64 = TOS;
 const OP_DEPOSIT: u32 = 1;
+/// This chain's ConfigParam 21, as the VM applies it: a flat 667 for the first
+/// hundred gas, then 436,907 per 65,536 gas with the division rounded up.
+const fn compute_fee(gas: u64) -> u64 {
+    const FLAT_LIMIT: u64 = 100;
+    const FLAT_PRICE: u64 = 667;
+    const GAS_PRICE: u64 = 436_907;
+    if gas <= FLAT_LIMIT {
+        FLAT_PRICE
+    } else {
+        FLAT_PRICE + ((gas - FLAT_LIMIT) * GAS_PRICE).div_ceil(65_536)
+    }
+}
+
 /// A message value that is above the threshold below which the executor skips
 /// the compute phase outright, and below what the deposit path costs to run.
-/// Re-derived on 2026-09-21 when the basechain price was aligned with TON
-/// mainnet's live 66.66 nanotos a gas. At the old 400 this was 400,000, which
-/// bought 1,000 gas; at the new price the same value buys six times that and
-/// the message finishes the path instead of starving, which is the failure
-/// this constant exists to avoid. 66,667 buys about 1,000 gas again, against a
-/// path that needs 1,259. Both ends matter: too low and the VM never runs,
-/// which would make the test vacuous.
-const GAS_STARVED_VALUE: u64 = 66_667;
+///
+/// Derived from the price rather than written down, because it has now been
+/// wrong twice for the same reason: it was 400,000 while gas cost 400 nanotos,
+/// stopped starving anything when the price was aligned to TON's 66.66, was
+/// re-derived to 66,667, and stopped starving anything again when the price
+/// was cut tenfold. A value that buys a thousand gas against a path that needs
+/// 1,259 is the thing this constant means; the number that expresses it is the
+/// price's business, not this file's.
+///
+/// Both ends matter: too low and the compute phase is skipped, the VM never
+/// runs, and the test proves nothing.
+const GAS_STARVED_VALUE: u64 = compute_fee(1_000);
 /// TVM's out-of-gas exit code.
 const EXIT_OUT_OF_GAS: i32 = -14;
 

@@ -328,16 +328,25 @@ pub fn address(code: &Cell, state: &Cell) -> Result<[u8; 32]> {
 // a different state hash and a different address while still calling itself
 // the state the manifest freezes.
 
-/// Section 14.2's measured floor for a bounded recovery is 205,313,600 at the
-/// current fee schedule, so this clears it; production must choose with
+/// Section 14.2's measured floor for a bounded recovery is well under this at
+/// the current fee schedule, so it clears it; production must choose with
 /// explicit headroom and its own measurement.
 pub const RESERVE_FLOOR: u128 = 5_000_000_000;
 
-/// Re-derived on 2026-09-21 when the basechain prices were aligned with TON
-/// mainnet's live values. Section 14.2's floor -- the payout's forward fee
-/// plus a whole bounded recovery at the bounce ceiling -- is 19,552,270,
-/// measured by `shielded_payout_sandbox`. This is that with a 2.56x margin,
-/// rounded to a hundredth of a TOS.
+/// Section 14.2's floor -- the payout's forward fee plus a whole bounded
+/// recovery at the bounce ceiling -- is 2,352,270: 885,601 of forwarding,
+/// which ConfigParam 25 prices and which did not move, plus 1,466,669 of
+/// compute, which ConfigParam 21 prices and which fell tenfold when the
+/// basechain gas price was cut on 2026-09-21.
+///
+/// This value has NOT been re-derived to follow it, deliberately. Changing it
+/// moves the config store, the state hash and the deployment address, and the
+/// profile already says the mainnet fee is an activation decision. But the
+/// margin it now carries should be read before that decision is made: 21x the
+/// floor, where it was set at 3.2x, and **five times what a withdrawal's own
+/// compute costs**. A protocol fee that dwarfs the gas it exists to cover is
+/// a price on withdrawing, not a cost recovery, and that is a product
+/// question rather than a safety one.
 pub const WITHDRAWAL_FEE: u128 = 50_000_000;
 
 /// Section 12.1's immutable list, sorted and positive.

@@ -66,8 +66,8 @@ const INTENT_LIFETIME: u32 = 1_800;
 /// first hundred gas, then 4,369,067 per 65,536 gas, the division rounded up.
 fn compute_fee(gas: u64) -> u64 {
     const FLAT_LIMIT: u64 = 100;
-    const FLAT_PRICE: u64 = 6_667;
-    const GAS_PRICE: u64 = 4_369_067;
+    const FLAT_PRICE: u64 = 667;
+    const GAS_PRICE: u64 = 436_907;
     if gas <= FLAT_LIMIT {
         FLAT_PRICE
     } else {

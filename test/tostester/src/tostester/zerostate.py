@@ -431,7 +431,7 @@ def fee_schedule_for(config: "NetworkConfig") -> dict[str, str]:
     if config.deployment_fee_schedule:
         return {
             "gas_prices":
-                "4369067 30 *M 30 *M 10000 60 *M TM$0.1 TM$1.0 100 6667 config.gas_prices!",
+                "436907 30 *M 30 *M 10000 60 *M TM$0.1 TM$1.0 100 667 config.gas_prices!",
             "mc_gas_prices":
                 "655360000 1 *M 70 *M 10000 2500000 TM$0.1 TM$1.0 100 1000000"
                 " config.mc_gas_prices!",
@@ -443,7 +443,7 @@ def fee_schedule_for(config: "NetworkConfig") -> dict[str, str]:
         }
     return {
         "gas_prices":
-            "// DEV-SPECIFIC: cheaper gas for tests (deployment: 4369067/655360000)\n"
+            "// DEV-SPECIFIC: cheaper gas for tests (deployment: 436907/655360000)\n"
             "10 sg* 1 *M dup   10000 1000 *M TM$0.1 TM$1.0 100 1000 config.gas_prices!",
         "mc_gas_prices":
             "10 sg* 1 *M 20 *M 10000 1000 *M TM$0.1 TM$1.0 100 1000 config.mc_gas_prices!",

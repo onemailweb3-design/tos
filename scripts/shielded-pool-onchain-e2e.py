@@ -328,8 +328,18 @@ def check_recovery(lite, rpc_address, account, fixture, fixture_dir, step, build
     return bounce
 
 
+def anchor_epoch_seconds() -> int:
+    """The anchor epoch's length, read from the contract rather than copied."""
+    source = (REPO / "crypto/smartcont/shielded/anchors.fc").read_text()
+    match = re.search(r'int anchor_epoch_seconds\(\) asm "(\d+) PUSHINT"', source)
+    if not match:
+        raise Failed("the anchor epoch length is not declared where it was")
+    return int(match.group(1))
+
+
 def report_cost(lite, rpc_address, account, step, workdir, failures,
-                fixture_sandbox_bounce=None, transaction=None) -> None:
+                fixture_sandbox_bounce=None, transaction=None,
+                previous_utime=None) -> int | None:
     """What the chain charged for the message just sent, against what the
     sandbox charged for the same bytes.
 
@@ -345,7 +355,7 @@ def report_cost(lite, rpc_address, account, step, workdir, failures,
         transaction = describe_transaction(rpc_address, account, bounced=step["body"] is None)
     if transaction is None:
         log("  the JSON-RPC returned no transaction for the pool account")
-        return
+        return None
     name = (step["body"] or "bounce").replace(".boc", "")
     (workdir / f"{name}-transaction.json").write_text(json.dumps(transaction, indent=2))
 
@@ -364,11 +374,11 @@ def report_cost(lite, rpc_address, account, step, workdir, failures,
     lt = identifier.get("lt")
     digest = identifier.get("hash")
     if not (lt and digest):
-        return
+        return transaction.get("utime")
     gas = lite.transaction_gas(account, str(lt), base64.b64decode(digest).hex())
     if gas is None:
         log("  the transaction dump did not say how much gas was used")
-        return
+        return transaction.get("utime")
     ceiling = int(step["gas_ceiling"])
     sandbox = step.get("sandbox_gas_used")
     if sandbox is None:
@@ -396,12 +406,33 @@ def report_cost(lite, rpc_address, account, step, workdir, failures,
             f"so SETGASLIMIT did not bind"
         )
     if gas != sandbox:
-        failures.append(
-            f"{step['name']}: the chain charged {gas} gas and the sandbox charged {sandbox} "
-            f"for the same message. Every gas figure in this project comes from the sandbox, "
-            f"so the difference is the error bar on all of them."
+        # One input the sandbox cannot match is the clock. An anchor epoch is
+        # thirty seconds and the pool checkpoints the first time it sees a new
+        # one, so two messages seconds apart can straddle a boundary on a
+        # chain while the sandbox -- whose clock is frozen at the moment the
+        # fixture was built -- never does. That is a difference in what the
+        # two were asked to do, not in what they charge for doing it.
+        epoch = anchor_epoch_seconds()
+        utime = transaction.get("utime")
+        opened = (
+            previous_utime is not None
+            and utime is not None
+            and utime // epoch != previous_utime // epoch
         )
-
+        # Bounded, so that the tolerance cannot swallow a real divergence that
+        # happens to land on a boundary: a checkpoint is one write into the
+        # epoch ring, and a dictionary write measures about 5,200 gas.
+        checkpoint_ceiling = 10_000
+        if opened and 0 < gas - sandbox <= checkpoint_ceiling:
+            log(f"  {'it opened a new anchor epoch':<34} "
+                f"+{gas - sandbox} gas for the checkpoint the sandbox's frozen clock skipped")
+        else:
+            failures.append(
+                f"{step['name']}: the chain charged {gas} gas and the sandbox charged {sandbox} "
+                f"for the same message. Every gas figure in this project comes from the sandbox, "
+                f"so the difference is the error bar on all of them."
+            )
+    return transaction.get("utime")
 
 async def run(args) -> int:
     workdir = Path(args.workdir) if args.workdir else Path(tempfile.mkdtemp(prefix="tos-shielded-"))
@@ -550,6 +581,7 @@ async def run(args) -> int:
                 timeout=args.step_timeout,
             )
 
+            previous_utime = None
             for step in fixture["steps"]:
                 expect = step["expect"]
                 if step["body"] is None:
@@ -610,8 +642,10 @@ async def run(args) -> int:
                 if step["body"] is None:
                     bounce = check_recovery(lite, rpc_address, address_text, fixture,
                                             fixture_dir, step, Path(args.build_dir), failures)
-                report_cost(lite, rpc_address, address_text, step, workdir, failures,
-                            fixture.get("recovery_sandbox"), bounce)
+                previous_utime = report_cost(
+                    lite, rpc_address, address_text, step, workdir, failures,
+                    fixture.get("recovery_sandbox"), bounce, previous_utime,
+                )
 
             # Where the money ended up. A withdrawal that moved every root
             # correctly and paid nobody would pass every check above, so the

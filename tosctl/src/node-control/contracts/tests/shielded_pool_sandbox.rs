@@ -82,8 +82,8 @@ const TOPUP_MEASURED_MAX_GAS: i64 = 2_380;
 /// VM does, and the tests now do the VM's.
 const fn compute_fee(gas: u64) -> u64 {
     const FLAT_LIMIT: u64 = 100;
-    const FLAT_PRICE: u64 = 6_667;
-    const GAS_PRICE: u64 = 4_369_067;
+    const FLAT_PRICE: u64 = 667;
+    const GAS_PRICE: u64 = 436_907;
     if gas <= FLAT_LIMIT {
         FLAT_PRICE
     } else {

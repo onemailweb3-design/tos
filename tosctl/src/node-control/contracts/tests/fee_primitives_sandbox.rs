@@ -122,14 +122,15 @@ fn basechain_compute_fee_uses_the_basechain_price_table() {
     bc.send_message(deploy).expect("deploy").expect_success();
 
     // ConfigParam 21's basechain gas_price is 4,369,067, TON mainnet's live
-    // value: 66.66 nanotomi a gas, plus a flat 6,667 for the first hundred.
-    // So 380,000 gas costs 25,333,336 nanotomi (0.025 TOS, the division rounds
-    // up), not the
+    // value cut by ten: 6.666 nanotomi a gas, plus a flat 667 for the first
+    // hundred. So 380,000 gas costs 2,533,336 nanotomi, not the
     // masterchain-derived figure.
     //
-    // It was six times this until the basechain prices were aligned on
-    // 2026-09-21; the old table was what production charged before its own
-    // fee cut.
+    // It was six times the aligned figure until 2026-09-21, when the basechain
+    // prices were aligned with TON's live table, and a tenth of that from
+    // later the same day: a private transfer verifies a Groth16 proof on
+    // chain, and at the aligned price the verification alone cost more than
+    // the whole fee a transfer was meant to fit inside.
     let result = bc
         .run_get_method(&addr, "compute_fee", vec![StackItem::int(0), StackItem::int(380_000)])
         .expect("get basechain compute fee");
@@ -140,7 +141,7 @@ fn basechain_compute_fee_uses_the_basechain_price_table() {
         .expect("basechain compute fee result")
         .as_integer_value(0..=u64::MAX)
         .expect("basechain compute fee is a u64");
-    assert_eq!(fee, 25_333_336);
+    assert_eq!(fee, 2_533_336);
 
     // A plain payout has no StateInit/body DAG. GETFORWARDFEE therefore sees
     // zero priced attachment bits/cells and must return the basechain lump

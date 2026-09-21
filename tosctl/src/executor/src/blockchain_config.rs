@@ -153,9 +153,9 @@ impl DefaultConfig for GasLimitsPrices {
             // ConfigParam21 on 2026-09-21. They used to be exactly six times
             // these, which was what production charged before its fee cut.
             // The limits above stay thirty times mainnet's on purpose.
-            gas_price: 4369067,
+            gas_price: 436907,
             flat_gas_limit: 100,
-            flat_gas_price: 6667,
+            flat_gas_price: 667,
             gas_limit: 30000000,
             special_gas_limit: 30000000,
             gas_credit: 10000,
