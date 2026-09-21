@@ -39,18 +39,15 @@ int main() {
     fail("PROPERTY_A_400_FIT_FAILED: canonical 400-signer BOC does not fit the frozen persisted envelope");
   }
 
-  // Build 401 entries by bypassing the count gate solely to show byte size is not
-  // what refuses it: this raw BOC still fits the frozen one-MiB envelope.
+  // The production serializer itself owns the structural count gate.
   const auto signatures401 = make_signatures(401, false);
-  const auto raw_boc401 = boc(signature_set_cell(signatures401));
-  if (raw_boc401.size() > block::pq::pq_block_signatures_hard_max_bytes ||
-      block::pq::pq_block_signatures_accepts_signer_count(signatures401.size())) {
-    fail("PROPERTY_B_401_REFUSAL_FAILED: 401 signers were not refused independently of byte size");
+  const auto rejected401 = try_signature_set_cell(signatures401);
+  if (rejected401.is_ok() || block::pq::pq_block_signatures_accepts_signer_count(signatures401.size())) {
+    fail("PROPERTY_B_401_REFUSAL_FAILED: production serializer accepted 401 signers");
   }
 
-  // There is no production #13 decoder yet, and this predicate has no production
-  // consumer. This test-only ordering model must be pointed at the real external
-  // decoder by the unit that adds #13 parsing.
+  // The cell parser enforces the same byte bound before traversing its dictionary.
+  // This test-only raw-byte model remains until an external byte parser exists.
   td::BufferSlice hostile(block::pq::pq_block_signatures_hard_max_bytes + 1);
   std::memset(hostile.data(), 0xa5, hostile.size());
   std::size_t verification_calls = 0;
@@ -73,8 +70,8 @@ int main() {
     fail("PROPERTY_D_DETERMINISTIC_SERIALIZATION_FAILED: canonical 400-signer BOC changed across runs");
   }
 
-  std::printf("BLOCK_SIGNATURE_CARRIER_BOUND_OK hard_max=%zu boc400=%zu boc401=%zu headroom=%zu sha256=%s\n",
-              block::pq::pq_block_signatures_hard_max_bytes, boc400.size(), raw_boc401.size(),
+  std::printf("BLOCK_SIGNATURE_CARRIER_BOUND_OK hard_max=%zu boc400=%zu headroom=%zu sha256=%s\n",
+              block::pq::pq_block_signatures_hard_max_bytes, boc400.size(),
               block::pq::pq_block_signatures_hard_max_bytes - boc400.size(), serialized_hash.to_hex().c_str());
   return 0;
 }

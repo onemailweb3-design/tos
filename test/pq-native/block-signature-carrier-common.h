@@ -13,11 +13,13 @@
 
 #include "auto/tl/tos_api.h"
 #include "crypto/block/block-parse.h"
+#include "crypto/block/signature-set.h"
 #include "crypto/pq/mldsa44.h"
 #include "crypto/pq/pq-bytes.h"
 #include "crypto/pq/pq-sign-under.h"
 #include "td/utils/crypto.h"
 #include "tl-utils/tl-utils.hpp"
+#include "tos/quorum.h"
 #include "vm/boc.h"
 #include "vm/cells/CellBuilder.h"
 #include "vm/cells/CellString.h"
@@ -127,34 +129,30 @@ inline std::vector<SignatureInput> make_signatures(std::size_t count, bool crypt
   return result;
 }
 
+inline td::Result<td::Ref<vm::Cell>> try_signature_set_cell(const std::vector<SignatureInput>& signatures) {
+  std::vector<block::PQBlockSignature> pairs;
+  pairs.reserve(signatures.size());
+  tos::ValidatorWeight weight = 0;
+  for (const auto& signature : signatures) {
+    if (!tos::checked_add_validator_weight(weight, signature_weight)) {
+      return td::Status::Error("measurement signature weight overflow");
+    }
+    pairs.push_back(block::PQBlockSignature{tos::ValidatorId{signature.validator_id},
+                                            static_cast<tos::pq::PQAlgorithmId>(algorithm_id),
+                                            signature.signature.clone()});
+  }
+  return block::BlockSignatureSet::serialize_simplex_pq(pairs, catchain_seqno, validator_set_hash, weight, session_id(),
+                                                        slot, candidate());
+}
+
 inline td::Ref<vm::Cell> signature_set_cell(const std::vector<SignatureInput>& signatures) {
-  vm::Dictionary dict{16};
-  for (std::size_t i = 0; i < signatures.size(); ++i) {
-    auto packed = tos::pq::pack_pq_bytes(signatures[i].signature.as_slice(), tos::pq::mldsa44_signature_bytes);
-    if (packed.is_error()) {
-      std::abort();
-    }
-    vm::CellBuilder pair;
-    if (!(pair.store_bits_bool(signatures[i].validator_id.cbits(), 256) && pair.store_long_bool(algorithm_id, 16) &&
-          pair.store_ref_bool(packed.move_as_ok()) &&
-          dict.set_builder(td::BitArray<16>{static_cast<unsigned>(i)}, pair, vm::Dictionary::SetMode::Add))) {
-      std::abort();
-    }
-  }
-  auto dict_root = std::move(dict).extract_root_cell();
-  auto candidate_cell = vm::CellString::create(tos::serialize_tl_object(candidate(), true));
-  if (candidate_cell.is_error()) {
+  auto serialized = try_signature_set_cell(signatures);
+  if (serialized.is_error()) {
+    std::fprintf(stderr, "production signature-set serializer failed: %s\n",
+                 serialized.error().message().str().c_str());
     std::abort();
   }
-  vm::CellBuilder root;
-  if (!(root.store_long_bool(0x13, 8) && root.store_long_bool(validator_set_hash, 32) &&
-        root.store_long_bool(catchain_seqno, 32) && root.store_long_bool(signatures.size(), 32) &&
-        root.store_long_bool(signatures.size() * signature_weight, 64) && root.store_maybe_ref(dict_root) &&
-        root.store_bits_bool(session_id().cbits(), 256) && root.store_long_bool(slot, 32) &&
-        root.store_ref_bool(candidate_cell.move_as_ok()))) {
-    std::abort();
-  }
-  return root.finalize_novm();
+  return serialized.move_as_ok();
 }
 
 inline td::BufferSlice boc(const td::Ref<vm::Cell>& root) {

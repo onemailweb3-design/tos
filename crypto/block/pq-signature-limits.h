@@ -18,6 +18,7 @@ inline constexpr std::size_t pq_block_signature_bytes = tos::pq::mldsa44_signatu
 // per additional signer. One MiB remains below FullNode's 4 MiB proof ceiling
 // and the overlay's 16 MiB FEC-broadcast ceiling.
 inline constexpr std::size_t pq_block_signatures_hard_max_bytes = 1U << 20;
+inline constexpr std::size_t pq_candidate_data_max_bytes = 1024;
 
 static_assert(pq_block_signatures_max_signers == 400);
 static_assert(pq_block_signature_bytes == 2420);

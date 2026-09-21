@@ -19,6 +19,7 @@
 #include "auto/tl/lite_api.hpp"
 #include "common/errorcode.h"
 #include "crypto/common/refcnt.hpp"
+#include "crypto/pq/pq-consensus.h"
 #include "tos/tos-types.h"
 #include "vm/cells.h"
 
@@ -26,11 +27,20 @@
 
 namespace block {
 
+struct PQBlockSignature {
+  tos::ValidatorId validator_id;
+  tos::pq::PQAlgorithmId algorithm_id{tos::pq::PQAlgorithmId::unknown};
+  td::BufferSlice signature;
+};
+
 class BlockSignatureSet : public td::CntObject {
  public:
   virtual size_t get_size() const = 0;
   virtual td::Result<tos::ValidatorWeight> get_weight(td::Ref<ValidatorSet> vset) const = 0;
   virtual bool is_ordinary() const {
+    return false;
+  }
+  virtual bool is_pq() const {
     return false;
   }
   virtual bool is_final() const = 0;
@@ -84,6 +94,21 @@ class BlockSignatureSet : public td::CntObject {
   static td::Ref<BlockSignatureSet> create_simplex_approve(
       std::vector<tos::BlockSignature> signatures, tos::CatchainSeqno cc_seqno, td::uint32 validator_set_hash,
       td::Bits256 session_id, td::uint32 slot, tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData> candidate);
+  static td::Result<td::Ref<BlockSignatureSet>> create_simplex_pq_final(
+      std::vector<PQBlockSignature> signatures, tos::CatchainSeqno cc_seqno, td::uint32 validator_set_hash,
+      td::Bits256 session_id, td::uint32 slot, tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData> candidate);
+  static td::Result<td::Ref<BlockSignatureSet>> create_simplex_pq_approve(
+      std::vector<PQBlockSignature> signatures, tos::CatchainSeqno cc_seqno, td::uint32 validator_set_hash,
+      td::Bits256 session_id, td::uint32 slot, tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData> candidate);
+  static td::Result<td::Ref<vm::Cell>> serialize_simplex_pq(
+      const std::vector<PQBlockSignature>& signatures, tos::CatchainSeqno cc_seqno, td::uint32 validator_set_hash,
+      tos::ValidatorWeight signature_weight, td::Bits256 session_id, td::uint32 slot,
+      const tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData>& candidate);
+
+  virtual td::Result<std::vector<PQBlockSignature>> export_pq_signatures() const;
+  virtual td::Result<td::Bits256> pq_session_id() const;
+  virtual td::Result<td::uint32> pq_slot() const;
+  virtual td::Result<td::BufferSlice> pq_candidate_data() const;
 
   static td::Result<td::Ref<BlockSignatureSet>> fetch(td::Ref<vm::Cell> cell, tos::ValidatorWeight& total_weight);
   static td::Result<td::Ref<BlockSignatureSet>> fetch(td::Ref<vm::Cell> cell, td::Ref<ValidatorSet> vset);
