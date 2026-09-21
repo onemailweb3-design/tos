@@ -255,7 +255,7 @@ fn test_block_signatures_variant_ordinary() {
     assert!(variant.is_ordinary());
     assert!(!variant.is_simplex());
     assert_eq!(variant.validator_info(), &ordinary.validator_info);
-    assert_eq!(variant.pure_signatures().weight(), ordinary.pure_signatures.weight());
+    assert_eq!(variant.pure_signatures().unwrap().weight(), ordinary.pure_signatures.weight());
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn test_block_signatures_variant_simplex() {
     assert!(!variant.is_ordinary());
     assert!(variant.is_simplex());
     assert_eq!(variant.validator_info(), &simplex.validator_info);
-    assert_eq!(variant.pure_signatures().weight(), simplex.pure_signatures.weight());
+    assert_eq!(variant.pure_signatures().unwrap().weight(), simplex.pure_signatures.weight());
 }
 
 #[test]
@@ -815,6 +815,9 @@ fn test_block_proof_with_simplex_signatures() {
         }
         BlockSignaturesVariant::Ordinary(_) => {
             panic!("Expected Simplex signatures, got Ordinary");
+        }
+        BlockSignaturesVariant::SimplexPq(_) => {
+            panic!("Expected Simplex signatures, got SimplexPq");
         }
     }
 }

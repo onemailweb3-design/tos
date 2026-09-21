@@ -63,6 +63,28 @@ struct VectorCase {
   bool parse_with_validator_set{false};
 };
 
+std::string reason_code(const std::string& reason) {
+  if (reason == "-") return "-";
+  if (reason == "pq signatures: duplicate validator_id") return "duplicate_validator_id";
+  if (reason == "pq signatures: unsupported algorithm") return "unsupported_algorithm";
+  if (reason.find("pq signatures: signature length") == 0) return "signature_length";
+  if (reason.find("pq signatures: noncanonical PQBytes") == 0) return "noncanonical_pqbytes";
+  if (reason == "pq signatures: dictionary index") return "dictionary_index";
+  if (reason == "pq signatures: dictionary missing entry") return "dictionary_missing_entry";
+  if (reason == "pq signatures: dictionary extra entry") return "dictionary_extra_entry";
+  if (reason == "pq candidate data: oversize") return "candidate_oversize";
+  if (reason == "pq candidate data: noncanonical chunk size") return "candidate_noncanonical_chunk";
+  if (reason == "pq candidate data: non-byte-aligned cell") return "candidate_non_byte_aligned";
+  if (reason == "pq candidate data: multiple continuation refs") return "candidate_multiple_refs";
+  if (reason == "pq candidate data: chain too long") return "candidate_chain_length";
+  if (reason == "pq candidate data: trailing empty cell") return "candidate_trailing_ref";
+  if (reason.find("pq candidate data: invalid TL") == 0) return "candidate_tl";
+  if (reason == "pq signatures: signer count exceeds maximum") return "signer_count";
+  if (reason == "signature weight mismatch") return "weight_mismatch";
+  if (reason == "unsupported carrier for post-quantum validator set") return "unsupported_carrier";
+  fail("VECTOR_UNKNOWN_REASON reason=" + reason);
+}
+
 std::vector<std::string> split(const std::string& line, char delimiter) {
   std::vector<std::string> out;
   std::istringstream input(line);
@@ -506,14 +528,15 @@ void write_fixture(const std::vector<VectorCase>& cases) {
     fail("VECTOR_FIXTURE_WRITE_FAILED");
   }
   output << "# Shared canonical post-quantum BlockSignatures vectors. Fields are tab-separated.\n";
-  output << "# case outcome reason boc_hex constructor validator_set_hash catchain_seqno sig_count validator_ids "
+  output << "# case outcome reason_code reason boc_hex constructor validator_set_hash catchain_seqno sig_count validator_ids "
             "algorithm_ids session_id slot candidate_sha256\n";
   for (const auto& item : cases) {
     auto boc = vm::std_boc_serialize(item.root, 0);
     if (boc.is_error()) {
       fail("VECTOR_BOC_SERIALIZATION_FAILED case=" + item.name);
     }
-    output << item.name << '\t' << (item.accept ? "accept" : "reject") << '\t' << item.reason << '\t'
+    output << item.name << '\t' << (item.accept ? "accept" : "reject") << '\t' << reason_code(item.reason) << '\t'
+           << item.reason << '\t'
            << td::hex_encode(boc.ok().as_slice()) << '\t' << item.constructor << '\t' << item.validator_hash << '\t'
            << item.cc_seqno << '\t' << item.sig_count << '\t' << join_bits(item.validator_ids) << '\t'
            << join_algorithms(item.algorithms) << '\t' << item.session.to_hex() << '\t' << item.candidate_slot << '\t'
@@ -537,7 +560,7 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
       continue;
     }
     const auto row = split(line, '\t');
-    if (row.size() != 13) {
+    if (row.size() != 14) {
       fail("VECTOR_BAD_ROW fields=" + std::to_string(row.size()));
     }
     const auto definition = expected.find(row[0]);
@@ -548,18 +571,19 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
       fail("VECTOR_DUPLICATE_ROW case=" + row[0]);
     }
     const auto* item = definition->second;
-    if (row[1] != (item->accept ? "accept" : "reject") || row[2] != item->reason || row[4] != item->constructor ||
-        number(row[5], row[0]) != item->validator_hash || number(row[6], row[0]) != item->cc_seqno ||
-        number(row[7], row[0]) != item->sig_count || row[8] != join_bits(item->validator_ids) ||
-        row[9] != join_algorithms(item->algorithms) || row[10] != item->session.to_hex() ||
-        number(row[11], row[0]) != item->candidate_slot || row[12] != item->candidate_hash) {
+    if (row[1] != (item->accept ? "accept" : "reject") || row[2] != reason_code(item->reason) ||
+        row[3] != item->reason || row[5] != item->constructor || number(row[6], row[0]) != item->validator_hash ||
+        number(row[7], row[0]) != item->cc_seqno || number(row[8], row[0]) != item->sig_count ||
+        row[9] != join_bits(item->validator_ids) || row[10] != join_algorithms(item->algorithms) ||
+        row[11] != item->session.to_hex() || number(row[12], row[0]) != item->candidate_slot ||
+        row[13] != item->candidate_hash) {
       fail("VECTOR_METADATA_MISMATCH case=" + row[0]);
     }
     auto generated_boc = vm::std_boc_serialize(item->root, 0);
-    if (generated_boc.is_error() || td::hex_encode(generated_boc.ok().as_slice()) != row[3]) {
+    if (generated_boc.is_error() || td::hex_encode(generated_boc.ok().as_slice()) != row[4]) {
       fail("VECTOR_BOC_DRIFT case=" + row[0]);
     }
-    auto bytes = td::hex_decode(row[3]);
+    auto bytes = td::hex_decode(row[4]);
     if (bytes.is_error()) {
       fail("VECTOR_BAD_BOC_HEX case=" + row[0]);
     }
@@ -569,8 +593,8 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
     }
     td::Result<td::Ref<block::BlockSignatureSet>> parsed;
     if (item->parse_with_validator_set || item->accept) {
-      auto ids = parse_bits(row[8]);
-      auto algorithms = parse_algorithms(row[9]);
+      auto ids = parse_bits(row[9]);
+      auto algorithms = parse_algorithms(row[10]);
       if (ids.empty() && !item->accept) {
         ids.push_back(hash_of("persisted-validator-0"));
         algorithms.push_back(algorithm_id);
@@ -585,8 +609,12 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
         fail("VECTOR_UNEXPECTED_ACCEPT case=" + row[0] + " expected=" + row[2]);
       }
       const auto actual = parsed.error().message().str();
-      if (actual != row[2]) {
-        fail("VECTOR_REASON_MISMATCH case=" + row[0] + " expected=" + row[2] + " actual=" + actual);
+      if (actual != row[3]) {
+        fail("VECTOR_REASON_MISMATCH case=" + row[0] + " expected=" + row[3] + " actual=" + actual);
+      }
+      if (reason_code(actual) != row[2]) {
+        fail("VECTOR_REASON_CODE_MISMATCH case=" + row[0] + " expected=" + row[2] +
+             " actual=" + reason_code(actual));
       }
       continue;
     }
@@ -609,9 +637,9 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
     }
     const auto ids = ids_of(parsed_signatures.ok());
     const auto algorithms = algorithms_of(parsed_signatures.ok());
-    if (join_bits(ids) != row[8] || join_algorithms(algorithms) != row[9] || parsed_session.ok().to_hex() != row[10] ||
-        parsed_slot.ok() != number(row[11], row[0]) ||
-        td::sha256_bits256(parsed_candidate.ok().as_slice()).to_hex() != row[12]) {
+    if (join_bits(ids) != row[9] || join_algorithms(algorithms) != row[10] ||
+        parsed_session.ok().to_hex() != row[11] || parsed_slot.ok() != number(row[12], row[0]) ||
+        td::sha256_bits256(parsed_candidate.ok().as_slice()).to_hex() != row[13]) {
       fail("VECTOR_PARSED_CONTENT_MISMATCH case=" + row[0]);
     }
     auto reserialized = signature_set->serialize(validator_set(ids, algorithms));
@@ -619,7 +647,7 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
       fail("VECTOR_RESERIALIZATION_FAILED case=" + row[0] + " actual=" + reserialized.error().message().str());
     }
     auto reserialized_boc = vm::std_boc_serialize(reserialized.move_as_ok(), 0);
-    if (reserialized_boc.is_error() || td::hex_encode(reserialized_boc.ok().as_slice()) != row[3]) {
+    if (reserialized_boc.is_error() || td::hex_encode(reserialized_boc.ok().as_slice()) != row[4]) {
       fail("VECTOR_RESERIALIZATION_DRIFT case=" + row[0]);
     }
   }

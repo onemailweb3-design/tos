@@ -1400,6 +1400,7 @@ impl TopBlockDescr {
         self.signatures.as_ref().and_then(|irf| match &irf.0 {
             BlockSignaturesVariant::Ordinary(sigs) => Some(sigs),
             BlockSignaturesVariant::Simplex(_) => None,
+            BlockSignaturesVariant::SimplexPq(_) => None,
         })
     }
 
@@ -1409,6 +1410,7 @@ impl TopBlockDescr {
         self.signatures.as_ref().and_then(|irf| match &irf.0 {
             BlockSignaturesVariant::Ordinary(_) => None,
             BlockSignaturesVariant::Simplex(sigs) => Some(sigs),
+            BlockSignaturesVariant::SimplexPq(_) => None,
         })
     }
 

@@ -2498,23 +2498,22 @@ pub fn db_serialize_block_proof_ex(
     serialize_cell(&mut map, "proof", Some(&proof.root), false)?;
 
     if let Some(signatures) = proof.signatures.as_ref() {
+        let pure_signatures = signatures.pure_signatures()?;
         // Serialize common fields
         map.insert(
             "validator_list_hash_short".to_string(),
             signatures.validator_info().validator_list_hash_short.into(),
         );
         map.insert("catchain_seqno".to_string(), signatures.validator_info().catchain_seqno.into());
-        serialize_u64(&mut map, "sig_weight", &signatures.pure_signatures().weight(), mode);
+        serialize_u64(&mut map, "sig_weight", &pure_signatures.weight(), mode);
 
         let mut signs = Vec::new();
-        signatures.pure_signatures().signatures().iterate_slices(
-            |_key, mut value| -> Result<bool> {
-                signs.push(serialize_crypto_signature(&CryptoSignaturePair::construct_from(
-                    &mut value,
-                )?)?);
-                Ok(true)
-            },
-        )?;
+        pure_signatures.signatures().iterate_slices(|_key, mut value| -> Result<bool> {
+            signs.push(serialize_crypto_signature(&CryptoSignaturePair::construct_from(
+                &mut value,
+            )?)?);
+            Ok(true)
+        })?;
         serialize_field(&mut map, "signatures", signs);
 
         // Serialize variant-specific fields
@@ -2527,6 +2526,9 @@ pub fn db_serialize_block_proof_ex(
                 serialize_uint256(&mut map, "session_id", &simplex.session_id);
                 serialize_field(&mut map, "slot", simplex.slot);
                 serialize_cell(&mut map, "candidate_data", Some(&simplex.candidate_data), true)?;
+            }
+            BlockSignaturesVariant::SimplexPq(_) => {
+                fail!("post-quantum block-proof JSON serialization is not available")
             }
         }
     }

@@ -155,7 +155,7 @@ fn check_block_proof(key_block_file_name: &str, proof_file_name: &str) {
             legacy_recorded_hash_short(&validators, cc_seqno_of_proof)
         );
 
-        let pure_signatures = signatures.pure_signatures();
+        let pure_signatures = signatures.pure_signatures().unwrap();
 
         let data =
             Block::build_data_for_sign(&proof.proof_for.root_hash, &proof.proof_for.file_hash);
