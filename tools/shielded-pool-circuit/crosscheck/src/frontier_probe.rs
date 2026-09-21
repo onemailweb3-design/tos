@@ -104,6 +104,110 @@ int f_flat_reads(cell chain, int rounds) method_id {
   return acc;
 }
 
+
+;; --- the same fold against a flat, level-ordered layout ---------------------
+;; A level is three cells because a cell holds 1023 bits and a field element
+;; is 256: values 0-2, then 3-5, then 6. The level cells carry a reference to
+;; the next level, so the whole store is walked in the order an append walks
+;; it and nothing is addressed by key.
+;;
+;; This is a prototype for measurement. It is not the contract's layout.
+
+(int, int, int, int, int, int, int, cell) flat_read(cell node, int last) inline_ref {
+  slice a = node.begin_parse();
+  int v0 = a~load_uint(256);
+  int v1 = a~load_uint(256);
+  int v2 = a~load_uint(256);
+  cell b = a~load_ref();
+  cell next = last ? null() : a~load_ref();
+  slice bs = b.begin_parse();
+  int v3 = bs~load_uint(256);
+  int v4 = bs~load_uint(256);
+  int v5 = bs~load_uint(256);
+  slice cs = bs~load_ref().begin_parse();
+  int v6 = cs~load_uint(256);
+  return (v0, v1, v2, v3, v4, v5, v6, next);
+}
+
+cell flat_build_level(tuple v, cell next, int last) inline_ref {
+  cell c = begin_cell().store_uint(v.at(6), 256).end_cell();
+  cell b = begin_cell()
+    .store_uint(v.at(3), 256).store_uint(v.at(4), 256).store_uint(v.at(5), 256)
+    .store_ref(c).end_cell();
+  builder a = begin_cell()
+    .store_uint(v.at(0), 256).store_uint(v.at(1), 256).store_uint(v.at(2), 256)
+    .store_ref(b);
+  ifnot (last) { a = a.store_ref(next); }
+  return a.end_cell();
+}
+
+;; Level `l` of a pool at `index`, filled the way the dictionary version fills
+;; it: slots up to that level's digit hold values, the rest are zero.
+cell flat_fill(int index) method_id {
+  cell next = null();
+  int level = tree_depth() - 1;
+  while (level >= 0) {
+    int stride = 1;
+    int i = 0;
+    while (i < level) { stride = stride * tree_arity(); i = i + 1; }
+    int digit = (index / stride) % tree_arity();
+    tuple v = empty_tuple();
+    int slot = 0;
+    while (slot < tree_arity()) {
+      v = v.tpush(slot <= digit ? 0x51ed0000 + (level * 7) + slot : 0);
+      slot = slot + 1;
+    }
+    next = flat_build_level(v, next, level == (tree_depth() - 1));
+    level = level - 1;
+  }
+  return next;
+}
+
+;; The measured call: the same twelve-level fold, reading and rebuilding the
+;; flat store instead of a dictionary.
+(cell, int) flat_append(cell frontier, int index, int leaf) impure {
+  ;; Down: read every level, place the carry, hash, and keep the new values.
+  tuple levels = empty_tuple();
+  int carry = leaf;
+  int stride = 1;
+  int level = 0;
+  cell node = frontier;
+  while (level < tree_depth()) {
+    (int v0, int v1, int v2, int v3, int v4, int v5, int v6, cell next) =
+      flat_read(node, level == (tree_depth() - 1));
+    int digit = (index / stride) % tree_arity();
+    int empty = empty_root_at(level);
+    int c0 = digit == 0 ? carry : (digit >= 0 ? v0 : empty);
+    int c1 = digit == 1 ? carry : (digit >= 1 ? v1 : empty);
+    int c2 = digit == 2 ? carry : (digit >= 2 ? v2 : empty);
+    int c3 = digit == 3 ? carry : (digit >= 3 ? v3 : empty);
+    int c4 = digit == 4 ? carry : (digit >= 4 ? v4 : empty);
+    int c5 = digit == 5 ? carry : (digit >= 5 ? v5 : empty);
+    int c6 = digit == 6 ? carry : (digit >= 6 ? v6 : empty);
+    tuple v = empty_tuple();
+    v = v.tpush(c0); v = v.tpush(c1); v = v.tpush(c2); v = v.tpush(c3);
+    v = v.tpush(c4); v = v.tpush(c5); v = v.tpush(c6);
+    levels = levels.tpush(v);
+    carry = commit_node(c0, c1, c2, c3, c4, c5, c6);
+    stride = stride * tree_arity();
+    node = next;
+    level = level + 1;
+  }
+  ;; Up: the store is rebuilt from the deepest level, because each level holds
+  ;; a reference to the next.
+  cell rebuilt = null();
+  level = tree_depth() - 1;
+  while (level >= 0) {
+    rebuilt = flat_build_level(levels.at(level), rebuilt, level == (tree_depth() - 1));
+    level = level - 1;
+  }
+  return (rebuilt, carry);
+}
+
+(cell, int) f_flat_append(cell frontier, int index, int leaf) method_id {
+  return flat_append(frontier, index, leaf);
+}
+
 ;; The digit sum, which is what decides how many slots the append reads.
 int f_digit_sum(int index) method_id {
   int total = 0;
@@ -232,6 +336,31 @@ impl FrontierProbe {
         let (_, gas) = self.call(
             "f_flat_reads",
             vec![StackItem::cell(chain), Self::integer(&rounds.to_string())?],
+        )?;
+        Ok(gas)
+    }
+
+    /// The flat store for a pool at `index`.
+    pub fn flat_fill(&self, index: u64) -> Result<Cell> {
+        let (stack, _) = self.call("flat_fill", vec![Self::integer(&index.to_string())?])?;
+        stack
+            .last()
+            .ok_or_else(|| CrossCheckError::Vm("no store".to_string()))?
+            .as_cell()
+            .map(Clone::clone)
+            .map_err(|error| CrossCheckError::Vm(format!("store: {error}")))
+    }
+
+    /// The gas the same fold costs against the flat store.
+    pub fn flat_append_gas(&self, index: u64) -> Result<i64> {
+        let frontier = self.flat_fill(index)?;
+        let (_, gas) = self.call(
+            "f_flat_append",
+            vec![
+                StackItem::cell(frontier),
+                Self::integer(&index.to_string())?,
+                Self::integer("12345678901234567890")?,
+            ],
         )?;
         Ok(gas)
     }
