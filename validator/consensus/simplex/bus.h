@@ -159,6 +159,10 @@ struct QueryN5Boundary {
     // total alone lets either one of them go missing unnoticed.
     size_t finalization_retries = 0;
     size_t finalization_retries_at_admission = 0;
+    // Finalizations that have been failing long enough to have been reported once, and are
+    // still being retried. There is no counter for finalizations given up on, because none
+    // is: an agreed certificate is retried for as long as the group lives.
+    size_t finalizations_stalled = 0;
     // Conversion attempts made for the queried slot. A slot latched at the boundary must
     // stay at the attempt that latched it however many times it is asked for again.
     size_t slot_attempts = 0;

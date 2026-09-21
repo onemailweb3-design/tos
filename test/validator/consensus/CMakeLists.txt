@@ -224,6 +224,24 @@ set_tests_properties(
     test-consensus-simplex2-pq-finality-retry
     PROPERTIES ENVIRONMENT "TOS_SIMPLEX_FINALIZED_INFLIGHT_MAX=1"
 )
+# The property the retry exists for, which a count of retries does not show: a transient
+# condition that outlasts the first several attempts still ends with the certificate every
+# node agreed on reaching the carrier boundary, and nothing re-announces it -- the event
+# that carried it was consumed by the first attempt.
+#
+# Twelve injected failures, against the four the first version of this code gave up at. An
+# implementation that gives up loses the certificate here and never reaches the boundary at
+# all, which is what the gate reports. The condition is injected because a build that stops
+# after one slot has no natural pressure that can be turned on and then off.
+add_test(
+    NAME test-consensus-simplex2-pq-finality-transient-recovery
+    COMMAND test-consensus --duration 40 --n-nodes 4 --target-rate-ms 100
+            --net-ping 0.005:0.02 --pq-finality-e2e-test
+)
+set_tests_properties(
+    test-consensus-simplex2-pq-finality-transient-recovery
+    PROPERTIES ENVIRONMENT "TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES=12"
+)
 # The same gate, with the adversarial scenarios turned on. Their attack machinery was never
 # the part that needed N5 -- only their `--min-finalized-blocks` assertion was -- so running
 # them against the post-quantum gate restores the end-to-end half of N4.5's checklist: that

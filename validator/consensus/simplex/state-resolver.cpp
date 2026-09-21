@@ -38,12 +38,36 @@ constexpr size_t DEFAULT_FINALIZED_CACHE_MAX_ENTRIES = 4096;
 // candidate. See MEMORY_DIAGNOSTICS simplex-state-resolver "state_inflight".
 constexpr size_t DEFAULT_STATE_INFLIGHT_MAX = 4096;
 constexpr size_t DEFAULT_FINALIZED_INFLIGHT_MAX = 4096;
-// How many times a finalization that failed transiently is tried again, and how long the
-// first wait is. Bounded on purpose: a candidate that cannot be finalized after this many
-// tries is a condition to report, not one to keep grinding at. Each wait is this delay
-// times the attempt number, so pressure that needs time gets it.
-constexpr size_t max_finalization_attempts = 4;
+// How a finalization that failed for a reason that may not recur is tried again. The wait
+// grows with the attempt and is capped, and there is deliberately no attempt limit.
+//
+// A limit was the first shape of this, and it only moved the loss: the event that carried
+// this certificate is long consumed, so the resolver is the only thing left that knows the
+// certificate needs converting, and giving up after a few short waits loses it just as
+// completely as giving up on the first failure did. Any condition that outlasts a second of
+// backoff -- a database still catching up, a dependency a few seconds away, a node still
+// coming up -- would end with an agreed, verified certificate that nothing will ever ask
+// for again. So the entry is kept and retried for as long as the group lives.
+//
+// The count is still tracked, for the one thing a count is good for here: saying so, once,
+// when a finalization has been failing long enough that somebody should look.
 constexpr double finalization_retry_delay = 0.2;
+constexpr double max_finalization_retry_delay = 5.0;
+constexpr size_t finalization_attempts_before_reporting = 4;
+// Fault injection for the retry path, read once. The transient failures that produce it in
+// production -- admission pressure, a dependency not ready yet -- cannot be turned on and
+// off on demand in a build that stops at the carrier boundary after one slot, so the one
+// property that matters cannot otherwise be shown: that a failure outlasting several
+// retries still ends with the same certificate reaching the seam. Unset outside tests; a
+// value of N fails the first N conversion attempts with exactly that class of error.
+size_t injected_transient_finalization_failures() {
+  const char* value = std::getenv("TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES");
+  if (value == nullptr) {
+    return 0;
+  }
+  auto parsed = td::to_integer_safe<size_t>(td::Slice(value));
+  return parsed.is_error() ? 0 : parsed.move_as_ok();
+}
 
 size_t cache_limit_from_env(const char* name, size_t default_value) {
   const char* value = std::getenv(name);
@@ -153,6 +177,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
                                    .finalizations_settled = finalizations_settled_,
                                    .finalization_retries = finalization_retries_,
                                    .finalization_retries_at_admission = finalization_retries_at_admission_,
+                                   .finalizations_stalled = finalizations_stalled_,
                                    .slot_attempts = 0};
     for (const auto& [id, state] : finalized_blocks_) {
       if (id.slot != query->slot) {
@@ -415,9 +440,14 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   size_t finalizations_settled_ = 0;
   size_t finalization_retries_ = 0;
   size_t finalization_retries_at_admission_ = 0;
+  // Finalizations that have been failing long enough to have been reported once. They are
+  // still being retried; this is what an operator watches, not a count of what was lost.
+  size_t finalizations_stalled_ = 0;
+  bool n5_boundary_announced_ = false;
   size_t finalized_db_hits_ = 0;
   size_t finalized_db_misses_ = 0;
   size_t finalized_db_skips_ = 0;
+  size_t injected_transient_failures_remaining_ = injected_transient_finalization_failures();
 
   void touch_finalized_cache(const CandidateId& id) {
     auto evicted = finalized_blocks_lru_.touch(id);
@@ -475,6 +505,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
                    << " finalized_admission_rejections=" << finalized_admission_rejections_
                    << " n5_blocked_slots=" << n5_blocked_slots_ << " finalization_retries=" << finalization_retries_
                    << " finalization_retries_at_admission=" << finalization_retries_at_admission_
+                   << " finalizations_stalled=" << finalizations_stalled_
                    << " finalizations_outstanding=" << (finalizations_started_ - finalizations_settled_)
                    << " finalized_db_hits=" << finalized_db_hits_ << " finalized_db_misses=" << finalized_db_misses_
                    << " finalized_db_skips=" << finalized_db_skips_;
@@ -543,20 +574,14 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
           td::Status::Error(ErrorCode::notready,
                             PSTRING() << "Simplex state-resolver: too many concurrent finalizations ("
                                       << finalized_inflight_.count() << "/" << finalized_inflight_.capacity() << ")");
-      if (state.attempts < max_finalization_attempts) {
-        ++finalization_retries_;
-        ++finalization_retries_at_admission_;
-        retry_finalization(id, final_cert, final_candidate, state.attempts).start().detach();
-      } else {
-        LOG(ERROR) << "Simplex state-resolver: giving up on finalizing slot " << id.slot << " after " << state.attempts
-                   << " attempts; the last failure was " << rejection.message();
-        forget_exhausted(id);
-      }
+      ++finalization_retries_;
+      ++finalization_retries_at_admission_;
+      report_if_stalled(id, state, rejection.message());
+      retry_finalization(id, final_cert, final_candidate, state.attempts).start().detach();
       co_return std::move(rejection);
     }
     state.state = Finalization::InFlight;
     ++state.attempts;
-    bool exhausted = false;
     {
       SCOPE_EXIT {
         finalized_inflight_.release();
@@ -577,51 +602,54 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         LOG(ERROR) << "Simplex consensus is blocked at the N4/N5 boundary: the certificate for slot " << id.slot
                    << " was agreed and verified, but " << result.error().message()
                    << ". No block was finalized, accepted or persisted. This is expected in an N4-only build.";
-        owning_bus().publish<N5BoundaryReached>(id.slot);
+        // Announced once. The event exists to quiesce the group, which is a thing that
+        // happens once; every later certificate meets the same seam, and telling listeners
+        // again would be telling them something they acted on already. They are idempotent,
+        // so this is not a correctness fix -- it is what makes "published once" a property
+        // of the code rather than a sentence in a document.
+        if (!n5_boundary_announced_) {
+          n5_boundary_announced_ = true;
+          owning_bus().publish<N5BoundaryReached>(id.slot);
+        }
       } else {
         // Transient: admission pressure, a timeout, an ancestor not ready yet. The entry
         // goes back to Idle rather than being erased, because erasing it loses the fact
         // that this candidate still needs finalizing -- and the FinalizationObserved that
         // would have said so again was consumed when this attempt started. A retry is
-        // scheduled while the certificate is still in hand.
+        // scheduled while the certificate is still in hand, and there is no count at which
+        // that stops: see the constants above.
         state.state = Finalization::Idle;
-        if (state.attempts < max_finalization_attempts) {
-          ++finalization_retries_;
-          retry_finalization(id, final_cert, final_candidate, state.attempts).start().detach();
-        } else {
-          LOG(ERROR) << "Simplex state-resolver: giving up on finalizing slot " << id.slot << " after "
-                     << state.attempts << " attempts; the last failure was " << result.error().message();
-          exhausted = true;
-        }
+        ++finalization_retries_;
+        report_if_stalled(id, state, result.error().message());
+        retry_finalization(id, final_cert, final_candidate, state.attempts).start().detach();
       }
       for (auto& p : waiters) {
         p.set_result(result.clone());
-      }
-      if (exhausted) {
-        forget_exhausted(id);
       }
       co_return std::move(result);
     }
   }
 
-  // Drop the record of a finalization that has run out of attempts. Keeping an entry is how
-  // a certificate is remembered between tries; once there are no tries left there is nothing
-  // to remember, and an entry per abandoned candidate would grow without bound under exactly
-  // the pressure the admission limit exists to survive. Only an entry nobody is waiting on
-  // can go: a waiter is a promise, and dropping the entry would drop the promise with it.
-  void forget_exhausted(const CandidateId& id) {
-    auto it = finalized_blocks_.find(id);
-    if (it != finalized_blocks_.end() && it->second.waiters.empty()) {
-      finalized_blocks_.erase(it);
+  // Say once that a finalization has been failing long enough to be worth looking at, and
+  // keep the entry either way. This replaces giving up: the operator is told at the same
+  // point the old code abandoned the certificate, and the certificate stays.
+  void report_if_stalled(const CandidateId& id, FinalizedBlock& state, td::Slice last_error) {
+    if (state.attempts != finalization_attempts_before_reporting) {
+      return;
     }
+    ++finalizations_stalled_;
+    LOG(ERROR) << "Simplex state-resolver: the certificate for slot " << id.slot << " has failed to finalize "
+               << state.attempts << " times and is still being retried; the last failure was " << last_error;
   }
 
-  // Try a transiently failed finalization again, after a backoff that grows with the
-  // attempt. Detached on purpose: the caller that met the failure has already been told,
+  // Try a transiently failed finalization again, after a backoff that grows with the attempt
+  // up to a cap. Detached on purpose: the caller that met the failure has already been told,
   // and this exists so the certificate is not forgotten, not so anyone waits for it.
   td::actor::Task<> retry_finalization(CandidateId id, std::optional<FinalCertRef> final_cert,
                                        std::optional<CandidateRef> final_candidate, size_t attempts) {
-    co_await td::actor::coro_sleep(td::Timestamp::in(finalization_retry_delay * static_cast<double>(attempts)));
+    const double delay =
+        std::min(finalization_retry_delay * static_cast<double>(attempts), max_finalization_retry_delay);
+    co_await td::actor::coro_sleep(td::Timestamp::in(delay));
     auto result = co_await finalize_blocks(id, std::move(final_cert), std::move(final_candidate)).wrap();
     if (result.is_error() && !is_n5_carrier_required(result.error()) && result.error().code() != ErrorCode::cancelled) {
       LOG(DEBUG) << "Simplex state-resolver: retry of slot " << id.slot
@@ -633,6 +661,12 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   td::actor::Task<> finalize_blocks_inner(CandidateId id, std::optional<FinalCertRef> final_cert,
                                           std::optional<CandidateRef> final_candidate) {
     auto& bus = *owning_bus();
+
+    if (injected_transient_failures_remaining_ > 0) {
+      --injected_transient_failures_remaining_;
+      co_return td::Status::Error(ErrorCode::notready,
+                                  "Simplex state-resolver: injected transient finalization failure");
+    }
 
     if (!final_cert && bus.shard.is_masterchain()) {
       co_return td::Unit{};

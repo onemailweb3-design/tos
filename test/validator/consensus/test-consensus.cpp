@@ -575,6 +575,12 @@ struct ObservedFinalization {
 std::mutex finality_log_mutex;
 std::vector<ObservedFinalization> finality_log;
 
+// How many times each running instance announced the carrier boundary. The event quiesces
+// the whole group, so a node has no reason to send it twice however many of its
+// certificates meet the same seam -- and "sent once" is only a property if something counts.
+std::mutex boundary_announcement_mutex;
+std::map<std::pair<size_t, size_t>, size_t> boundary_announcements;
+
 // Only the end-to-end gate reads this, and only that run is short enough for it to be
 // bounded. A stress scenario finalizes for as long as it runs, so it does not record.
 void record_finalization(ObservedFinalization observation) {
@@ -617,6 +623,15 @@ class TestFinalityObserver : public td::actor::SpawnsWith<simplex::Bus>, public 
   template <>
   void handle(simplex::BusHandle, std::shared_ptr<const CandidateGenerated>) {
     ++CANDIDATES_GENERATED;
+  }
+
+  template <>
+  void handle(simplex::BusHandle bus, std::shared_ptr<const N5BoundaryReached>) {
+    if (!bus->local_id.has_value()) {
+      return;
+    }
+    std::scoped_lock lock(boundary_announcement_mutex);
+    ++boundary_announcements[{bus->local_id->idx.value(), instance_idx_}];
   }
 
  private:
@@ -1637,9 +1652,15 @@ class TestConsensus : public td::actor::Actor {
     // say anything about that: it reports one certificate's fate.
     //
     // "It stopped" is not observable at an instant, so the instrument is a settle window.
-    // Everything the round produces -- candidates anywhere in the network, finality
-    // observations, and every node's own vote journal -- is read twice, a window apart, and
-    // has to be identical. An earlier version of this gate asserted that the round stops
+    // Three things the round produces are read twice, a window apart, and have to be
+    // identical: candidates anywhere in the network, every node's own vote journal, and
+    // finality certificates.
+    //
+    // Those three, and not "nothing further happens". A quiescent pool still accepts votes
+    // and certificates from peers, and can still assemble evidence already in flight into a
+    // notarization or a skip certificate; what it stops doing is producing. So the claim is
+    // exactly: no new candidate, no new locally cast vote, and no new finality certificate
+    // after the window. An earlier version of this gate asserted that the round stops
     // without measuring it, and the count was still moving when it said so.
     //
     // Scenarios that churn nodes are excluded, and only those: quiescence lives in memory,
@@ -1707,6 +1728,13 @@ class TestConsensus : public td::actor::Actor {
     // variants that do not churn, the same division the journal-replay phase above makes.
     constexpr size_t repeated_finalizations = 8;
     simplex::QueryN5Boundary::Result probed;
+    // The resolver reads this too. Reading it here rather than passing it as a flag keeps
+    // the gate and the thing it measures reading the same number, so a scenario cannot
+    // configure one without the other.
+    const size_t injected_finalization_failures = [] {
+      const char* value = std::getenv("TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES");
+      return value == nullptr ? 0u : static_cast<size_t>(std::max(0, td::to_integer<int>(td::Slice(value))));
+    }();
     if (!node_churn_active) {
       std::optional<ObservedFinalization> latched;
       for (const auto& observation : read_finality_log()) {
@@ -1791,6 +1819,62 @@ class TestConsensus : public td::actor::Actor {
       // will never arrive, which is what holds the limit closed; the second is refused at
       // the door, and has to come back rather than disappear. It is deliberately last in the
       // gate, because it leaves that first finalization outstanding on purpose.
+      // --- A failure that outlasts the retries still ends at the seam ---
+      //
+      // The property the retry exists for, and the one a count of retries does not show: a
+      // transient condition that lasts longer than the first few attempts must still end
+      // with *this* certificate, the one every node agreed on, reaching the carrier
+      // boundary -- without anything re-announcing it, because the event that carried it
+      // was consumed by the first attempt.
+      //
+      // The condition is injected, because it cannot be produced on demand: a build that
+      // stops at the boundary after one slot has no natural pressure to turn on and off.
+      // The injection fails a fixed number of conversions and then stops, which is what
+      // makes it a transient condition rather than a permanent one, and the number is set
+      // above the count the first version of this code gave up at -- so an implementation
+      // that gives up cannot reach the boundary at all, and this gate is what says so.
+      if (injected_finalization_failures > 0) {
+        // The number the first version of this code gave up at. The injected failures are
+        // shared across every conversion this resolver runs, so how many of them land on
+        // this particular certificate is not fixed -- what has to hold is that it took more
+        // attempts than the old cap allowed, because that is the run in which the old code
+        // erased the entry and lost the certificate for good.
+        constexpr size_t attempts_the_old_code_gave_up_at = 4;
+        // Asked of every node rather than of the one this probe happens to use: the
+        // injected failures are shared across each resolver's own conversions, so which of
+        // them land on this certificate differs between nodes, and a property that holds
+        // only on the node we looked at is not the property.
+        for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
+          for (auto& instance : nodes_[node_idx].instances) {
+            if (instance.status != Instance::Running) {
+              continue;
+            }
+            auto at = co_await instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+            if (at.slot_attempts <= attempts_the_old_code_gave_up_at) {
+              fail(PSTRING() << "node " << node_idx << " reached the boundary for slot " << *common_slot << " in "
+                             << at.slot_attempts << " attempts, with " << injected_finalization_failures
+                             << " conversions injected to fail. Either the failures never reached this "
+                             << "certificate, or its record was dropped and begun again by something else -- "
+                             << "a peer re-announcing the certificate, or a restart. One record has to survive "
+                             << "all of them, which is what more than " << attempts_the_old_code_gave_up_at
+                             << " attempts on one entry means");
+              co_return td::Unit{};
+            }
+            if (!at.slot_is_blocked) {
+              fail(PSTRING() << "node " << node_idx << " did not reach the boundary for slot " << *common_slot
+                             << " after the injected failures stopped; the certificate was lost rather than retried");
+              co_return td::Unit{};
+            }
+          }
+        }
+        // That it latched exactly once is not re-asserted here, because it is already
+        // proven above and by a sharper instrument: the eight further finalizations left
+        // both the attempt count and the boundary count where they were. The count of
+        // blocked slots is deliberately not used for it -- it counts every slot this node
+        // latched, and injecting failures lets the round reach more of them before the
+        // group goes quiescent, so it says nothing about any one certificate.
+      }
+
       // Both doors are required to hold, and they are counted apart because either one alone
       // satisfies "something was retried": the one refused before the attempt began, and the
       // one that failed inside it -- here, waiting for candidate data that never comes.
@@ -1821,6 +1905,24 @@ class TestConsensus : public td::actor::Actor {
       }
     }  // !node_churn_active
 
+    // The boundary is announced once per node, not once per certificate that meets it. A
+    // node latches every certificate it agrees on against the same seam, so without that
+    // rule the count rises with the round; with it, a node that reached the boundary says
+    // so exactly once. A node the gate restarted announces again after coming back, which
+    // is a second process rather than a second announcement, so the count is read before
+    // restarts are allowed to have happened -- which is to say, only where none churn.
+    if (!node_churn_active) {
+      std::scoped_lock lock(boundary_announcement_mutex);
+      for (const auto& [instance, announcements] : boundary_announcements) {
+        const size_t allowed = instance == std::pair<size_t, size_t>{0, 0} ? 2 : 1;
+        if (announcements > allowed) {
+          fail(PSTRING() << "node " << instance.first << "." << instance.second << " announced the N4/N5 boundary "
+                         << announcements << " times; it is one announcement per node, whatever else meets the seam");
+          co_return td::Unit{};
+        }
+      }
+    }
+
     for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
       for (size_t instance_idx = 0; instance_idx < nodes_[node_idx].instances.size(); ++instance_idx) {
         auto& instance = nodes_[node_idx].instances[instance_idx];
@@ -1841,18 +1943,18 @@ class TestConsensus : public td::actor::Actor {
     // makes acceptance possible, and this is the line that should start being able to fail
     // then -- for the right reason.
     // Deliberately not asserted: that every slot reaching an agreed certificate is latched
-    // at the boundary. It is not true. Measured across a loaded hundred-node run, slot 0
-    // latched on every node, slot 1 on one, slot 4 on sixteen, and slots 2 and 3 on none --
-    // a finalization whose first attempt fails on a transient error is erased, and nothing
-    // re-triggers it, because the FinalizationObserved that would have is long consumed.
+    // at the boundary. The reason it was not true has since been fixed -- a finalization
+    // that fails for a reason that may not recur is now kept and retried for as long as the
+    // group lives, rather than erased with nothing left to ask for it -- so the shortfall
+    // that was measured here, where a loaded hundred-node run latched slot 0 everywhere and
+    // slots 2 and 3 nowhere, no longer has that cause.
     //
-    // That is not a leak: such a slot never reaches the conversion at all, which is why no
-    // marker is written and no block accepted, and why the structural guard finds no legacy
-    // carrier. It is a liveness observation, and it matters to N5 rather than to N4, where
-    // the chain does not advance anyway. It is written into the review document rather than
-    // encoded here, because an assertion that held in one run and not another is worse than
-    // no assertion. What the gate does require of the boundary is above: the slot every node
-    // agreed on, latched on every node.
+    // It stays unasserted because it is still not something this gate can promise. A slot
+    // that reaches an agreed certificate just as the group goes quiescent may simply not
+    // have been converted yet when the run ends, and an assertion that depends on when a
+    // run stops is worse than no assertion. What the gate requires of the boundary is above:
+    // the slot every node agreed on, latched on every node -- and, when failures are
+    // injected, latched after more attempts than the old code would have allowed.
     std::set<td::uint32> observed_slots;
     {
       auto log = read_finality_log();
