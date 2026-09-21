@@ -318,3 +318,97 @@ pub fn address(code: &Cell, state: &Cell) -> Result<[u8; 32]> {
     out.copy_from_slice(bytes);
     Ok(out)
 }
+
+// ---------------------------------------------------------------------------
+// The development deployment's parameters.
+//
+// These were the `genesis` binary's constants. They live here because a second
+// consumer appeared -- the on-chain fixture that deploys this state to a real
+// node -- and a deployment that chose its parameters separately would produce
+// a different state hash and a different address while still calling itself
+// the state the manifest freezes.
+
+/// Section 14.2's measured floor for a bounded recovery is 205,313,600 at the
+/// current fee schedule, so this clears it; production must choose with
+/// explicit headroom and its own measurement.
+pub const RESERVE_FLOOR: u128 = 5_000_000_000;
+
+/// Re-derived on 2026-09-21 when the basechain prices were aligned with TON
+/// mainnet's live values. Section 14.2's floor -- the payout's forward fee
+/// plus a whole bounded recovery at the bounce ceiling -- is 19,552,270,
+/// measured by `shielded_payout_sandbox`. This is that with a 2.56x margin,
+/// rounded to a hundredth of a TOS.
+pub const WITHDRAWAL_FEE: u128 = 50_000_000;
+
+/// Section 12.1's immutable list, sorted and positive.
+pub const DENOMINATIONS: [u128; 4] =
+    [1_000_000_000, 10_000_000_000, 100_000_000_000, 1_000_000_000_000];
+
+/// The parameters of the state the frozen manifest names, read out of the
+/// repository at `root`.
+///
+/// Reading the profile, the Poseidon2 manifest and the verifying key rather
+/// than taking their hashes on trust is what makes the manifest checkable.
+pub fn development_parameters(root: &std::path::Path) -> Result<Parameters> {
+    let read = |path: std::path::PathBuf| -> Result<Vec<u8>> {
+        std::fs::read(&path)
+            .map_err(|error| Error::Parameter(format!("{}: {error}", path.display())))
+    };
+
+    let profile_bytes = normalise(&read(root.join("doc/shielded-pool-v1-profile.md"))?);
+    let poseidon_manifest_bytes = read(root.join("crypto/poseidon2/manifest.bin"))?;
+
+    // The development verifying key. Section 19 gate 5 requires a production
+    // ceremony to replace it before activation, and the manifest says which
+    // one it used.
+    let fixture_path = root.join("tools/shielded-pool-circuit/fixtures/groth16-development.json");
+    let fixture = String::from_utf8(read(fixture_path.clone())?)
+        .map_err(|error| Error::Parameter(format!("{}: {error}", fixture_path.display())))?;
+
+    Ok(Parameters {
+        profile_bytes,
+        poseidon_manifest_bytes,
+        verifying_key: extract_verifying_key(&fixture)?,
+        reserve_floor: RESERVE_FLOOR,
+        withdrawal_fee: WITHDRAWAL_FEE,
+        denominations: DENOMINATIONS.to_vec(),
+    })
+}
+
+/// Section 13.1: line endings normalised to LF, nothing else touched.
+pub fn normalise(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            index += 1;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    out
+}
+
+/// The 1248-byte stream out of the fixture, without pulling in a JSON parser
+/// for one field.
+fn extract_verifying_key(fixture: &str) -> Result<Vec<u8>> {
+    let malformed = || Error::Parameter("malformed verifying-key fixture".to_string());
+    let at = fixture.find("\"hex\"").ok_or_else(malformed)?;
+    let rest = &fixture[at..];
+    let open = rest.find(':').ok_or_else(malformed)?;
+    let quoted = &rest[open..];
+    let first = quoted.find('"').ok_or_else(malformed)?;
+    let tail = &quoted[first + 1..];
+    let end = tail.find('"').ok_or_else(malformed)?;
+    let digits = &tail[..end];
+    if digits.len() % 2 != 0 {
+        return Err(Error::Parameter("a verifying key of an odd number of hex digits".to_string()));
+    }
+    (0..digits.len() / 2)
+        .map(|index| {
+            u8::from_str_radix(&digits[index * 2..index * 2 + 2], 16)
+                .map_err(|error| Error::Parameter(format!("verifying key hex: {error}")))
+        })
+        .collect()
+}
