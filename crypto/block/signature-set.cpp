@@ -14,6 +14,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include <cstring>
+
 #include "auto/tl/tos_api.h"
 #include "auto/tl/tos_api.hpp"
 #include "common/errorcode.h"
@@ -51,6 +53,44 @@ static td::Status check_vset(const BlockSignatureSet* sig_set, const td::Ref<Val
   return td::Status::OK();
 }
 
+static td::Status check_carrier_compatibility(const BlockSignatureSet* sig_set,
+                                              const td::Ref<ValidatorSet>& vset) {
+  bool has_pq = false;
+  bool has_classical = false;
+  for (const auto& validator : vset->export_vector()) {
+    has_pq |= validator.is_pq();
+    has_classical |= !validator.is_pq();
+  }
+  if (has_pq && has_classical) {
+    return td::Status::Error("mixed validator set has no admitted signature carrier");
+  }
+  if (has_pq && !sig_set->is_pq()) {
+    return td::Status::Error("unsupported carrier for post-quantum validator set");
+  }
+  if (!has_pq && sig_set->is_pq()) {
+    return td::Status::Error("post-quantum carrier for classical validator set");
+  }
+  return td::Status::OK();
+}
+
+td::Result<tos::ValidatorWeight> BlockSignatureSet::check_signatures(td::Ref<ValidatorSet> vset,
+                                                                    tos::BlockIdExt block_id) const {
+  TRY_STATUS(check_carrier_compatibility(this, vset));
+  if (!is_final()) {
+    return td::Status::Error(tos::ErrorCode::protoviolation, "not final signatures");
+  }
+  return check_signatures_impl(std::move(vset), block_id);
+}
+
+td::Result<tos::ValidatorWeight> BlockSignatureSet::check_approve_signatures(td::Ref<ValidatorSet> vset,
+                                                                            tos::BlockIdExt block_id) const {
+  TRY_STATUS(check_carrier_compatibility(this, vset));
+  if (is_final()) {
+    return td::Status::Error(tos::ErrorCode::protoviolation, "not approve signatures");
+  }
+  return check_signatures_impl(std::move(vset), block_id);
+}
+
 static tos::tl_object_ptr<tos::tos_api::consensus_CandidateParent> clone_tl(
     const tos::tl_object_ptr<tos::tos_api::consensus_CandidateParent>& f) {
   tos::tl_object_ptr<tos::tos_api::consensus_CandidateParent> result;
@@ -82,6 +122,36 @@ static tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData> clone_tl(
                     tos::create_tl_object<tos::tos_api::consensus_candidateId>(obj.parent_->slot_, obj.parent_->hash_));
               }));
   return result;
+}
+
+td::Result<td::BufferSlice> BlockSignatureSet::build_simplex_data_to_sign(
+    td::Bits256 session_id, td::uint32 slot,
+    const tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData>& candidate, bool final,
+    tos::BlockIdExt block_id) {
+  if (candidate == nullptr) {
+    return td::Status::Error("simplex candidate data is null");
+  }
+  tos::BlockIdExt expected_block_id;
+  tos::tos_api::downcast_call(
+      *candidate, td::overloaded(
+                      [&](const tos::tos_api::consensus_candidateHashDataOrdinary& obj) {
+                        expected_block_id = tos::create_block_id(obj.block_);
+                      },
+                      [&](const tos::tos_api::consensus_candidateHashDataEmpty& obj) {
+                        expected_block_id = tos::create_block_id(obj.block_);
+                      }));
+  if (block_id != expected_block_id) {
+    return td::Status::Error("block id mismatch");
+  }
+  auto candidate_id = tos::create_tl_object<tos::tos_api::consensus_candidateId>(
+      slot, td::Bits256{tos::get_tl_object_sha256(candidate).raw});
+  td::BufferSlice vote;
+  if (final) {
+    vote = tos::create_serialize_tl_object<tos::tos_api::consensus_simplex_finalizeVote>(std::move(candidate_id));
+  } else {
+    vote = tos::create_serialize_tl_object<tos::tos_api::consensus_simplex_notarizeVote>(std::move(candidate_id));
+  }
+  return tos::create_serialize_tl_object<tos::tos_api::consensus_dataToSign>(session_id, std::move(vote));
 }
 
 class BlockSignatureSetBase : public BlockSignatureSet {
@@ -285,26 +355,7 @@ class BlockSignatureSetSimplex : public BlockSignatureSetBase {
   }
 
   td::Result<td::BufferSlice> to_sign(tos::BlockIdExt block_id) const override {
-    tos::BlockIdExt expected_block_id;
-    tos::tos_api::downcast_call(*candidate_, td::overloaded(
-                                                 [&](const tos::tos_api::consensus_candidateHashDataOrdinary& obj) {
-                                                   expected_block_id = tos::create_block_id(obj.block_);
-                                                 },
-                                                 [&](const tos::tos_api::consensus_candidateHashDataEmpty& obj) {
-                                                   expected_block_id = tos::create_block_id(obj.block_);
-                                                 }));
-    if (block_id != expected_block_id) {
-      return td::Status::Error("block id mismatch");
-    }
-    auto candidate_id = tos::create_tl_object<tos::tos_api::consensus_candidateId>(
-        slot_, td::Bits256{tos::get_tl_object_sha256(candidate_).raw});
-    td::BufferSlice data;
-    if (final_) {
-      data = tos::create_serialize_tl_object<tos::tos_api::consensus_simplex_finalizeVote>(std::move(candidate_id));
-    } else {
-      data = tos::create_serialize_tl_object<tos::tos_api::consensus_simplex_notarizeVote>(std::move(candidate_id));
-    }
-    return tos::create_serialize_tl_object<tos::tos_api::consensus_dataToSign>(session_id_, std::move(data));
+    return build_simplex_data_to_sign(session_id_, slot_, candidate_, final_, block_id);
   }
 
   tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet> tl() const override {
@@ -564,6 +615,15 @@ class BlockSignatureSetSimplexPQ final : public BlockSignatureSet {
       if (validator->algorithm_id != static_cast<td::uint16>(signature.algorithm_id)) {
         return td::Status::Error("pq signatures: validator algorithm mismatch");
       }
+      const auto derived_key_id = tos::pq::derive_key_id(signature.algorithm_id, validator->pq_public_key);
+      if (!derived_key_id.has_value()) {
+        return td::Status::Error("pq signatures: malformed validator public key");
+      }
+      td::Bits256 derived_key_id_bits;
+      std::memcpy(derived_key_id_bits.data(), derived_key_id->data(), derived_key_id->size());
+      if (validator->key_id != tos::ConsensusKeyId{derived_key_id_bits}) {
+        return td::Status::Error("pq signatures: validator key_id mismatch");
+      }
       if (!tos::checked_add_validator_weight(weight, validator->weight)) {
         return td::Status::Error("pq signatures: weight overflow");
       }
@@ -611,8 +671,33 @@ class BlockSignatureSetSimplexPQ final : public BlockSignatureSet {
   }
 
  private:
-  td::Result<tos::ValidatorWeight> check_signatures_impl(td::Ref<ValidatorSet>, tos::BlockIdExt) const override {
-    return td::Status::Error(tos::ErrorCode::notready, "post-quantum signature verification is not installed");
+  td::Result<tos::ValidatorWeight> check_signatures_impl(td::Ref<ValidatorSet> vset,
+                                                         tos::BlockIdExt block_id) const override {
+    TRY_STATUS(check_vset(this, vset));
+    TRY_RESULT(message, build_simplex_data_to_sign(session_id_, slot_, candidate_, final_, block_id));
+    TRY_RESULT(weight, get_weight(vset));
+    for (const auto& signature : signatures_) {
+      const auto* validator = vset->get_validator(signature.validator_id);
+      if (validator == nullptr) {
+        return td::Status::Error("pq signatures: unknown validator_id");
+      }
+      const auto result = tos::pq::verify_mldsa44(
+          std::string_view(message.data(), message.size()), tos::pq::simplex_sign_context,
+          std::string_view(signature.signature.data(), signature.signature.size()), validator->pq_public_key);
+      if (result == tos::pq::VerifyResult::malformed_input) {
+        return td::Status::Error("pq signatures: malformed verification input");
+      }
+      if (result == tos::pq::VerifyResult::backend_error) {
+        return td::Status::Error("pq signatures: verification backend failure");
+      }
+      if (result != tos::pq::VerifyResult::valid) {
+        return td::Status::Error("pq signatures: invalid signature");
+      }
+    }
+    if (weight < tos::quorum_threshold(vset->get_total_weight())) {
+      return td::Status::Error("pq signatures: insufficient verified weight");
+    }
+    return weight;
   }
 
   std::vector<PQBlockSignature> signatures_;

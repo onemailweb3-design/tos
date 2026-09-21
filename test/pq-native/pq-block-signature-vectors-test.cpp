@@ -255,6 +255,26 @@ td::Ref<block::ValidatorSet> validator_set(const std::vector<td::Bits256>& valid
                                       std::move(validators)};
 }
 
+td::Ref<block::ValidatorSet> trusted_validator_set(const std::vector<td::Bits256>& validator_ids,
+                                                   const std::vector<td::uint16>& algorithms) {
+  std::vector<tos::ValidatorDescr> validators;
+  validators.reserve(validator_ids.size());
+  for (std::size_t i = 0; i < validator_ids.size(); ++i) {
+    const auto public_key = std::string(tos::pq::mldsa44_public_key_bytes, static_cast<char>(i + 1));
+    const auto derived = tos::pq::derive_key_id(static_cast<tos::pq::PQAlgorithmId>(algorithms[i]), public_key);
+    if (!derived.has_value()) {
+      fail("VECTOR_VALIDATOR_KEY_ID_DERIVATION_FAILED");
+    }
+    td::Bits256 key_id_bits;
+    std::memcpy(key_id_bits.data(), derived->data(), derived->size());
+    validators.emplace_back(tos::ValidatorId{validator_ids[i]}, algorithms[i], tos::ConsensusKeyId{key_id_bits},
+                            public_key, 1,
+                            hash_of("fixture-adnl-" + std::to_string(i)));
+  }
+  return td::Ref<block::ValidatorSet>{true, catchain_seqno, tos::ShardIdFull{tos::masterchainId},
+                                      std::move(validators)};
+}
+
 std::vector<td::Bits256> ids_of(const std::vector<block::PQBlockSignature>& signatures) {
   std::vector<td::Bits256> result;
   for (const auto& signature : signatures) {
@@ -299,7 +319,7 @@ VectorCase valid_case(const std::string& name, std::size_t count) {
                     session_id(),
                     slot,
                     candidate_hash(),
-                    true};
+                    false};
 }
 
 RawPair raw_pair(std::size_t signer, std::size_t signature_bytes = tos::pq::mldsa44_signature_bytes,
@@ -455,7 +475,7 @@ std::vector<VectorCase> make_cases() {
   auto weight_signatures = pq_pairs(1);
   auto weight_ids = ids_of(weight_signatures);
   auto weight_algorithms = algorithms_of(weight_signatures);
-  auto weight_vset = validator_set(weight_ids, weight_algorithms);
+  auto weight_vset = trusted_validator_set(weight_ids, weight_algorithms);
   auto weight_pair = raw_pair(0);
   cases.push_back(rejected_case(
       "claimed-weight-mismatch", "signature weight mismatch",
@@ -592,14 +612,19 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
       fail("VECTOR_BAD_BOC case=" + row[0] + " reason=" + root.error().message().str());
     }
     td::Result<td::Ref<block::BlockSignatureSet>> parsed;
-    if (item->parse_with_validator_set || item->accept) {
+    // The shared accept vectors are codec fixtures: their signatures and descriptor
+    // metadata are patterned bytes, not cryptographic authority. Only cases whose
+    // refusal itself needs a trusted set take the authoritative fetch path here.
+    if (item->parse_with_validator_set) {
       auto ids = parse_bits(row[9]);
       auto algorithms = parse_algorithms(row[10]);
       if (ids.empty() && !item->accept) {
         ids.push_back(hash_of("persisted-validator-0"));
         algorithms.push_back(algorithm_id);
       }
-      parsed = block::BlockSignatureSet::fetch(root.move_as_ok(), validator_set(ids, algorithms));
+      auto vset = row[0] == "claimed-weight-mismatch" ? trusted_validator_set(ids, algorithms)
+                                                        : validator_set(ids, algorithms);
+      parsed = block::BlockSignatureSet::fetch(root.move_as_ok(), std::move(vset));
     } else {
       tos::ValidatorWeight claimed_weight = 0;
       parsed = block::BlockSignatureSet::fetch(root.move_as_ok(), claimed_weight);
@@ -642,7 +667,15 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
         td::sha256_bits256(parsed_candidate.ok().as_slice()).to_hex() != row[13]) {
       fail("VECTOR_PARSED_CONTENT_MISMATCH case=" + row[0]);
     }
-    auto reserialized = signature_set->serialize(validator_set(ids, algorithms));
+    auto candidate_object = tos::fetch_tl_object<tos::tos_api::consensus_CandidateHashData>(
+        parsed_candidate.ok().as_slice(), true);
+    if (candidate_object.is_error()) {
+      fail("VECTOR_CANDIDATE_REPARSE_FAILED case=" + row[0] +
+           " actual=" + candidate_object.error().message().str());
+    }
+    auto reserialized = block::BlockSignatureSet::serialize_simplex_pq(
+        parsed_signatures.ok(), item->cc_seqno, item->validator_hash, item->sig_count, parsed_session.ok(),
+        parsed_slot.ok(), candidate_object.ok());
     if (reserialized.is_error()) {
       fail("VECTOR_RESERIALIZATION_FAILED case=" + row[0] + " actual=" + reserialized.error().message().str());
     }

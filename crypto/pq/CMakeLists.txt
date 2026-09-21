@@ -213,6 +213,24 @@ if(TARGET tos_crypto)
   target_compile_definitions(test-pq-block-signature-vectors PRIVATE
     VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-block-signature-vectors.txt")
   add_test(NAME pq-block-signature-vectors COMMAND test-pq-block-signature-vectors)
+  add_executable(test-pq-block-signature-conformance
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-block-signature-conformance-test.cpp")
+  set_target_properties(test-pq-block-signature-conformance PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-pq-block-signature-conformance PRIVATE tos_block tos_crypto tos_mldsa44
+    tos_pq_consensus_signer tos_pq_consensus tl_api tl_lite_api tl-utils)
+  target_include_directories(test-pq-block-signature-conformance PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
+  target_compile_definitions(test-pq-block-signature-conformance PRIVATE
+    MLD_CONFIG_FILE="consensus-signer-config.h")
+  add_test(NAME pq-block-signature-conformance COMMAND test-pq-block-signature-conformance)
+  add_executable(test-pq-block-signature-no-legacy
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-block-signature-no-legacy-test.cpp")
+  set_target_properties(test-pq-block-signature-no-legacy PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-pq-block-signature-no-legacy PRIVATE tos_block tos_crypto tos_mldsa44
+    tos_pq_consensus_signer tos_pq_consensus tl_api tl_lite_api tl-utils)
+  target_include_directories(test-pq-block-signature-no-legacy PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
+  target_compile_definitions(test-pq-block-signature-no-legacy PRIVATE
+    MLD_CONFIG_FILE="consensus-signer-config.h")
+  add_test(NAME pq-block-signature-no-legacy COMMAND test-pq-block-signature-no-legacy)
   # Configuration parameter 43 encodings both implementations must read identically.
   add_executable(config43-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors-gen.cpp")
   set_target_properties(config43-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

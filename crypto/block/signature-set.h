@@ -45,19 +45,19 @@ class BlockSignatureSet : public td::CntObject {
   }
   virtual bool is_final() const = 0;
 
-  td::Result<tos::ValidatorWeight> check_signatures(td::Ref<ValidatorSet> vset, tos::BlockIdExt block_id) const {
-    if (!is_final()) {
-      return td::Status::Error(tos::ErrorCode::protoviolation, "not final signatures");
-    }
-    return check_signatures_impl(std::move(vset), block_id);
-  }
+  td::Result<tos::ValidatorWeight> check_signatures(td::Ref<ValidatorSet> vset, tos::BlockIdExt block_id) const;
   td::Result<tos::ValidatorWeight> check_approve_signatures(td::Ref<ValidatorSet> vset,
-                                                            tos::BlockIdExt block_id) const {
-    if (is_final()) {
-      return td::Status::Error(tos::ErrorCode::protoviolation, "not approve signatures");
-    }
-    return check_signatures_impl(std::move(vset), block_id);
-  }
+                                                            tos::BlockIdExt block_id) const;
+
+  // The one Simplex vote-envelope builder shared by the historical and
+  // post-quantum verification paths. It deliberately binds the carried session,
+  // role, slot, candidate hash and candidate block id, but does not claim that the
+  // carried session is the trusted expected session (that belongs to the higher
+  // level verification context).
+  static td::Result<td::BufferSlice> build_simplex_data_to_sign(
+      td::Bits256 session_id, td::uint32 slot,
+      const tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData>& candidate, bool final,
+      tos::BlockIdExt block_id);
 
   virtual td::Result<td::Ref<vm::Cell>> serialize(td::Ref<ValidatorSet> vset) const = 0;
   virtual tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet> tl() const = 0;
