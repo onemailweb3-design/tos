@@ -101,8 +101,7 @@ static td::Result<BlockBroadcast> deserialize_block_broadcast(tos_api::tosNode_b
   VLOG(FULL_NODE_BENCHMARK) << "Broadcast_benchmark deserialize_block_broadcast block_id=" << block_id.to_str()
                             << " called_from=" << called_from
                             << " time_sec=" << (td::Time::now() - t_decompression_start) << " compression=" << "none"
-                            << " compressed_size="
-                            << result.data.size() + result.proof.size() + total_signatures_size;
+                            << " compressed_size=" << result.data.size() + result.proof.size() + total_signatures_size;
   return result;
 }
 
@@ -117,8 +116,8 @@ static td::Result<BlockBroadcast> deserialize_block_broadcast(tos_api::tosNode_b
   }
   TRY_RESULT(decompressed, td::lz4_decompress(f.compressed_, max_decompressed_size));
   TRY_RESULT(f2, fetch_tl_object<tos_api::tosNode_blockBroadcastCompressed_data>(decompressed, true));
-  TRY_RESULT(sig_set, block::BlockSignatureSet::fetch_legacy_checked(f2->signatures_, f.catchain_seqno_,
-                                                                     f.validator_set_hash_));
+  TRY_RESULT(sig_set,
+             block::BlockSignatureSet::fetch_legacy_checked(f2->signatures_, f.catchain_seqno_, f.validator_set_hash_));
   TRY_RESULT(total_signatures_size, sig_set->get_signature_data_size());
   TRY_RESULT(roots, vm::std_boc_deserialize_multi(f2->proof_data_, 2));
   if (roots.size() != 2) {
@@ -185,6 +184,17 @@ td::Result<bool> need_state_for_decompression(tos_api::tosNode_DataFull& data_fu
 td::Result<BlockBroadcast> get_block_broadcast_without_data(const tos_api::tosNode_blockBroadcastCompressedV2& f) {
   TRY_RESULT(sig_set, block::BlockSignatureSet::fetch_node_checked(f.signature_set_));
   return BlockBroadcast{create_block_id(f.id_), sig_set, td::BufferSlice(), f.proof_.clone()};
+}
+
+td::BufferSlice serialize_block_finality_broadcast(const BlockFinalityBroadcast& broadcast) {
+  return create_serialize_tl_object<tos_api::tosNode_blockFinalityBroadcast>(create_tl_block_id(broadcast.block_id),
+                                                                             broadcast.sig_set->tl());
+}
+
+td::Result<BlockFinalityBroadcast> deserialize_block_finality_broadcast(
+    tos_api::tosNode_blockFinalityBroadcast& broadcast) {
+  TRY_RESULT(signatures, block::BlockSignatureSet::fetch_node_checked(broadcast.signature_set_));
+  return BlockFinalityBroadcast{create_block_id(broadcast.id_), std::move(signatures)};
 }
 
 static td::Result<BlockBroadcast> deserialize_block_broadcast(tos_api::tosNode_blockBroadcastCompressedV2& f,

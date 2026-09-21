@@ -244,7 +244,12 @@ int main() {
       }
       expected_bytes = number(verdict.serialized_bytes.substr(separator + 1), "complete object serialized bytes");
     } else if (verdict.object == "complete-tosNode.blockBroadcastCompressedV2" && verdict.route == "v2-broadcast") {
-      has_bytes = false;
+      if (verdict.serialized_bytes.rfind("measured:", 0) == 0) {
+        expected_kind = "measured";
+        expected_bytes = number(verdict.serialized_bytes.substr(9), "complete V2 serialized bytes");
+      } else {
+        has_bytes = false;
+      }
     } else {
       fail("ROUTE_VERDICT_UNEXPECTED_SUBJECT: object=" + verdict.object + " route=" + verdict.route);
     }

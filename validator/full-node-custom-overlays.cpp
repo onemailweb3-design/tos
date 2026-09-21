@@ -100,17 +100,14 @@ void FullNodeCustomOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNod
                           << "\" from unauthorized sender " << src;
     return;
   }
-  auto block_id = create_block_id(query.id_);
-  auto R_signature_set = block::BlockSignatureSet::fetch_node_checked(query.signature_set_);
-  if (R_signature_set.is_error()) {
-    LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: "
-               << R_signature_set.move_as_error();
+  auto finality = deserialize_block_finality_broadcast(query);
+  if (finality.is_error()) {
+    LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: " << finality.move_as_error();
     return;
   }
-  BlockFinalityBroadcast finality{block_id, R_signature_set.move_as_ok()};
-  VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in custom overlay \"" << name_ << "\" from " << src
-                        << ": " << block_id.to_str();
-  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(finality),
+  VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in custom overlay \"" << name_ << "\" from " << src << ": "
+                        << finality.ok().block_id.to_str();
+  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, finality.move_as_ok(),
                           BroadcastSource::custom_overlay, !block_senders_.contains(local_id_));
 }
 
@@ -162,8 +159,7 @@ void FullNodeCustomOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNod
   VLOG(FULL_NODE_DEBUG) << "Got external message in custom overlay \"" << name_ << "\" from " << src
                         << " (priority=" << it->second << ")";
   td::actor::ask(validator_manager_, &ValidatorManagerInterface::new_external_message_broadcast,
-                 std::move(query.message_->data_), it->second,
-                 td::optional<PublicKeyHash>{src})
+                 std::move(query.message_->data_), it->second, td::optional<PublicKeyHash>{src})
       .detach();
 }
 
@@ -284,8 +280,7 @@ void FullNodeCustomOverlay::send_block_finality_broadcast(BlockFinalityBroadcast
   }
   VLOG(FULL_NODE_DEBUG) << "Sending blockFinalityBroadcast to custom overlay \"" << name_
                         << "\": " << finality.block_id.to_str();
-  auto B = create_serialize_tl_object<tos_api::tosNode_blockFinalityBroadcast>(
-      create_tl_block_id(finality.block_id), finality.sig_set->tl());
+  auto B = serialize_block_finality_broadcast(finality);
   td::actor::send_closure(overlays_, &overlay::Overlays::send_broadcast_fec_ex, local_id_, overlay_id_,
                           local_id_.pubkey_hash(), overlay::Overlays::BroadcastFlagAnySender(), std::move(B));
 }

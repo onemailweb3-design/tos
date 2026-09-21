@@ -169,8 +169,8 @@ void FullNodeShardImpl::check_broadcast(PublicKeyHash src, td::BufferSlice broad
 }
 
 void FullNodeShardImpl::process_external_message_broadcast(PublicKeyHash src,
-                                                            tos_api::tosNode_externalMessageBroadcast &message,
-                                                            td::Promise<td::Unit> promise) {
+                                                           tos_api::tosNode_externalMessageBroadcast &message,
+                                                           td::Promise<td::Unit> promise) {
   if (!active_) {
     return promise.set_error(td::Status::Error("cannot process broadcast: shard is not active"));
   }
@@ -184,8 +184,7 @@ void FullNodeShardImpl::process_external_message_broadcast(PublicKeyHash src,
     return;
   }
   td::actor::send_closure(validator_manager_, &ValidatorManagerInterface::new_external_message_broadcast,
-                          std::move(message.message_->data_), 0, td::optional<PublicKeyHash>{src},
-                          std::move(promise));
+                          std::move(message.message_->data_), 0, td::optional<PublicKeyHash>{src}, std::move(promise));
 }
 
 void FullNodeShardImpl::remove_neighbour(adnl::AdnlNodeIdShort id) {
@@ -230,10 +229,10 @@ td::actor::Task<> FullNodeShardImpl::get_next_blocks_loop() {
     auto &b = choose_neighbour();
     bool allow_many = b.version() >= std::make_pair<td::uint32, td::uint32>(3, 2);
     auto [task, promise] = td::actor::StartedTask<BlockHandle>::make_bridge();
-    td::actor::create_actor<DownloadNextBlocks>(
-        PSTRING() << "downloadnextblocks" << handle_->id().id, adnl_id_, overlay_id_, handle_, b.adnl_id,
-        download_next_priority(), allow_many, validator_manager_, rldp2_, overlays_, client_,
-        create_neighbour_promise<BlockHandle>(b, std::move(promise)))
+    td::actor::create_actor<DownloadNextBlocks>(PSTRING() << "downloadnextblocks" << handle_->id().id, adnl_id_,
+                                                overlay_id_, handle_, b.adnl_id, download_next_priority(), allow_many,
+                                                validator_manager_, rldp2_, overlays_, client_,
+                                                create_neighbour_promise<BlockHandle>(b, std::move(promise)))
         .release();
     auto R = co_await std::move(task).wrap();
     if (R.is_error()) {
@@ -350,8 +349,8 @@ void FullNodeShardImpl::process_query(adnl::AdnlNodeIdShort src, tos_api::tosNod
 void FullNodeShardImpl::process_query(adnl::AdnlNodeIdShort src, tos_api::tosNode_downloadNextBlocksFull &query,
                                       td::Promise<td::BufferSlice> promise) {
   BlockIdExt block_id = create_block_id(query.prev_block_);
-  VLOG(FULL_NODE_DEBUG) << "Got query downloadNextBlocksFull " << block_id.to_str() << ", max_blocks=" << query.max_blocks_
-                        << " from " << src;
+  VLOG(FULL_NODE_DEBUG) << "Got query downloadNextBlocksFull " << block_id.to_str()
+                        << ", max_blocks=" << query.max_blocks_ << " from " << src;
   td::actor::create_actor<NextBlocksFullSender>("sender.nexts", block_id, query.max_blocks_, validator_manager_,
                                                 std::move(promise))
       .release();
@@ -606,8 +605,8 @@ void FullNodeShardImpl::process_query(adnl::AdnlNodeIdShort src, tos_api::tosNod
   VLOG(FULL_NODE_DEBUG) << "Got query getCapabilities from " << src;
   promise.set_value(create_serialize_tl_object<tos_api::tosNode_capabilities>(
       proto_version_major(), proto_version_minor(),
-      static_cast<td::int32>(block::workchain_execution_capability_flags(
-          block::default_workchain_execution_registry()))));
+      static_cast<td::int32>(
+          block::workchain_execution_capability_flags(block::default_workchain_execution_registry()))));
 }
 
 void FullNodeShardImpl::process_query(adnl::AdnlNodeIdShort src, tos_api::tosNode_getArchiveInfo &query,
@@ -869,17 +868,14 @@ void FullNodeShardImpl::process_broadcast(PublicKeyHash src, tos_api::tosNode_bl
 }
 
 void FullNodeShardImpl::process_broadcast(PublicKeyHash src, tos_api::tosNode_blockFinalityBroadcast &query) {
-  auto block_id = create_block_id(query.id_);
-  auto R_signature_set = block::BlockSignatureSet::fetch_node_checked(query.signature_set_);
-  if (R_signature_set.is_error()) {
-    LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: "
-               << R_signature_set.move_as_error();
+  auto finality = deserialize_block_finality_broadcast(query);
+  if (finality.is_error()) {
+    LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: " << finality.move_as_error();
     return;
   }
-  BlockFinalityBroadcast finality{block_id, R_signature_set.move_as_ok()};
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in public overlay from " << src << ": "
-                        << block_id.to_str();
-  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(finality),
+                        << finality.ok().block_id.to_str();
+  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, finality.move_as_ok(),
                           BroadcastSource::public_overlay, false);
 }
 
@@ -1067,12 +1063,10 @@ void FullNodeShardImpl::send_block_finality_broadcast(BlockFinalityBroadcast fin
   if (!enable_plumtree_broadcast_) {
     return;
   }
-  VLOG(FULL_NODE_DEBUG) << "Sending Plumtree blockFinalityBroadcast in public overlay: "
-                        << finality.block_id.to_str();
+  VLOG(FULL_NODE_DEBUG) << "Sending Plumtree blockFinalityBroadcast in public overlay: " << finality.block_id.to_str();
   auto broadcast_id = get_tl_object_sha_bits256(
       create_tl_object<tos_api::tosNode_finalityBroadcastId>(create_tl_block_id(finality.block_id)));
-  auto payload = create_serialize_tl_object<tos_api::tosNode_blockFinalityBroadcast>(
-      create_tl_block_id(finality.block_id), finality.sig_set->tl());
+  auto payload = serialize_block_finality_broadcast(finality);
   auto source = choose_outbound_source(static_cast<td::uint32>(payload.size()), true);
   td::actor::send_closure(overlays_, &overlay::Overlays::send_broadcast_plumtree, adnl_id_, overlay_id_, source,
                           overlay::Overlays::BroadcastFlagAnySender(), broadcast_id, std::move(payload));
@@ -1627,10 +1621,10 @@ td::actor::ActorOwn<FullNodeShard> FullNodeShard::create(
     td::actor::ActorId<quic::QuicSender> quic, td::actor::ActorId<overlay::Overlays> overlays,
     td::actor::ActorId<ValidatorManagerInterface> validator_manager, td::actor::ActorId<adnl::AdnlExtClient> client,
     td::actor::ActorId<FullNode> full_node, bool active, bool enable_plumtree_broadcast) {
-  return td::actor::create_actor<FullNodeShardImpl>(
-      PSTRING() << "tosnode" << shard.to_str(), shard, local_id, adnl_id, zero_state_file_hash, opts,
-      std::move(limiter), keyring, adnl, rldp2, quic, overlays, validator_manager, client, full_node, active,
-      enable_plumtree_broadcast);
+  return td::actor::create_actor<FullNodeShardImpl>(PSTRING() << "tosnode" << shard.to_str(), shard, local_id, adnl_id,
+                                                    zero_state_file_hash, opts, std::move(limiter), keyring, adnl,
+                                                    rldp2, quic, overlays, validator_manager, client, full_node, active,
+                                                    enable_plumtree_broadcast);
 }
 
 }  // namespace fullnode

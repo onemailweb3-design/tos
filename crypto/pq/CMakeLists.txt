@@ -229,6 +229,16 @@ if(TARGET tos_crypto)
     MEASUREMENTS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measurements.tsv")
   add_test(NAME pq-node-finality-carrier-capacity COMMAND test-pq-carrier-capacity node)
   add_test(NAME pq-lite-forward-proof-carrier-capacity COMMAND test-pq-carrier-capacity lite)
+  add_executable(test-pq-broadcast-semantics
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-broadcast-semantics-test.cpp")
+  set_target_properties(test-pq-broadcast-semantics PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-pq-broadcast-semantics PRIVATE full-node tos_validator tos_block tos_crypto tos_mldsa44
+    tos_pq_consensus_signer tos_pq_consensus tl_api tl-utils overlay)
+  target_include_directories(test-pq-broadcast-semantics PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../.." "${CMAKE_CURRENT_SOURCE_DIR}/../../common")
+  target_compile_definitions(test-pq-broadcast-semantics PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h"
+    ROUTES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-routes.tsv")
+  add_test(NAME pq-broadcast-semantic-roundtrip COMMAND test-pq-broadcast-semantics)
   add_executable(test-pq-signature-tl-vectors
     "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/pq-signature-tl-vectors-test.cpp")
   set_target_properties(test-pq-signature-tl-vectors PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

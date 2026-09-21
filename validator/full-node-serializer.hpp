@@ -34,8 +34,11 @@ td::Result<BlockBroadcast> deserialize_block_broadcast(tos_api::tosNode_Broadcas
                                                        std::string called_from,
                                                        td::Ref<vm::Cell> state = td::Ref<vm::Cell>(),
                                                        BlockBroadcastParseStats* stats = nullptr);
-td::Result<BlockBroadcast> get_block_broadcast_without_data(
-    const tos_api::tosNode_blockBroadcastCompressedV2& obj);
+td::Result<BlockBroadcast> get_block_broadcast_without_data(const tos_api::tosNode_blockBroadcastCompressedV2& obj);
+
+td::BufferSlice serialize_block_finality_broadcast(const BlockFinalityBroadcast& broadcast);
+td::Result<BlockFinalityBroadcast> deserialize_block_finality_broadcast(
+    tos_api::tosNode_blockFinalityBroadcast& broadcast);
 
 td::Result<std::vector<BlockIdExt>> extract_prev_blocks_from_proof(td::Slice proof, const BlockIdExt& block_id);
 

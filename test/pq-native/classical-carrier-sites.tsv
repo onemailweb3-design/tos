@@ -62,10 +62,7 @@ toslib/toslib/ToslibClient.cpp	*	3	reachable	the generated PQ node variant exist
 validator-engine/json-rpc-server-blocks.cpp	*	4	reachable	the generated PQ lite variant exists, but JSON-RPC conversion remains owned by the parser/API wiring unit
 validator/db/rootdb.cpp	*	1	historical	persisted cell parser supports #13; #11/#12 remain for historical and explicitly classical databases
 validator/downloaders/wait-block-data.cpp	*	1	historical	generic persisted serializer carries #13 too; classical output is limited to explicitly classical sets
-validator/full-node-custom-overlays.cpp	*	1	reachable	custom overlay uses the checked dual-carrier parser; outbound PQ materialization remains at the carrier-missing seam
-validator/full-node-fast-sync-overlays.cpp	*	1	reachable	fast-sync overlay uses the checked dual-carrier parser; outbound PQ materialization remains at the carrier-missing seam
-validator/full-node-serializer.cpp	*	1	reachable	broadcast deserialization accepts both carriers through checked parsing before V2 decompression; serialization retains the carrier-missing seam
-validator/full-node-shard.cpp	*	1	reachable	public overlay uses the checked dual-carrier parser; outbound PQ materialization remains at the carrier-missing seam
+validator/full-node-serializer.cpp	*	2	reachable	central block and finality serializers use checked dual-carrier parsing; classical output is retained only for explicitly classical signature sets
 validator/impl/accept-block.cpp	carrier_io	1	historical	generic persistence serialization can emit #13; classical output remains for explicitly classical sets
 validator/impl/accept-block.cpp	verify	2	historical	PQ acceptance uses the trusted-session boundary; these low-level calls remain only for explicitly classical sets
 validator/impl/check-proof.cpp	*	6	historical	proof parsing and verification bind #13 to trusted context; #11/#12 remain for classical history

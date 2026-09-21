@@ -623,7 +623,9 @@ static td::actor::Task<> check_finality_signatures(BlockIdExt block_id, Ref<bloc
     if (val_set.is_null()) {
       return td::Status::Error("no validator set");
     }
-    if (sig_set->is_final()) {
+    if (sig_set->is_pq()) {
+      return td::Status::Error("post-quantum finality requires the verified block header context");
+    } else if (sig_set->is_final()) {
       TRY_STATUS(sig_set->check_signatures(val_set, block_id));
     } else {
       TRY_STATUS(sig_set->check_approve_signatures(val_set, block_id));
@@ -667,17 +669,24 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
     co_return td::Unit{};
   }
 
-  auto status = co_await check_finality_signatures(finality.block_id, finality.sig_set, last_masterchain_state_).wrap();
-  if (status.is_error()) {
-    VLOG(VALIDATOR_WARNING) << "dropping block finality broadcast: " << status.move_as_error();
-    co_return td::Unit{};
-  }
+  // A finality-only broadcast does not carry the verified header coordinates needed to
+  // derive the trusted PQ session.  Keep bounded, structurally checked PQ evidence pending
+  // until the block arrives; ValidateBroadcast then derives the context from its proof and
+  // performs the authoritative check.  Classical evidence can still be checked immediately.
+  if (!finality.sig_set->is_pq()) {
+    auto status =
+        co_await check_finality_signatures(finality.block_id, finality.sig_set, last_masterchain_state_).wrap();
+    if (status.is_error()) {
+      VLOG(VALIDATOR_WARNING) << "dropping block finality broadcast: " << status.move_as_error();
+      co_return td::Unit{};
+    }
 
-  if (!finality.block_id.is_masterchain() && finality.sig_set->is_final() && has_local_validator_keys()) {
-    generate_shard_block_description(finality.block_id, finality.sig_set).start().detach();
-  }
-  if (!finality.block_id.is_masterchain() && finality.sig_set->is_final()) {
-    process_accepted_nonfinal_block(finality.block_id, finality.sig_set->get_catchain_seqno()).start().detach();
+    if (!finality.block_id.is_masterchain() && finality.sig_set->is_final() && has_local_validator_keys()) {
+      generate_shard_block_description(finality.block_id, finality.sig_set).start().detach();
+    }
+    if (!finality.block_id.is_masterchain() && finality.sig_set->is_final()) {
+      process_accepted_nonfinal_block(finality.block_id, finality.sig_set->get_catchain_seqno()).start().detach();
+    }
   }
   pending_block_finality_.put(finality.block_id, PendingBlockFinality{std::move(finality.sig_set), source});
   try_process_pending_block_finality(finality.block_id);
@@ -901,16 +910,20 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
   }
   pending_block_finality_.erase(block_id);
   BlockBroadcast broadcast{block_id, std::move(sig_set), std::move(data), proof.move_as_ok()};
-  new_block_broadcast(std::move(broadcast), true, finality_source, [block_id](td::Result<td::Unit> R) mutable {
-    if (R.is_error()) {
-      auto error = R.move_as_error();
-      if (error.code() == ErrorCode::notready || error.code() == ErrorCode::timeout) {
-        VLOG(VALIDATOR_DEBUG) << "dropped pending block finality broadcast for " << block_id.to_str() << ": " << error;
-      } else {
-        VLOG(VALIDATOR_INFO) << "dropped pending block finality broadcast for " << block_id.to_str() << ": " << error;
-      }
-    }
-  });
+  const bool signatures_checked = !broadcast.sig_set->is_pq();
+  new_block_broadcast(std::move(broadcast), signatures_checked, finality_source,
+                      [block_id](td::Result<td::Unit> R) mutable {
+                        if (R.is_error()) {
+                          auto error = R.move_as_error();
+                          if (error.code() == ErrorCode::notready || error.code() == ErrorCode::timeout) {
+                            VLOG(VALIDATOR_DEBUG) << "dropped pending block finality broadcast for "
+                                                  << block_id.to_str() << ": " << error;
+                          } else {
+                            VLOG(VALIDATOR_INFO) << "dropped pending block finality broadcast for " << block_id.to_str()
+                                                 << ": " << error;
+                          }
+                        }
+                      });
 }
 
 void ValidatorManagerImpl::add_ext_server_id(adnl::AdnlNodeIdShort id) {
@@ -2386,12 +2399,11 @@ void ValidatorManagerImpl::got_destroyed_validator_sessions(std::vector<Validato
   // Load the cleanup queue before sweeping. The queue holds only observer
   // directory names; the sweep deletes exactly those. Validator directories are
   // never swept here (their cleanup is checkpoint-bound in the manager).
-  td::actor::send_closure(db_, &Db::get_pending_consensus_db_cleanup,
-                          [SelfId = actor_id(this)](td::Result<std::vector<std::string>> R) {
-                            R.ensure();
-                            td::actor::send_closure(SelfId, &ValidatorManagerImpl::got_pending_consensus_db_cleanup,
-                                                    R.move_as_ok());
-                          });
+  td::actor::send_closure(
+      db_, &Db::get_pending_consensus_db_cleanup, [SelfId = actor_id(this)](td::Result<std::vector<std::string>> R) {
+        R.ensure();
+        td::actor::send_closure(SelfId, &ValidatorManagerImpl::got_pending_consensus_db_cleanup, R.move_as_ok());
+      });
 }
 
 void ValidatorManagerImpl::got_pending_consensus_db_cleanup(std::vector<std::string> dirs) {
@@ -2451,8 +2463,8 @@ void ValidatorManagerImpl::sweep_destroyed_consensus_dbs() {
   // ignores unlink/rmdir errors, so its own status is not proof of removal --
   // only a "not found" proves the directory is gone).
   auto before = pending_consensus_db_cleanup_;
-  auto stats = consensus::sweep_orphaned_consensus_dbs(
-      db_root_, pending_consensus_db_cleanup_, [](td::CSlice full) -> bool {
+  auto stats =
+      consensus::sweep_orphaned_consensus_dbs(db_root_, pending_consensus_db_cleanup_, [](td::CSlice full) -> bool {
         td::RocksDb::destroy(full.str() + "/db/").ignore();
         td::rmrf(full).ignore();
         auto probe = td::stat(full);
@@ -2472,10 +2484,10 @@ void ValidatorManagerImpl::sweep_destroyed_consensus_dbs() {
                  << "; not reconciling the cleanup queue this pass";
   }
   if (pending_consensus_db_cleanup_ != before) {
-    td::actor::send_closure(db_, &Db::update_pending_consensus_db_cleanup,
-                            std::vector<std::string>(pending_consensus_db_cleanup_.begin(),
-                                                     pending_consensus_db_cleanup_.end()),
-                            [](td::Result<td::Unit> R) { R.ensure(); });
+    td::actor::send_closure(
+        db_, &Db::update_pending_consensus_db_cleanup,
+        std::vector<std::string>(pending_consensus_db_cleanup_.begin(), pending_consensus_db_cleanup_.end()),
+        [](td::Result<td::Unit> R) { R.ensure(); });
   }
   if (stats.reclaimed > 0) {
     LOG(WARNING) << "reclaimed " << stats.reclaimed << " consensus database(s) left behind by a retired group";
@@ -2489,10 +2501,10 @@ void ValidatorManagerImpl::consensus_db_cleanup_done(std::string dir_name) {
   // A retired group confirmed its own directory is gone; drop it from the queue
   // during normal uptime so the queue does not grow until the next restart.
   if (pending_consensus_db_cleanup_.erase(dir_name) > 0) {
-    td::actor::send_closure(db_, &Db::update_pending_consensus_db_cleanup,
-                            std::vector<std::string>(pending_consensus_db_cleanup_.begin(),
-                                                     pending_consensus_db_cleanup_.end()),
-                            [](td::Result<td::Unit> R) { R.ensure(); });
+    td::actor::send_closure(
+        db_, &Db::update_pending_consensus_db_cleanup,
+        std::vector<std::string>(pending_consensus_db_cleanup_.begin(), pending_consensus_db_cleanup_.end()),
+        [](td::Result<td::Unit> R) { R.ensure(); });
   }
 }
 
@@ -2582,9 +2594,8 @@ void ValidatorManagerImpl::validator_cleanup_delete_done(ValidatorSessionId sess
   // reproduces the crash a validator could take at this instant, so a restart can be shown
   // to reconcile that mid-flight state. This is the real dispatch path, not a fixture.
   if (confirmed_gone && opts_->get_test_crash_cleanup_before_erase()) {
-    LOG(WARNING) << "VALCLEANUP test_crash_before_erase session=" << session_id.to_hex()
-                 << " generation=" << generation << " attempt=" << attempt_id
-                 << " (fault injection: exiting before durable erase)";
+    LOG(WARNING) << "VALCLEANUP test_crash_before_erase session=" << session_id.to_hex() << " generation=" << generation
+                 << " attempt=" << attempt_id << " (fault injection: exiting before durable erase)";
     // Abrupt exit: skip destructors and the pending durable erase, like a real crash.
     std::_Exit(137);
   }
@@ -2977,8 +2988,7 @@ void ValidatorManagerImpl::update_shards() {
     // eligibility check already refuses to delete a live/recreatable session -- and
     // it cannot fire while the cleanup gate is off (nothing is ever in flight then).
     if (validator_cleanup_manager_.is_delete_in_flight(id)) {
-      LOG(WARNING) << "deferring validator group creation for " << id
-                   << ": a consensus-DB cleanup delete is in flight";
+      LOG(WARNING) << "deferring validator group creation for " << id << ": a consensus-DB cleanup delete is in flight";
       return next_validator_groups_.end();
     }
 
@@ -3035,11 +3045,11 @@ void ValidatorManagerImpl::update_shards() {
           continue;
         }
         ++(shard.is_masterchain() ? active_validator_groups_master_ : active_validator_groups_shard_);
-        auto val_group_id = block::derive_validator_session_identity(
-                                global_id, opts_hash, selected_config.value().cell_hash, shard,
-                                val_set->get_catchain_seqno(), val_set->export_vector(),
-                                opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
-                                .session_id;
+        auto val_group_id =
+            block::derive_validator_session_identity(
+                global_id, opts_hash, selected_config.value().cell_hash, shard, val_set->get_catchain_seqno(),
+                val_set->export_vector(), opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
+                .session_id;
         if (destroyed_validator_sessions_.contains(val_group_id)) {
           continue;
         }
@@ -3111,11 +3121,11 @@ void ValidatorManagerImpl::update_shards() {
                    << ": consensus config is missing or its protocol version is not supported by this build";
         continue;
       }
-      auto val_group_id = block::derive_validator_session_identity(
-                              global_id, opts_hash, selected_config.value().cell_hash, shard,
-                              val_set->get_catchain_seqno(), val_set->export_vector(),
-                              opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
-                              .session_id;
+      auto val_group_id =
+          block::derive_validator_session_identity(
+              global_id, opts_hash, selected_config.value().cell_hash, shard, val_set->get_catchain_seqno(),
+              val_set->export_vector(), opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
+              .session_id;
       if (destroyed_validator_sessions_.contains(val_group_id)) {
         continue;
       }
@@ -3154,11 +3164,11 @@ void ValidatorManagerImpl::update_shards() {
         LOG(ERROR) << "refusing to create observer groups for " << shard.to_str() << ": " << usable.move_as_error();
         continue;
       }
-      auto session_id = block::derive_validator_session_identity(
-                            global_id, opts_hash, selected_config.value().cell_hash, shard,
-                            val_set->get_catchain_seqno(), val_set->export_vector(),
-                            opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
-                            .session_id;
+      auto session_id =
+          block::derive_validator_session_identity(
+              global_id, opts_hash, selected_config.value().cell_hash, shard, val_set->get_catchain_seqno(),
+              val_set->export_vector(), opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
+              .session_id;
       for (auto local_adnl_id : get_observer_adnl_ids(val_set)) {
         ObserverGroupId observer_id{session_id, local_adnl_id};
         ValidatorGroupEntry entry;
@@ -3284,13 +3294,13 @@ void ValidatorManagerImpl::update_shards() {
     }
   };
   if (observer_queue_changed) {
-    td::actor::send_closure(db_, &Db::update_pending_consensus_db_cleanup,
-                            std::vector<std::string>(pending_consensus_db_cleanup_.begin(),
-                                                     pending_consensus_db_cleanup_.end()),
-                            [destroy_observers = std::move(destroy_observers)](td::Result<td::Unit> R) mutable {
-                              R.ensure();
-                              destroy_observers();
-                            });
+    td::actor::send_closure(
+        db_, &Db::update_pending_consensus_db_cleanup,
+        std::vector<std::string>(pending_consensus_db_cleanup_.begin(), pending_consensus_db_cleanup_.end()),
+        [destroy_observers = std::move(destroy_observers)](td::Result<td::Unit> R) mutable {
+          R.ensure();
+          destroy_observers();
+        });
   } else {
     destroy_observers();
   }

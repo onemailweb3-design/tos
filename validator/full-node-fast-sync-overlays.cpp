@@ -94,19 +94,16 @@ void FullNodeFastSyncOverlay::process_block_broadcast(PublicKeyHash src, tos_api
                           BroadcastSource::fast_sync_overlay, true);
 }
 
-void FullNodeFastSyncOverlay::process_block_finality_broadcast(
-    PublicKeyHash src, tos_api::tosNode_blockFinalityBroadcast &query) {
-  auto block_id = create_block_id(query.id_);
-  auto R_signature_set = block::BlockSignatureSet::fetch_node_checked(query.signature_set_);
-  if (R_signature_set.is_error()) {
-    LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: "
-               << R_signature_set.move_as_error();
+void FullNodeFastSyncOverlay::process_block_finality_broadcast(PublicKeyHash src,
+                                                               tos_api::tosNode_blockFinalityBroadcast &query) {
+  auto finality = deserialize_block_finality_broadcast(query);
+  if (finality.is_error()) {
+    LOG(DEBUG) << "Dropped blockFinalityBroadcast because of malformed signatures: " << finality.move_as_error();
     return;
   }
-  BlockFinalityBroadcast finality{block_id, R_signature_set.move_as_ok()};
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in fast sync overlay from " << src << ": "
-                        << block_id.to_str();
-  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(finality),
+                        << finality.ok().block_id.to_str();
+  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, finality.move_as_ok(),
                           BroadcastSource::fast_sync_overlay, true);
 }
 
@@ -333,8 +330,7 @@ void FullNodeFastSyncOverlay::send_block_finality_broadcast(BlockFinalityBroadca
                         << finality.block_id.to_str();
   auto broadcast_id = get_tl_object_sha_bits256(
       create_tl_object<tos_api::tosNode_finalityBroadcastId>(create_tl_block_id(finality.block_id)));
-  auto B = create_serialize_tl_object<tos_api::tosNode_blockFinalityBroadcast>(
-      create_tl_block_id(finality.block_id), finality.sig_set->tl());
+  auto B = serialize_block_finality_broadcast(finality);
   td::actor::send_closure(overlays_, &overlay::Overlays::send_broadcast_plumtree, local_id_, overlay_id_,
                           local_id_.pubkey_hash(), overlay::Overlays::BroadcastFlagAnySender(), broadcast_id,
                           std::move(B));
@@ -357,8 +353,7 @@ void FullNodeFastSyncOverlay::send_block_candidate(BlockIdExt block_id, Catchain
     td::actor::send_closure(overlays_, &overlay::Overlays::send_broadcast_plumtree_fec, local_id_, overlay_id_,
                             local_id_.pubkey_hash(), overlay::Overlays::BroadcastFlagAnySender(), B.move_as_ok());
   } else {
-    VLOG(FULL_NODE_DEBUG) << "Sending newBlockCandidate in fast sync overlay (with compression): "
-                          << block_id.to_str();
+    VLOG(FULL_NODE_DEBUG) << "Sending newBlockCandidate in fast sync overlay (with compression): " << block_id.to_str();
     td::actor::send_closure(overlays_, &overlay::Overlays::send_broadcast_fec_ex, local_id_, overlay_id_,
                             local_id_.pubkey_hash(), overlay::Overlays::BroadcastFlagAnySender(), B.move_as_ok());
   }
@@ -382,8 +377,8 @@ void FullNodeFastSyncOverlay::collect_validator_telemetry(std::string filename) 
   collect_telemetry_ = true;
   telemetry_filename_ = std::move(filename);
   telemetry_rotate_failed_ = false;
-  LOG(FULL_NODE_WARNING) << "Collecting validator telemetry to " << telemetry_filename_
-                         << " (local id: " << local_id_ << ")";
+  LOG(FULL_NODE_WARNING) << "Collecting validator telemetry to " << telemetry_filename_ << " (local id: " << local_id_
+                         << ")";
 }
 
 void FullNodeFastSyncOverlay::send_out_msg_queue_proof_broadcast(td::Ref<OutMsgQueueProofBroadcast> broadcast) {
@@ -720,10 +715,9 @@ void FullNodeFastSyncOverlays::update_overlays(
       // Enable twostep broadcasts by ConfigParam 30
       auto new_consensus_config = state->get_new_consensus_config(shard.workchain);
       bool send_twostep_broadcasts = (bool)new_consensus_config;
-      bool enable_plumtree_broadcast =
-          new_consensus_config && new_consensus_config.value().enable_plumtree_broadcast();
-      bool receive_broadcasts =
-          enable_plumtree_broadcast ? !overlays_info.is_validator_ && monitoring_shards.contains(shard)
+      bool enable_plumtree_broadcast = new_consensus_config && new_consensus_config.value().enable_plumtree_broadcast();
+      bool receive_broadcasts = enable_plumtree_broadcast
+                                    ? !overlays_info.is_validator_ && monitoring_shards.contains(shard)
                                     : monitoring_shards.contains(shard);
       auto &overlay = overlays_info.overlays_[shard];
       if (overlay.empty()) {
