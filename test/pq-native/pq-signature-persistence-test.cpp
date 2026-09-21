@@ -1,4 +1,5 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
+#include <algorithm>
 #include <array>
 #include <mutex>
 #include <optional>
@@ -120,6 +121,178 @@ class RootDbRoundTrip {
   std::string root_;
   td::actor::Scheduler scheduler_;
   td::actor::ActorOwn<Db> db_;
+};
+
+class FocusedMasterchainState final : public MasterchainState {
+ public:
+  FocusedMasterchainState(BlockIdExt id, td::int32 global_id, BlockSeqno vertical_seqno,
+                          BlockIdExt last_key_block_id, td::Ref<block::ValidatorSet> validator_set,
+                          td::Ref<block::McShardHashI> shard_top, ValidatorSessionConfig session_config,
+                          SelectedNewConsensusConfig selected_config, std::vector<BlockIdExt> ancestors)
+      : id_(std::move(id))
+      , global_id_(global_id)
+      , vertical_seqno_(vertical_seqno)
+      , last_key_block_id_(std::move(last_key_block_id))
+      , validator_set_(std::move(validator_set))
+      , shard_top_(std::move(shard_top))
+      , session_config_(session_config)
+      , selected_config_(std::move(selected_config))
+      , ancestors_(std::move(ancestors)) {
+  }
+
+  bool disable_boc() const override {
+    return false;
+  }
+  UnixTime get_unix_time() const override {
+    return 0;
+  }
+  LogicalTime get_logical_time() const override {
+    return 0;
+  }
+  td::int32 get_global_id() const override {
+    return global_id_;
+  }
+  ShardIdFull get_shard() const override {
+    return id_.shard_full();
+  }
+  BlockSeqno get_seqno() const override {
+    return id_.seqno();
+  }
+  BlockIdExt get_block_id() const override {
+    return id_;
+  }
+  RootHash root_hash() const override {
+    return id_.root_hash;
+  }
+  td::Ref<vm::Cell> root_cell() const override {
+    return {};
+  }
+  td::optional<BlockIdExt> get_master_ref() const override {
+    return {};
+  }
+  td::Status validate_deep() const override {
+    return td::Status::OK();
+  }
+  bool before_split() const override {
+    return false;
+  }
+  td::Result<td::Ref<MessageQueue>> message_queue() const override {
+    return td::Status::Error("focused masterchain state has no message queue");
+  }
+  td::Status apply_block(BlockIdExt, td::Ref<BlockData>, vm::StoreCellHint*) override {
+    return td::Status::Error("focused masterchain state is immutable");
+  }
+  td::Result<td::Ref<ShardState>> merge_with(const ShardState&) const override {
+    return td::Status::Error("focused masterchain state cannot merge");
+  }
+  td::Result<std::pair<td::Ref<ShardState>, td::Ref<ShardState>>> split() const override {
+    return td::Status::Error("focused masterchain state cannot split");
+  }
+  td::Result<td::BufferSlice> serialize() const override {
+    return td::Status::Error("focused masterchain state is not serializable");
+  }
+  td::Status serialize_to_file(td::FileFd&) const override {
+    return td::Status::Error("focused masterchain state is not serializable");
+  }
+
+  td::Ref<block::ValidatorSet> get_validator_set(ShardIdFull) const override {
+    return validator_set_;
+  }
+  td::Ref<block::ValidatorSet> get_next_validator_set(ShardIdFull) const override {
+    return {};
+  }
+  td::Ref<block::ValidatorSet> get_total_validator_set(int) const override {
+    return validator_set_;
+  }
+  bool rotated_all_shards() const override {
+    return false;
+  }
+  std::vector<td::Ref<McShardHash>> get_shards() const override {
+    return {};
+  }
+  td::Ref<McShardHash> get_shard_from_config(ShardIdFull, bool) const override {
+    return shard_top_;
+  }
+  CatchainSeqno get_shard_cc_seqno(ShardIdFull) const override {
+    return validator_set_->get_catchain_seqno();
+  }
+  bool workchain_is_active(WorkchainId) const override {
+    return true;
+  }
+  td::uint32 persistent_state_split_depth(WorkchainId) const override {
+    return 0;
+  }
+  td::uint32 monitor_min_split_depth(WorkchainId) const override {
+    return 0;
+  }
+  td::uint32 min_split_depth(WorkchainId) const override {
+    return 0;
+  }
+  BlockSeqno min_ref_masterchain_seqno() const override {
+    return 0;
+  }
+  bool ancestor_is_valid(BlockIdExt id) const override {
+    return check_old_mc_block_id(id, false);
+  }
+  ValidatorSessionConfig get_consensus_config() const override {
+    return session_config_;
+  }
+  td::optional<SelectedNewConsensusConfig> get_selected_new_consensus_config(WorkchainId) const override {
+    return selected_config_;
+  }
+  td::optional<NewConsensusConfig> get_new_consensus_config(WorkchainId) const override {
+    return selected_config_.config;
+  }
+  BlockSeqno get_vertical_seqno() const override {
+    return vertical_seqno_;
+  }
+  BlockIdExt last_key_block_id() const override {
+    return last_key_block_id_;
+  }
+  BlockIdExt next_key_block_id(BlockSeqno) const override {
+    return {};
+  }
+  BlockIdExt prev_key_block_id(BlockSeqno) const override {
+    return last_key_block_id_;
+  }
+  bool is_key_state() const override {
+    return false;
+  }
+  bool get_old_mc_block_id(BlockSeqno seqno, BlockIdExt& block_id, LogicalTime*) const override {
+    for (const auto& candidate : ancestors_) {
+      if (candidate.seqno() == seqno) {
+        block_id = candidate;
+        return true;
+      }
+    }
+    return false;
+  }
+  bool check_old_mc_block_id(const BlockIdExt& block_id, bool) const override {
+    return std::find(ancestors_.begin(), ancestors_.end(), block_id) != ancestors_.end();
+  }
+  td::Result<td::Ref<ConfigHolder>> get_config_holder() const override {
+    return td::Status::Error("focused masterchain state has no ConfigHolder wrapper");
+  }
+  block::WorkchainSet get_workchain_list() const override {
+    return {};
+  }
+  block::SizeLimitsConfig::ExtMsgLimits get_ext_msg_limits() const override {
+    return {};
+  }
+  block::ImportedMsgQueueLimits get_imported_msg_queue_limits(bool) const override {
+    return {};
+  }
+
+ private:
+  BlockIdExt id_;
+  td::int32 global_id_;
+  BlockSeqno vertical_seqno_;
+  BlockIdExt last_key_block_id_;
+  td::Ref<block::ValidatorSet> validator_set_;
+  td::Ref<block::McShardHashI> shard_top_;
+  ValidatorSessionConfig session_config_;
+  SelectedNewConsensusConfig selected_config_;
+  std::vector<BlockIdExt> ancestors_;
 };
 
 struct LargeFixture {
@@ -325,6 +498,7 @@ td::Ref<vm::Cell> ext_block_ref(const BlockIdExt& id) {
 
 struct ShardProofFixture {
   BlockIdExt block_id;
+  BlockIdExt previous_block_id;
   BlockIdExt governing_mc_block_id;
   td::Ref<vm::Cell> proof;
 };
@@ -393,7 +567,7 @@ ShardProofFixture shard_proof_fixture(td::uint32 validator_set_hash, CatchainSeq
   BlockIdExt block_id{0, shardIdAll, 42, td::Bits256{root->get_hash().bits()}, file_hash};
   auto proof = require_ok(vm::MerkleProof::generate(root, [](const td::Ref<vm::Cell>&) { return false; }),
                           "top-descr-merkle-proof");
-  return {block_id, governing, std::move(proof)};
+  return {block_id, previous, governing, std::move(proof)};
 }
 
 td::Ref<vm::Cell> top_block_descr_cell(const BlockIdExt& block_id, td::Ref<vm::Cell> signatures,
@@ -507,17 +681,31 @@ void run_proof_consumers() {
   }
   const BlockIdExt current_after_key_block{masterchainId, shardIdAll, 18, hash_of("top-descr-current-b-root"),
                                            hash_of("top-descr-current-b-file")};
-  auto exact_snapshot =
-      validate_top_block_descr_governing_snapshot(shard_proof.governing_mc_block_id, shard_proof.governing_mc_block_id);
-  if (exact_snapshot.is_error()) {
-    fail("PQ_TOP_BLOCK_DESCR_GOVERNING_SNAPSHOT_POSITIVE_FAILED: " + exact_snapshot.to_string());
-  }
-  auto current_snapshot =
-      validate_top_block_descr_governing_snapshot(shard_proof.governing_mc_block_id, current_after_key_block);
-  if (current_snapshot.is_ok() ||
-      current_snapshot.message().str().find("top block description governing state mismatch") == std::string::npos) {
-    fail("PQ_TOP_BLOCK_DESCR_CURRENT_STATE_ACCEPTED_AS_GOVERNING");
-  }
+  auto shard_top = td::Ref<block::McShardHash>{true, shard_proof.previous_block_id, 41000, 41001};
+  SelectedNewConsensusConfig selected_a{.config = {}, .cell_hash = hash_of("top-descr-param30-a")};
+  SelectedNewConsensusConfig selected_b{.config = {}, .cell_hash = hash_of("top-descr-param30-b")};
+  auto governing_state = td::Ref<FocusedMasterchainState>{
+      true, shard_proof.governing_mc_block_id, -111, 0, shard_proof.governing_mc_block_id, shard_validator_set,
+      shard_top, session_options, selected_a, std::vector<BlockIdExt>{}};
+  auto current_state = td::Ref<FocusedMasterchainState>{
+      true, current_after_key_block, -111, 0, current_after_key_block, shard_validator_set, shard_top, session_options,
+      selected_b, std::vector<BlockIdExt>{shard_proof.governing_mc_block_id}};
+
+  int res_flags = 0;
+  require_ok(production_top->prevalidate(shard_proof.governing_mc_block_id, governing_state, governing_state,
+                                         ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
+                                         res_flags),
+             "top-descr-validate-at-governing-state");
+  res_flags = 0;
+  require_ok(production_top->prevalidate(current_after_key_block, current_state, governing_state,
+                                         ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
+                                         res_flags),
+             "top-descr-validate-after-key-block-with-governing-state");
+  res_flags = 0;
+  expect_error(production_top->prevalidate(current_after_key_block, current_state, current_state,
+                                           ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
+                                           res_flags),
+               "top block description governing state mismatch", "top_descr_current_state_is_not_governing");
   auto top_envelope = require_ok(parse_top_block_descr_signature_envelope(top_loaded), "top-descr-envelope");
   if (top_envelope.block_id != shard_proof.block_id || top_envelope.signatures.is_null() ||
       top_envelope.signatures->get_catchain_seqno() != Fixture::catchain_seqno ||
@@ -535,7 +723,14 @@ void run_proof_consumers() {
                      clone_pairs(shard_pairs_b), Fixture::catchain_seqno, shard_validator_set->get_validator_set_hash(),
                      session_b, Fixture::slot, candidate(shard_proof.block_id)),
                  "top-descr-signatures-b");
-  expect_error(verify_pq_proof_signatures(governing_context, *shard_signatures_b, fixture.weight_of(quorum)),
+  auto shard_signature_cell_b =
+      require_ok(shard_signatures_b->serialize(shard_validator_set), "top-descr-signatures-b-serialize");
+  auto post_change_root = top_block_descr_cell(shard_proof.block_id, shard_signature_cell_b, shard_proof.proof);
+  auto post_change_top = require_ok(ShardTopBlockDescrQ::fetch(post_change_root), "top-descr-post-change-fetch");
+  res_flags = 0;
+  expect_error(post_change_top->prevalidate(current_after_key_block, current_state, governing_state,
+                                            ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
+                                            res_flags),
                "carried session_id does not match trusted expected session_id", "top_descr_post_change_session");
   std::fprintf(stderr, "PQ_TOP_BLOCK_DESCR_GOVERNING_SNAPSHOT_OK pre_change=accepted post_change=refused\n");
   std::fprintf(stderr, "PQ_BLOCK_PROOF_ROUNDTRIP_OK bytes=%zu\n", proof_boc.size());
