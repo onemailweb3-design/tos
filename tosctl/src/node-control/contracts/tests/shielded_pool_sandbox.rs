@@ -55,12 +55,12 @@ const OP_UNKNOWN: u32 = 0x5348_50ff;
 ///
 /// The maximum is measured with both anchor rings full, not against a pool
 /// that has just been deployed: a pool whose rings are still empty costs
-/// 154,940 for the same deposit. The frontier no longer contributes any
+/// 157,205 for the same deposit. The frontier no longer contributes any
 /// growth -- the store is a level chain rather than a dictionary, and its
 /// dearest append is a pool's first -- so the rings are the whole of it.
 /// `deposit_in_a_mature_pool.rs` in the crosscheck crate is what measures it.
 const DEPOSIT_GAS_CEILING: i64 = 220_000;
-const DEPOSIT_MEASURED_MAX_GAS: i64 = 169_015;
+const DEPOSIT_MEASURED_MAX_GAS: i64 = 171_280;
 /// ConfigParam 21 of this chain's zero state, which
 /// `chain_gas_envelope_sandbox.rs` generates and holds against the
 /// executor's table.

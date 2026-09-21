@@ -115,6 +115,17 @@ CASES = [
          'int bounce_gas_ceiling() asm "220000 PUSHINT";',
          'int bounce_gas_ceiling() asm "170000 PUSHINT";',
          MATURE_TRANSACT_TEST, MATURE_TRANSACT_SUITE, CROSSCHECK),
+    # The corner the two ends of a pool's life do not contain. Full anchor
+    # rings make a transact dearer and a higher leaf index makes it slightly
+    # cheaper, so the maximum is at full rings on the youngest tree that can
+    # have them. 1,465,000 clears the rule against a fresh pool (1,171,462)
+    # and against the worst leaf index (1,169,973) and fails it only there --
+    # so only the measurement taken at that corner can kill it.
+    Case('transact-ceiling-misses-the-corner',
+         'the transact ceiling is set from the two ends of a pool\'s life', POOL,
+         'int transact_gas_ceiling() asm "1470000 PUSHINT";',
+         'int transact_gas_ceiling() asm "1465000 PUSHINT";',
+         MATURE_TRANSACT_TEST, MATURE_TRANSACT_SUITE, CROSSCHECK),
 
     # Section 19 gate 17, over runs rather than single messages. These four
     # are aimed at the traffic tests in the crosscheck crate, which are the
@@ -252,7 +263,7 @@ CASES = [
          '  groth16_require_valid(vk, proof_a, proof_b, proof_c, inputs);\n', '',
          PROOF_TEST, TRANSACT_SUITE),
     Case('transact-gas-ceiling', 'the ceiling is below what the path needs', POOL,
-         'int transact_gas_ceiling() asm "1460000 PUSHINT";',
+         'int transact_gas_ceiling() asm "1470000 PUSHINT";',
          'int transact_gas_ceiling() asm "5000 PUSHINT";', ORDER_TEST, TRANSACT_SUITE),
 
     # A message with no operation must not be mistaken for one.

@@ -104,27 +104,62 @@ pub fn development_vk_bytes() -> Result<Vec<u8>> {
         .collect()
 }
 
-/// The parameters a test pool is deployed with.
+/// A gas ceiling as the contract declares it, read out of the source.
+///
+/// Not copied into a constant here. A test that keeps its own copy of a
+/// ceiling checks the copy: the rule `M * 5 <= C * 4` then holds between two
+/// numbers in the same file and says nothing about the contract, and a
+/// mutation that lowers the contract's ceiling below the measured maximum
+/// survives. Reading it is what makes the measurement load-bearing.
+pub fn contract_gas_ceiling(name: &str) -> Result<i64> {
+    let path = library_dir().join("../tos-shielded-pool-v1.fc");
+    let source = std::fs::read_to_string(&path)
+        .map_err(|error| CrossCheckError::Fixture(format!("{}: {error}", path.display())))?;
+    let needle = format!("int {name}() asm \"");
+    let at = source
+        .find(&needle)
+        .ok_or_else(|| CrossCheckError::Fixture(format!("{name} is not declared in the pool")))?;
+    let rest = &source[at + needle.len()..];
+    let end = rest
+        .find(" PUSHINT")
+        .ok_or_else(|| CrossCheckError::Fixture(format!("{name} is not a PUSHINT constant")))?;
+    rest[..end]
+        .trim()
+        .parse()
+        .map_err(|error| CrossCheckError::Fixture(format!("{name}: {error}")))
+}
+
+/// The denomination list a pool is really deployed with, from section 12.1.
+///
+/// Most tests want one denomination, because two deposits of the same amount
+/// are the smallest thing that can fund a withdrawal. Anything that measures
+/// what a path *costs* wants this one instead: the contract walks the list to
+/// validate an amount, so a measurement taken against a shorter list is a
+/// measurement of a pool nobody deploys.
+pub const DEPLOYED_DENOMINATIONS: [u64; 4] =
+    [1_000_000_000, 10_000_000_000, 100_000_000_000, 1_000_000_000_000];
+
+/// The parameters a test pool is deployed with: the deployment's, with the
+/// denomination list replaced.
 ///
 /// This goes through `shielded-pool-genesis` rather than assembling a state
 /// cell here. A hand-built fixture agrees with itself; what has to be true is
 /// that the state these tests deploy and the state a deployment ships are the
 /// same object, built by the same code. `genesis_vs_vm.rs` holds that
 /// generator against the contract's own `state_genesis`.
+///
+/// Everything except the list comes from
+/// `shielded_pool_genesis::development_parameters`, so a pool deployed here
+/// with `DEPLOYED_DENOMINATIONS` is byte for byte the state the frozen
+/// manifest names -- and a change to the profile, the Poseidon2 manifest or
+/// the verifying key moves both together.
 fn parameters(denominations: &[u64]) -> Result<shielded_pool_genesis::Parameters> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let profile = std::fs::read(root.join("doc/shielded-pool-v1-profile.md"))
-        .map_err(|error| CrossCheckError::Fixture(format!("the profile copy: {error}")))?;
-    let poseidon = std::fs::read(root.join("crypto/poseidon2/manifest.bin"))
-        .map_err(|error| CrossCheckError::Fixture(format!("the Poseidon2 manifest: {error}")))?;
-    Ok(shielded_pool_genesis::Parameters {
-        profile_bytes: profile,
-        poseidon_manifest_bytes: poseidon,
-        verifying_key: development_vk_bytes()?,
-        reserve_floor: u128::from(RESERVE_FLOOR),
-        withdrawal_fee: u128::from(WITHDRAWAL_FEE),
-        denominations: denominations.iter().map(|amount| u128::from(*amount)).collect(),
-    })
+    let mut parameters = shielded_pool_genesis::development_parameters(&root)
+        .map_err(|error| CrossCheckError::Fixture(format!("the deployment parameters: {error}")))?;
+    parameters.denominations =
+        denominations.iter().map(|amount| u128::from(*amount)).collect();
+    Ok(parameters)
 }
 
 fn genesis_state(denominations: &[u64]) -> Result<Cell> {

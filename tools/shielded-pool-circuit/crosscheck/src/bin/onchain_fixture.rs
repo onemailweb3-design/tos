@@ -55,7 +55,7 @@ use tos_sandbox::{compile_func, Blockchain, MessageBuilder};
 /// will use. `shielded_pool_sandbox.rs` fails if these stop agreeing with the
 /// contract's own constants.
 const DEPOSIT_GAS_CEILING: u64 = 220_000;
-const TRANSACT_GAS_CEILING: u64 = 1_460_000;
+const TRANSACT_GAS_CEILING: u64 = 1_470_000;
 const BOUNCE_GAS_CEILING: u64 = 220_000;
 
 /// Section 9's intent window is an hour. Half of it leaves room for a build,

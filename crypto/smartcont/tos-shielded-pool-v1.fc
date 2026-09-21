@@ -67,9 +67,9 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 ;; three outputs -- so the two were measured separately.
 ;;
 ;;   reserve top-up     2,380    0 Poseidon2 operations
-;;   deposit          169,015   14
+;;   deposit          171,280   14
 ;;   recovery         173,435   15
-;;   withdrawal     1,167,157  142   -- the worst legal transact
+;;   withdrawal     1,175,034  142   -- the worst legal transact
 ;;
 ;; A withdrawal is what sets the transact ceiling; a transfer is cheaper.
 ;; The withdrawal figure fell by 342,976 at global version 18, when the two
@@ -87,21 +87,27 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 ;; The top-up's ceiling is the rule's floor rather than its measurement: that
 ;; path reads no state, so its cost does not move with the pool's age.
 ;;
-;; OPEN: these maxima were measured against a pool configured with ONE
-;; denomination, and the deployed genesis carries four. The same withdrawal
-;; against the deployed configuration measures 1,171,462 in the sandbox and
-;; on a real node -- 4,305 above the figure below -- so M for the transact
-;; path has to be re-measured on the deployed configuration before this
-;; ceiling can be said to follow the rule. It still binds: the ceiling is
-;; 1,460,000 and every measurement is far under it, so what is at stake is
-;; the 25% headroom, not whether the path runs.
+;; Measured on the DEPLOYED configuration -- four denominations, not the one
+;; most tests use. The contract walks the list to validate an amount, so a
+;; maximum taken against a shorter list is a maximum for a pool nobody
+;; deploys; the withdrawal figure was 4,305 low for exactly that reason until
+;; it was re-measured on 2026-09-21.
+;;
+;; And at the dearest state a pool can be in, which is no longer either end of
+;; its life. The two remaining growing costs pull in opposite directions: full
+;; anchor rings make a transact dearer, a higher leaf index makes it slightly
+;; cheaper. So the maximum sits at full rings on the youngest tree that can
+;; have them -- 4,096 mutations in, since the recent ring is keyed by the leaf
+;; counter modulo its 4,096 slots. Measured there a withdrawal is 1,175,034,
+;; against 1,171,462 in a pool with nothing in it and 1,169,973 at the worst
+;; leaf index.
 ;;
 ;; The recovery ceiling is bounded above as well as below. The withdrawal fee
 ;; has to cover the payout message plus a recovery at this ceiling, so raising
 ;; it past what the fee affords fails every withdrawal at exit 243.
 int topup_gas_ceiling() asm "10000 PUSHINT";
 int deposit_gas_ceiling() asm "220000 PUSHINT";
-int transact_gas_ceiling() asm "1460000 PUSHINT";
+int transact_gas_ceiling() asm "1470000 PUSHINT";
 int bounce_gas_ceiling() asm "220000 PUSHINT";
 
 ;; Section 16.1, in its order.

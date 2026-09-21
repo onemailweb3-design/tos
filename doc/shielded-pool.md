@@ -408,9 +408,19 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   measured on its own.
 
   A whole successful withdrawal — which this table does not reach, because
-  every row is a *refusal* — measures 1,167,157 with both anchor rings full,
-  and the frozen `TRANSACT_GAS_CEILING` is 1,460,000 by the production rule
-  C = max(10,000, round_up_10,000(ceil(M × 5 / 4))). The basechain grants a
+  every row is a *refusal* — measures 1,175,034 at the dearest state a pool
+  can be in, and the frozen `TRANSACT_GAS_CEILING` is 1,470,000 by the
+  production rule C = max(10,000, round_up_10,000(ceil(M × 5 / 4))).
+
+  That state is neither end of a pool's life. Full anchor rings make a
+  transact dearer and a higher leaf index makes it slightly cheaper, so the
+  maximum sits at full rings on the **youngest** tree that can have them —
+  4,096 mutations in, since the recent ring is keyed by the leaf counter
+  modulo its 4,096 slots. A fresh pool measures 1,171,462 and the worst leaf
+  index 1,169,973, so a ceiling taken from either end alone is short. The
+  measurement is also on the deployed configuration's four denominations: the
+  contract walks the list to validate an amount, and the figure was 4,305 low
+  while it was taken against one. The basechain grants a
   transaction 30,000,000, so the contract's own ceiling is the binding one,
   which is the point of having it. Both halves of
   `MEASURED_MAX < ceiling <= chain limit` are asserted by tests rather than

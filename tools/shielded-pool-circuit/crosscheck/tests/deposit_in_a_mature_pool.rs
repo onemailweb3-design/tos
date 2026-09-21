@@ -32,8 +32,12 @@ use shielded_pool_circuit_crosscheck::anchor_probe::{AnchorProbe, EPOCH_SLOTS, R
 use shielded_pool_circuit_crosscheck::frontier_probe::FrontierProbe;
 use shielded_pool_circuit_crosscheck::pool::{Pool, DENOMINATION};
 
-/// The ceiling frozen into the contract for a deposit.
-const DEPOSIT_GAS_CEILING: i64 = 220_000;
+/// The ceiling frozen into the contract for a deposit, read from it rather
+/// than copied: a test that keeps its own copy checks the copy.
+fn deposit_gas_ceiling() -> i64 {
+    shielded_pool_circuit_crosscheck::pool::contract_gas_ceiling("deposit_gas_ceiling")
+        .expect("the contract's deposit ceiling")
+}
 
 /// Far more than the deposit may spend, so the ceiling is what stops it and
 /// not the message's own gas credit.
@@ -57,7 +61,13 @@ fn deposit(index: u64, recent: u64, epoch: u64) -> (i32, i64) {
 /// Filling a ring takes more than a hundred calls, so a scan that rebuilt it
 /// every step would be measuring the harness.
 fn deposit_against(index: u64, frontier: chain_block::Cell, anchors: chain_block::Cell) -> (i32, i64) {
-    let mut pool = Pool::deploy().expect("deploy the pool");
+    // The deployed denomination list, not the one denomination most tests
+    // use: the contract walks the list to validate the amount, so a maximum
+    // measured against a shorter list is a maximum for a pool nobody deploys.
+    let mut pool = Pool::deploy_with_denominations(
+        &shielded_pool_circuit_crosscheck::pool::DEPLOYED_DENOMINATIONS,
+    )
+    .expect("deploy the pool");
     pool.age_to(index, frontier, anchors).expect("age the pool");
 
     let body = Pool::deposit_body(
@@ -75,6 +85,7 @@ fn deposit_against(index: u64, frontier: chain_block::Cell, anchors: chain_block
 
 #[test]
 fn a_deposit_fits_its_ceiling_at_every_age() {
+    let ceiling = deposit_gas_ceiling();
     let (exit, fresh) = deposit(1, 0, 0);
     eprintln!("index 1, empty rings: exit {exit}, {fresh} gas");
     assert_eq!(exit, 0, "the deposit a fresh pool takes is the baseline and it has to succeed");
@@ -91,17 +102,17 @@ fn a_deposit_fits_its_ceiling_at_every_age() {
         eprintln!("{name} (index {index}): exit {exit}, {gas} gas");
         assert_eq!(
             exit, 0,
-            "a deposit at index {index} was refused with exit {exit}: the ceiling of \
-             {DEPOSIT_GAS_CEILING} does not cover this pool's age"
+            "a deposit at index {index} was refused with exit {exit}: the ceiling of {ceiling} \
+             does not cover this pool's age"
         );
         worst = worst.max(gas);
     }
 
-    eprintln!("the worst deposit measured: {worst} gas, ceiling {DEPOSIT_GAS_CEILING}");
+    eprintln!("the worst deposit measured: {worst} gas, ceiling {ceiling}");
     assert!(
-        worst * 5 <= DEPOSIT_GAS_CEILING * 4,
-        "the worst deposit is {worst} gas and the ceiling {DEPOSIT_GAS_CEILING}, which is less \
-         than the quarter above the maximum that section 14 asks for"
+        worst * 5 <= ceiling * 4,
+        "the worst deposit is {worst} gas and the ceiling {ceiling}, which is less than the \
+         quarter above the maximum that section 14 asks for"
     );
 }
 
