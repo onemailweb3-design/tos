@@ -333,20 +333,59 @@ pub fn address(code: &Cell, state: &Cell) -> Result<[u8; 32]> {
 /// explicit headroom and its own measurement.
 pub const RESERVE_FLOOR: u128 = 5_000_000_000;
 
-/// Section 14.2's floor -- the payout's forward fee plus a whole bounded
-/// recovery at the bounce ceiling -- is 2,352,270: 885,601 of forwarding,
-/// which ConfigParam 25 prices and which did not move, plus 1,466,669 of
-/// compute, which ConfigParam 21 prices and which fell tenfold when the
-/// basechain gas price was cut on 2026-09-21.
+/// Section 14.2's fee, and the one constant here whose size is decided by a
+/// price nobody has chosen yet.
 ///
-/// This value has NOT been re-derived to follow it, deliberately. Changing it
-/// moves the config store, the state hash and the deployment address, and the
-/// profile already says the mainnet fee is an activation decision. But the
-/// margin it now carries should be read before that decision is made: 21x the
-/// floor, where it was set at 3.2x, and **five times what a withdrawal's own
-/// compute costs**. A protocol fee that dwarfs the gas it exists to cover is
-/// a price on withdrawing, not a cost recovery, and that is a product
-/// question rather than a safety one.
+/// The fee pre-funds a recovery. When a payout bounces, the pool authenticates
+/// the bounce, calls ACCEPT and runs the recovery under `bounce_gas_ceiling`;
+/// the compute that buys was paid for by this fee, which the withdrawing user
+/// converted to reserve before the money left. So section 14.2 requires, and
+/// `payout_require_solvent` enforces at run time:
+///
+///     withdrawal_fee >= payout_forward_fee(body) + get_compute_fee(bounce_ceiling)
+///
+/// Both terms read the chain's **live** configuration and this constant is
+/// **immutable**, so the check is on the deployment rather than on the
+/// message. If the chain's prices are ever governed past what the pool
+/// charges, every withdrawal fails at exit 243 for good, while deposits and
+/// transfers carry on -- money goes in and can never come out again. That is
+/// the failure this number is sized against, and it is irreversible.
+///
+/// So it is not sized against today's price. Measured floors, with the
+/// forwarding term (885,601, ConfigParam 25) held fixed and only the gas price
+/// moved:
+///
+///     gas price                       floor       50,000,000 covers it
+///     6.666 nanotos  (today)        2,352,270            21.3x
+///     66.66          (TON's live)  15,552,270             3.2x
+///     400            (TON, pre-cut) 88,885,601    NO -- 0.56x
+///     1000           (TON genesis) 220,885,601    NO -- 0.23x
+///
+/// 50,000,000 survives up to about **223 nanotos a gas**: 34 times today's
+/// price, but only 3.4 times the TON-aligned value this chain itself ran at
+/// until 2026-09-21. Read against today alone the margin looks like waste;
+/// read against the price the chain might return to, it is headroom of 3.4x
+/// over a cliff.
+///
+/// It is therefore deliberately NOT re-derived downwards after the tenfold
+/// gas cut. Three times today's floor would be about 7,000,000, and a pool
+/// carrying that bricks every withdrawal the moment the price goes back to
+/// where it was this morning. Saving 0.043 TOS a withdrawal is not worth an
+/// irreversible loss of the withdrawal path.
+///
+/// Raising it is a real option and a pure trade: 100,000,000 survives 451
+/// nanotos a gas, 250,000,000 survives 1,133 and so covers TON's whole
+/// historical range -- at 10 and 26 times what a withdrawal's own compute
+/// costs today. The profile makes the mainnet fee an activation decision, and
+/// activation is when the price policy will be known, which is the right
+/// moment to choose between them.
+///
+/// A V2 note, because it removes the question rather than answering it: the
+/// recovery's compute could be charged to the recovered amount instead -- the
+/// money is already back in the pool when the note is minted -- and then the
+/// fee would not need to pre-fund anything and could be sized for whatever
+/// else it is for. That changes section 15.4 and the circuit, so it has to be
+/// decided before the ceremony fixes the verifying key.
 pub const WITHDRAWAL_FEE: u128 = 50_000_000;
 
 /// Section 12.1's immutable list, sorted and positive.
