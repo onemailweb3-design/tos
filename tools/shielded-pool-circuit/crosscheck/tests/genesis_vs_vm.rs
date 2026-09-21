@@ -26,7 +26,7 @@ use tos_sandbox::{compile_func, Blockchain, MessageBuilder};
 use tos_vm::stack::StackItem;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 
 fn root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")

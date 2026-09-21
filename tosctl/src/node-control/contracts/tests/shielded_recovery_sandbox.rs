@@ -35,7 +35,7 @@ use tos_vm::stack::integer::IntegerData;
 mod shielded_pool_library;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 const MAGIC: u32 = 0x5350_5631;
 const VERSION: u16 = 1;
 const EPOCH_NONE: u32 = 0xffff_ffff;

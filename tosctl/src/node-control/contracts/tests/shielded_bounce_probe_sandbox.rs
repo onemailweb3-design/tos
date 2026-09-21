@@ -22,7 +22,7 @@ use chain_block::{
 };
 use tos_sandbox::{Blockchain, MessageBuilder, compile_func_with_stdlib};
 
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 const TOS: u64 = 1_000_000_000;
 
 /// A sender with nothing in it but the action under test: forward one

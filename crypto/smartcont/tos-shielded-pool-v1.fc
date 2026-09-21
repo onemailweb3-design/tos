@@ -67,9 +67,13 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 ;;   reserve top-up     2,480    0 Poseidon2 operations
 ;;   deposit          224,043   14
 ;;   recovery         229,722   15
-;;   withdrawal     1,730,942  142   -- the worst legal transact
+;;   withdrawal     1,387,966  142   -- the worst legal transact
 ;;
 ;; A withdrawal is what sets the transact ceiling; a transfer is cheaper.
+;; The withdrawal figure fell by 342,976 at global version 18, when the two
+;; nullifier inserts stopped walking their paths in FunC and started calling
+;; POSEIDON2_PATH7. The permutation count did not move; what went is the
+;; bookkeeping around it, 52% of an insert down to 10%.
 ;; The withdrawal figure varies by 282 gas between runs: a transact inserts
 ;; two nullifiers, and whether the second one's predecessor is the head
 ;; sentinel or the leaf just inserted depends on their order, which is the
@@ -82,7 +86,7 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 ;; it past what the fee affords fails every withdrawal at exit 243.
 int topup_gas_ceiling() asm "10000 PUSHINT";
 int deposit_gas_ceiling() asm "290000 PUSHINT";
-int transact_gas_ceiling() asm "2170000 PUSHINT";
+int transact_gas_ceiling() asm "1740000 PUSHINT";
 int bounce_gas_ceiling() asm "290000 PUSHINT";
 
 ;; Section 16.1, in its order.

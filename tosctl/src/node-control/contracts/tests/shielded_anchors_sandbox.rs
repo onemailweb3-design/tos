@@ -28,7 +28,7 @@ use tos_vm::stack::StackItem;
 use tos_vm::stack::integer::IntegerData;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 const RECENT_SLOTS: u64 = 4096;
 const EPOCH_SECONDS: u64 = 30;
 const EPOCH_SLOTS: u64 = 2880;

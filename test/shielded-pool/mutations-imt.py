@@ -23,6 +23,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 IMT = ROOT / 'crypto/smartcont/shielded/imt.fc'
+# The path walk moved into POSEIDON2_PATH7 at global version 18. The two
+# mutations that aimed at it had to move with it: a mutation whose anchor no
+# longer exists is not a mutation that passed, and the suite says so by
+# refusing to run.
+VM = ROOT / 'tosctl/src/vm/src/executor/poseidon2.rs'
 CONTRACTS = ROOT / 'tosctl/src/node-control/contracts'
 SUITE = 'shielded_imt_sandbox'
 
@@ -103,30 +108,37 @@ CASES = [
          LADDER),
 
     # Section 7.2: the path fold.
-    Case('path-digit', 'the path digit ignores the level', IMT,
-         '    int d = (index / stride) % imt_arity();', '    int d = index % imt_arity();',
+    Case('path-digit', 'the path digit ignores the level', VM,
+         '            state[1 + slot] = if slot == usize::from(*digit) {',
+         '            state[1 + slot] = if slot == usize::from(digits[0]) {',
          SEQUENTIAL),
-    Case('sibling-order', 'two sibling positions are read the other way round', IMT,
-         '    int c2 = d == 2 ? carry : (d < 2 ? s1 : s2);',
-         '    int c2 = d == 2 ? carry : (d < 2 ? s2 : s1);',
+    Case('sibling-order', 'two sibling positions are read the other way round', VM,
+         '        let siblings = [first[0], first[1], first[2], second[0], second[1], second[2]];',
+         '        let siblings = [first[0], first[2], first[1], second[0], second[1], second[2]];',
          ORDER),
-    Case('arity', 'the frozen arity becomes six', IMT,
-         'int imt_arity() asm "7 PUSHINT";', 'int imt_arity() asm "6 PUSHINT";',
+    Case('arity', 'the frozen arity becomes six', VM,
+         '        for slot in 0..7 {', '        for slot in 0..6 {',
          ORDER),
 
-    # Section 7.2: the decoder.
-    Case('path-cell-bits', 'a path cell may carry trailing bits', IMT,
-         '  throw_unless(102, bits == imt_path_cell_bits());',
-         '  throw_unless(102, bits >= imt_path_cell_bits());',
+    # Section 7.2: the decoder, which now lives in POSEIDON2_PATH7. These four
+    # aimed at the FunC reader until global version 18; the reader was deleted
+    # with the walk rather than kept, because a mutation aimed at a check
+    # nothing can reach survives, and a check nothing can reach looks tested.
+    Case('path-cell-bits', 'a path cell may carry trailing bits', VM,
+         '    if slice.remaining_bits() != 768 {',
+         '    if slice.remaining_bits() < 768 {',
          ENCODING),
-    Case('path-field-canonical', 'a path field is no longer required to be canonical', IMT,
-         '  throw_unless(103, f2 < field_modulus());', '  throw_unless(103, f2 >= 0);',
+    Case('path-field-canonical', 'a path field is no longer required to be canonical', VM,
+         '        if !poseidon2::is_canonical(element) {',
+         '        if false {',
          ENCODING),
-    Case('non-final-ref', 'a non-final path cell may carry extra references', IMT,
-         '    throw_unless(104, refs == 1);', '    throw_unless(104, refs >= 1);',
+    Case('non-final-ref', 'a non-final path cell may carry extra references', VM,
+         '    let expected = usize::from(!last);',
+         '    let expected = slice.remaining_references();',
          ENCODING),
-    Case('final-ref', 'the final path cell may carry a reference', IMT,
-         '    throw_unless(105, refs == 0);', '    throw_unless(105, refs >= 0);',
+    Case('final-ref', 'the final path cell may carry a reference', VM,
+         '    if slice.remaining_references() != expected {',
+         '    if slice.remaining_references() < expected {',
          ENCODING),
     Case('witness-bits', 'the witness root may carry trailing bits', IMT,
          '  throw_unless(108, bits == imt_witness_bits());',

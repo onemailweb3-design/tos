@@ -856,7 +856,8 @@ impl Handlers {
                     0x32,
                     Handlers::new()
                         .set(0x00, Loader::poseidon2_perm8)
-                        .set(0x01, Loader::poseidon2_hash7),
+                        .set(0x01, Loader::poseidon2_hash7)
+                        .set(0x02, Loader::poseidon2_path7),
                 )
                 .set(0x10, Loader::chksignu)
                 .set(0x11, Loader::chksigns)

@@ -19,7 +19,7 @@ use tos_vm::stack::StackItem;
 use tos_vm::stack::integer::IntegerData;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 const MAGIC: u32 = 0x5350_5631;
 const VERSION: u16 = 1;
 const INDEX_SENTINEL: u64 = 1 << 32;

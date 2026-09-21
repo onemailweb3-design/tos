@@ -999,7 +999,8 @@ impl Handlers {
                     0x32,
                     Handlers::new()
                         .set(0x00, execute_poseidon2_perm8)
-                        .set(0x01, execute_poseidon2_hash7),
+                        .set(0x01, execute_poseidon2_hash7)
+                        .set(0x02, execute_poseidon2_path7),
                 )
                 .set(0x40, execute_cdatasizeq)
                 .set(0x41, execute_cdatasize)

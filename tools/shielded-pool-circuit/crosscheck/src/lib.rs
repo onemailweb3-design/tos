@@ -28,7 +28,7 @@ use tos_vm::stack::integer::IntegerData;
 use tos_vm::stack::StackItem;
 
 pub(crate) const TOS: u64 = 1_000_000_000;
-pub(crate) const ACTIVE_VERSION: u32 = 17;
+pub(crate) const ACTIVE_VERSION: u32 = 18;
 
 pub mod anchor_probe;
 pub mod stark_sketch_probe;

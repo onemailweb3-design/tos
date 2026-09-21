@@ -27,7 +27,7 @@ use tos_sandbox::{Blockchain, MessageBuilder, compile_func_with_stdlib};
 use tos_vm::stack::StackItem;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 const PK_BYTES: usize = 1312;
 const SIG_BYTES: usize = 2420;
 const PAYLOAD_BYTES: usize = 1233;

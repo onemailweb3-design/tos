@@ -40,7 +40,7 @@ use tos_vm::stack::StackItem;
 use tos_vm::stack::integer::IntegerData;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 const DEPTH: usize = 12;
 const ARITY: u64 = 7;
 const PATH_FIELDS: usize = DEPTH * 6;
@@ -1002,6 +1002,16 @@ fn the_witness_encoding_is_rejected_unless_it_is_canonical() {
 
     let case = |cell: Cell| probe.insert_exit(&root, next, &nf, &cell);
 
+    // The codes below are the VM's, not this contract's. Until global version
+    // 18 the path walk was a FunC loop that threw 102 to 105 for a malformed
+    // cell and 103 for a field at or above the modulus; POSEIDON2_PATH7 does
+    // the same refusals and throws what the VM throws. Every caller in the
+    // pool compares the returned root and rejects on inequality, so nothing
+    // distinguishes them -- but the change is real and this is where it is
+    // recorded.
+    const CELL_UNDERFLOW: i32 = 9;
+    const RANGE_CHECK: i32 = 5;
+
     // Fewer or more than twenty-four path cells.
     let short = encode_witness_parts(
         &witness,
@@ -1009,7 +1019,7 @@ fn the_witness_encoding_is_rejected_unless_it_is_canonical() {
         encode_path(&witness.append_path),
         WitnessTweak::default(),
     );
-    assert_eq!(case(short), 104, "a twenty-three cell path was accepted");
+    assert_eq!(case(short), CELL_UNDERFLOW, "a twenty-three cell path was accepted");
     let mut long_fields = witness.low_path.clone();
     long_fields.extend_from_slice(&[ZERO, ZERO, ZERO]);
     let long = encode_witness_parts(
@@ -1018,12 +1028,16 @@ fn the_witness_encoding_is_rejected_unless_it_is_canonical() {
         encode_path(&witness.append_path),
         WitnessTweak::default(),
     );
-    assert_eq!(case(long), 105, "a twenty-five cell path was accepted");
+    assert_eq!(case(long), CELL_UNDERFLOW, "a twenty-five cell path was accepted");
 
     // A path field at or above the modulus.
     let mut over = witness.clone();
     over.low_path[5] = field_modulus();
-    assert_eq!(case(encode_witness(&over)), 103, "a non-canonical path field was accepted");
+    assert_eq!(
+        case(encode_witness(&over)),
+        RANGE_CHECK,
+        "a non-canonical path field was accepted"
+    );
 
     // Trailing bits in a path cell, on the first cell and on the last.
     for cell_index in [0usize, PATH_CELLS - 1] {
@@ -1036,7 +1050,7 @@ fn the_witness_encoding_is_rejected_unless_it_is_canonical() {
             encode_path(&witness.append_path),
             WitnessTweak::default(),
         );
-        assert_eq!(case(tweaked), 102, "a path cell with a trailing bit was accepted");
+        assert_eq!(case(tweaked), CELL_UNDERFLOW, "a path cell with a trailing bit was accepted");
     }
 
     // An extra reference, on a non-final cell and on the final one.
@@ -1049,7 +1063,11 @@ fn the_witness_encoding_is_rejected_unless_it_is_canonical() {
         encode_path(&witness.append_path),
         WitnessTweak::default(),
     );
-    assert_eq!(case(extra_middle), 104, "a path cell with two references was accepted");
+    assert_eq!(
+        case(extra_middle),
+        CELL_UNDERFLOW,
+        "a path cell with two references was accepted"
+    );
     let extra_final = encode_witness_parts(
         &witness,
         encode_path_tweaked(
@@ -1059,7 +1077,11 @@ fn the_witness_encoding_is_rejected_unless_it_is_canonical() {
         encode_path(&witness.append_path),
         WitnessTweak::default(),
     );
-    assert_eq!(case(extra_final), 105, "a final path cell with a reference was accepted");
+    assert_eq!(
+        case(extra_final),
+        CELL_UNDERFLOW,
+        "a final path cell with a reference was accepted"
+    );
 
     // The same rules on the append path, so neither reference is decoded loosely.
     let bad_append = encode_witness_parts(
@@ -1068,7 +1090,7 @@ fn the_witness_encoding_is_rejected_unless_it_is_canonical() {
         encode_path(&witness.append_path[..PATH_FIELDS - 3]),
         WitnessTweak::default(),
     );
-    assert_eq!(case(bad_append), 104, "a short append path was accepted");
+    assert_eq!(case(bad_append), CELL_UNDERFLOW, "a short append path was accepted");
 
     // Trailing bits and an extra reference on the witness root.
     let root_bits = encode_witness_parts(

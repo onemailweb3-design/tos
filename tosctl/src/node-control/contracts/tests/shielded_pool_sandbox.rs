@@ -35,7 +35,7 @@ use tos_sandbox::{Blockchain, MessageBuilder, SendResult, compile_func_with_stdl
 mod shielded_pool_library;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 const DEPTH: usize = 12;
 const ARITY: usize = 7;
 

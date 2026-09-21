@@ -23,7 +23,7 @@ use tos_vm::stack::StackItem;
 use tos_vm::stack::integer::IntegerData;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 /// Section 3: the canonical outer payload is exactly this many bytes.
 const PAYLOAD_BYTES: usize = 1233;
 

@@ -1,6 +1,8 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
 #include <cstring>
+#include <tuple>
 
+#include "vm/cells/CellSlice.h"
 #include "vm/excno.hpp"
 #include "vm/log.h"
 #include "vm/opctable.h"
@@ -239,6 +241,121 @@ int exec_poseidon2_hash7(VmState* st) {
   return 0;
 }
 
+// One level's six siblings, which section 7.2 of the shielded pool profile
+// lays out as two cells of three field elements each: the first carrying a
+// reference to the second, the second to the next level, except at the last
+// level where it carries none.
+//
+// Everything this reads is supplied by the sender, so everything is checked.
+// The cell is loaded through load_cell_slice rather than parsed by hand,
+// because that is what refuses a pruned branch or a library cell -- the FunC
+// this replaces depends on exactly that, and a forged path built out of
+// pruned branches would otherwise be an attack on every caller of this
+// instruction at once.
+Ref<Cell> read_siblings(VmState* st, const Ref<Cell>& cell, bool last, unsigned char out[6][32]) {
+  if (cell.is_null()) {
+    throw VmError{Excno::cell_und, "Poseidon2 path ends before its depth"};
+  }
+  // Charged the way the VM charges every other cell it reads, with the same
+  // first-load and reload prices and the same set of already-loaded cells.
+  // The Rust VM's loader does this for it; here it is explicit, and the two
+  // have to agree to the gas or they do not agree at all.
+  st->register_cell_load(cell->get_hash());
+  CellSlice cs = load_cell_slice(cell);
+  if (cs.size() != 768) {
+    throw VmError{Excno::cell_und, "a Poseidon2 path cell is not three field elements"};
+  }
+  if (cs.size_refs() != (last ? 0u : 1u)) {
+    throw VmError{Excno::cell_und, "a Poseidon2 path cell has the wrong reference count"};
+  }
+  for (int i = 0; i < 3; ++i) {
+    if (!cs.fetch_bytes(out[i], 32)) {
+      throw VmError{Excno::cell_und, "a Poseidon2 path cell is short"};
+    }
+    // Rejected, never reduced. A silent reduction here would accept paths the
+    // contract refuses today, for every caller that ever adopts this.
+    if (std::memcmp(out[i], poseidon2::modulus_be, 32) >= 0) {
+      throw VmError{Excno::range_chk, "a Poseidon2 path sibling is not below the field modulus"};
+    }
+  }
+  return last ? Ref<Cell>{} : cs.prefetch_ref();
+}
+
+int exec_poseidon2_path7(VmState* st) {
+  VM_LOG(st) << "execute POSEIDON2_PATH7";
+  auto& stack = st->get_stack();
+  stack.check_underflow(5);
+  st->consume_gas_chk(poseidon2_path7_base_gas_price);
+
+  auto depth_int = stack.pop_int_finite();
+  if (!depth_int->fits_bits(32, false) || depth_int->sgn() < 0) {
+    throw VmError{Excno::range_chk, "Poseidon2 path depth is not a small non-negative integer"};
+  }
+  int depth = static_cast<int>(depth_int->to_long());
+  if (depth < 1 || depth > poseidon2_path7_max_depth) {
+    throw VmError{Excno::range_chk, "Poseidon2 path depth is outside the permitted range"};
+  }
+  auto index = stack.pop_int_finite();
+  if (index->sgn() < 0) {
+    throw VmError{Excno::range_chk, "Poseidon2 path index is negative"};
+  }
+  auto path = stack.pop_cell();
+
+  unsigned char state[8][32];
+  // The domain sits in lane 0 and stays there for every level, exactly as
+  // HASH7 places it.
+  pop_field_element(stack, state[0]);
+  unsigned char carry[32];
+  pop_field_element(stack, carry);
+
+  td::RefInt256 remaining = std::move(index);
+  const td::RefInt256 arity = td::make_refint(7);
+  Ref<Cell> node = std::move(path);
+  unsigned char siblings[6][32];
+  for (int level = 0; level < depth; ++level) {
+    // Charged as the level is read, so an oversized path is paid for on the
+    // way in rather than after it fails.
+    st->consume_gas_chk(poseidon2_path7_level_gas_price);
+
+    Ref<Cell> next = read_siblings(st, node, false, siblings);
+    unsigned char rest[6][32];
+    Ref<Cell> after = read_siblings(st, next, level == depth - 1, rest);
+    for (int i = 0; i < 3; ++i) {
+      std::memcpy(siblings[3 + i], rest[i], 32);
+    }
+
+    td::RefInt256 quotient, digit;
+    std::tie(quotient, digit) = td::divmod(std::move(remaining), arity);
+    int d = static_cast<int>(digit->to_long());
+    remaining = std::move(quotient);
+
+    // The carry goes back into position d and the six siblings fill the rest
+    // in ascending child position, which is what makes a reordered witness
+    // produce a different root.
+    int taken = 0;
+    for (int slot = 0; slot < 7; ++slot) {
+      if (slot == d) {
+        std::memcpy(state[1 + slot], carry, 32);
+      } else {
+        std::memcpy(state[1 + slot], siblings[taken++], 32);
+      }
+    }
+    poseidon2::permute(state);
+    std::memcpy(carry, state[0], 32);
+    node = std::move(after);
+  }
+  // Every digit of the index has been consumed, so an index past the tree the
+  // path describes is refused rather than silently folded.
+  if (remaining->sgn() != 0) {
+    throw VmError{Excno::range_chk, "Poseidon2 path index is past the depth given"};
+  }
+  if (node.not_null()) {
+    throw VmError{Excno::cell_und, "Poseidon2 path is longer than its depth"};
+  }
+  push_field_element(stack, carry);
+  return 0;
+}
+
 }  // namespace
 
 void register_poseidon2_ops(OpcodeTable& table) {
@@ -246,6 +363,8 @@ void register_poseidon2_ops(OpcodeTable& table) {
                    ->require_version(poseidon2_min_version));
   table.insert(OpcodeInstr::mksimple(poseidon2_hash7_opcode, 24, "POSEIDON2_HASH7", exec_poseidon2_hash7)
                    ->require_version(poseidon2_min_version));
+  table.insert(OpcodeInstr::mksimple(poseidon2_path7_opcode, 24, "POSEIDON2_PATH7", exec_poseidon2_path7)
+                   ->require_version(poseidon2_path7_min_version));
 }
 
 }  // namespace vm

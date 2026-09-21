@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 mod shielded_pool_library;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 const DEPTH: usize = 12;
 const ARITY: u64 = 7;
 const CAPACITY: u64 = 1 << 32;
@@ -56,8 +56,8 @@ const RESERVE_FLOOR: u64 = 5 * TOS;
 /// anchor rings full. A withdrawal appends three leaves, so it carries three
 /// times the frontier growth a deposit does; against a fresh pool the same
 /// path measures 1,565,609.
-const TRANSACT_GAS_CEILING: i64 = 2_170_000;
-const TRANSACT_MEASURED_MAX_GAS: i64 = 1_730_942;
+const TRANSACT_GAS_CEILING: i64 = 1_740_000;
+const TRANSACT_MEASURED_MAX_GAS: i64 = 1_387_966;
 const NANOTOS_PER_GAS: u64 = 400;
 const TRANSACT_FEE: u64 = TRANSACT_GAS_CEILING as u64 * NANOTOS_PER_GAS;
 
@@ -1041,9 +1041,17 @@ fn what_a_transact_spends_and_where() {
 
     // The total is what the suite reports elsewhere; this test's claim is the
     // shape of the breakdown, not the total.
+    //
+    // It used to assert this was above a million, because it was. At global
+    // version 18 the two insertions stopped walking their paths in FunC and
+    // the whole path to the proof came to 825,393 -- under the 1,000,000 a
+    // TON basechain grants a transaction, which is the figure the gas budget
+    // work spent a day being wrong about. The bound is kept, pointing the
+    // other way, so that losing the saving is loud.
     assert!(
-        reached_proof > 1_000_000,
-        "the whole path now costs {reached_proof} gas and the ceiling question has moved"
+        reached_proof < 1_000_000,
+        "the path to the proof costs {reached_proof} gas, back above the million a TON \
+         basechain grants; POSEIDON2_PATH7 brought it to 825,393 and something has undone that"
     );
 }
 
@@ -1062,7 +1070,7 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
     /// Section 14.1. Unlike the network limit, this one the contract sets on
     /// itself, and it is the binding one: it is far below what the chain
     /// grants, which is the point of having it.
-    const TRANSACT_GAS_CEILING: i64 = 2_170_000;
+    const TRANSACT_GAS_CEILING: i64 = 1_740_000;
     /// ConfigParam 21 of this chain's zero state.
     const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
 
@@ -1107,13 +1115,17 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
 
     // And a network that grants less than the path needs stops it, which is
     // what the ceiling is protecting against on a chain configured otherwise.
-    let mut starved = Pool::deploy_with_gas_limit(RefState::genesis().root(), Some(1_000_000));
+    //
+    // This used to starve the path at 1,000,000. It no longer starves there:
+    // since global version 18 the whole path to the proof is 825,393, so the
+    // figure has to be one that is actually short of it.
+    let mut starved = Pool::deploy_with_gas_limit(RefState::genesis().root(), Some(500_000));
     let now = starved.bc.now();
     let mut same = well_formed(&RefState::genesis(), &keys, digest);
     same.valid_until = now + 60;
     assert_eq!(
         starved.exit_of(TRANSACT_FEE * 8, same.body()),
         -14,
-        "a network granting 1,000,000 gas ran the whole path after all"
+        "a network granting 500,000 gas ran the whole path after all"
     );
 }

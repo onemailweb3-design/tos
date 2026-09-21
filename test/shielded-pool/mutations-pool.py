@@ -250,7 +250,7 @@ CASES = [
          '  groth16_require_valid(vk, proof_a, proof_b, proof_c, inputs);\n', '',
          PROOF_TEST, TRANSACT_SUITE),
     Case('transact-gas-ceiling', 'the ceiling is below what the path needs', POOL,
-         'int transact_gas_ceiling() asm "2170000 PUSHINT";',
+         'int transact_gas_ceiling() asm "1740000 PUSHINT";',
          'int transact_gas_ceiling() asm "5000 PUSHINT";', ORDER_TEST, TRANSACT_SUITE),
 
     # A message with no operation must not be mistaken for one.

@@ -32,7 +32,7 @@ use tos_vm::stack::StackItem;
 use tos_vm::stack::integer::IntegerData;
 
 const TOS: u64 = 1_000_000_000;
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 const DEPTH: usize = 12;
 const ARITY: usize = 7;
 

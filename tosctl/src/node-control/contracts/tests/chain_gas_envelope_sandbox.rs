@@ -21,7 +21,7 @@
 
 use chain_block::{GasLimitsPrices, MsgForwardPrices};
 
-const ACTIVE_VERSION: u32 = 17;
+const ACTIVE_VERSION: u32 = 18;
 
 fn zerostate_config() -> chain_block::ConfigParams {
     let template =

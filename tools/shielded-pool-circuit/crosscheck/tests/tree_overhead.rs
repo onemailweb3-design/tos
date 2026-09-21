@@ -25,12 +25,15 @@ use shielded_pool_circuit_crosscheck::imt_probe::ImtProbe;
 /// Measured by re-running against a VM built at 4,500 and dividing the
 /// difference by a thousand. Pinned so a change to either tree makes the
 /// arithmetic below go red rather than quietly stale.
+///
+/// Unchanged by global version 18: POSEIDON2_PATH7 does the same permutations
+/// the FunC loop did. What it removed is everything around them.
 const IMT_PERMUTATIONS: i64 = 51;
 const APPEND_PERMUTATIONS: i64 = 12;
 
 /// Measured when the ceilings were set: a whole withdrawal, and the
 /// permutations it executes.
-const WITHDRAWAL_GAS: i64 = 1_730_942;
+const WITHDRAWAL_GAS: i64 = 1_387_966;
 const WITHDRAWAL_PERMUTATIONS: i64 = 142;
 
 fn poseidon2_price() -> i64 {
@@ -113,10 +116,20 @@ fn what_the_pools_trees_spend_on_hashing() {
         "the trees claim {tree_permutations} permutations against the transaction's \
          {WITHDRAWAL_PERMUTATIONS}, so one of the two measurements is wrong"
     );
-    // The claim this test exists to make.
+    // This assertion used to read the other way. It said that if bookkeeping
+    // ever fell below a quarter of the tree work, the case for a native path
+    // instruction had weakened and should be re-argued. At global version 18
+    // it did fall, because the instruction landed: an insert went from 52%
+    // bookkeeping to 10%, and a withdrawal from 1,565,609 gas to 1,222,791.
+    //
+    // What is left is the commitment tree, whose overhead is dictionary work
+    // that POSEIDON2_PATH7 does not touch. So the guard now points the other
+    // way: if the nullifier tree ever goes back to spending most of its gas on
+    // bookkeeping, something has undone the instruction.
     assert!(
-        bookkeeping * 4 > tree_gas,
-        "bookkeeping is now under a quarter of the tree work ({bookkeeping} of {tree_gas}), so \
-         the case for a native path instruction has weakened and should be re-argued"
+        insert - IMT_PERMUTATIONS * price < insert / 4,
+        "an imt_insert is back to spending {} of {insert} gas on bookkeeping, which is what \
+         POSEIDON2_PATH7 was added to remove",
+        insert - IMT_PERMUTATIONS * price
     );
 }

@@ -10,7 +10,7 @@
 //! the version it starts at, what it refuses, and what it costs.
 
 use chain_block::{
-    ExceptionCode,
+    BuilderData, Cell, ExceptionCode, IBitstring,
     poseidon2_kat::{HASH7, PERM8},
     poseidon2_params::MODULUS_BE,
 };
@@ -191,4 +191,194 @@ fn both_instructions_cost_the_tariff() {
         .with_stack(stack_with_lane(&input, 7, field(&MODULUS_BE)))
         .with_gas_limit(3500 - 1)
         .expect_failure(ExceptionCode::OutOfGas);
+}
+
+// --- POSEIDON2_PATH7 --------------------------------------------------------
+
+/// The version PATH7 shipped in, which is one past the pair above.
+const PATH7_VERSION: u32 = 18;
+/// 500 base, 3,700 a level for twelve levels, and the twenty-four cells the
+/// path is made of at the VM's own first-load price, plus the instruction and
+/// the implicit return. Written as literals for the same reason as
+/// `EXPECTED_GAS`.
+///
+/// The cell loads are what caught a divergence: the Rust VM's loader charges
+/// them and the C++ one's does not, so the C++ implementation charges them
+/// explicitly. Two VMs that price the same instruction differently do not
+/// agree at all, and this is the assertion that says so.
+const PATH7_EXPECTED_GAS: i64 = 500 + 12 * 3700 + 24 * 100 + 34 + 5;
+const DEPTH: usize = 12;
+
+/// A field element from a small number, which is always canonical.
+fn small(value: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[24..].copy_from_slice(&value.to_be_bytes());
+    out
+}
+
+/// Section 7.2's path: two cells a level, three field elements each, the
+/// first carrying a reference to the second and the second to the next level,
+/// except at the last level where it carries none.
+fn path_cells(siblings: &[[[u8; 32]; 6]], short_level: Option<usize>, extra_ref: bool) -> Cell {
+    let mut next: Option<Cell> = None;
+    for (level, six) in siblings.iter().enumerate().rev() {
+        let last = level == siblings.len() - 1;
+        for half in (0..2).rev() {
+            let mut builder = BuilderData::new();
+            let fields = if half == 0 { &six[..3] } else { &six[3..] };
+            let mut written = 0;
+            for value in fields {
+                if short_level == Some(level) && half == 1 && written == 2 {
+                    break; // one element missing, so the cell is 512 bits
+                }
+                builder.append_raw(value, 256).expect("a field element");
+                written += 1;
+            }
+            let tail = last && half == 1;
+            if let Some(child) = next.take() {
+                builder.checked_append_reference(child).expect("a reference");
+            }
+            if tail && extra_ref {
+                builder.checked_append_reference(Cell::default()).expect("an extra reference");
+            }
+            next = Some(builder.into_cell().expect("a path cell"));
+        }
+    }
+    next.expect("a path")
+}
+
+/// The same fold, done with HASH7 alone, so the instruction is checked against
+/// the primitive it is made of rather than against itself.
+fn fold_with_hash7(leaf: [u8; 32], domain: [u8; 32], siblings: &[[[u8; 32]; 6]], index: u64) -> [u8; 32] {
+    let mut carry = leaf;
+    let mut remaining = index;
+    for six in siblings {
+        let digit = (remaining % 7) as usize;
+        remaining /= 7;
+        let mut state = [[0u8; 32]; 8];
+        state[0] = domain;
+        let mut taken = 0;
+        for slot in 0..7 {
+            state[1 + slot] = if slot == digit {
+                carry
+            } else {
+                let value = six[taken];
+                taken += 1;
+                value
+            };
+        }
+        carry = chain_block::poseidon2::permute(&state)[0];
+    }
+    carry
+}
+
+fn sample(levels: usize) -> Vec<[[u8; 32]; 6]> {
+    (0..levels)
+        .map(|level| core::array::from_fn(|i| small(0x5eed_0000 + (level * 6 + i) as u64)))
+        .collect()
+}
+
+fn path_stack(leaf: [u8; 32], domain: [u8; 32], path: Cell, index: u64, depth: u64) -> Stack {
+    let mut stack = Stack::new();
+    stack.push(field(&leaf));
+    stack.push(field(&domain));
+    stack.push(StackItem::Cell(path));
+    stack.push(StackItem::int(IntegerData::from(index).expect("an index")));
+    stack.push(StackItem::int(IntegerData::from(depth).expect("a depth")));
+    stack
+}
+
+/// The instruction computes what the primitive computes, twelve times.
+#[test]
+fn a_path_is_the_same_fold_done_with_hash7() {
+    let siblings = sample(DEPTH);
+    let leaf = small(0x1234);
+    let domain = small(0x4321);
+    // Indices whose base-seven digits exercise every child position.
+    for index in [0u64, 1, 6, 7, 48, 117_648, 13_841_287_200 % 13_841_287_201] {
+        let expected = fold_with_hash7(leaf, domain, &siblings, index);
+        test_case("POSEIDON2_PATH7")
+            .with_block_version(PATH7_VERSION)
+            .with_stack(path_stack(leaf, domain, path_cells(&siblings, None, false), index, DEPTH as u64))
+            .expect_success_extended(Some(&format!("index {index}")))
+            .expect_stack_extended(&stack_of(&[expected]), Some(&format!("index {index}")));
+    }
+}
+
+#[test]
+fn a_path_costs_its_base_plus_a_level() {
+    let siblings = sample(DEPTH);
+    test_case("POSEIDON2_PATH7")
+        .with_block_version(PATH7_VERSION)
+        .with_stack(path_stack(small(1), small(2), path_cells(&siblings, None, false), 5, DEPTH as u64))
+        .expect_success()
+        .expect_gas_used(PATH7_EXPECTED_GAS);
+}
+
+#[test]
+fn the_path_instruction_does_not_exist_before_its_version() {
+    let siblings = sample(DEPTH);
+    for version in 0..PATH7_VERSION {
+        test_case("POSEIDON2_PATH7")
+            .with_block_version(version)
+            .with_stack(path_stack(small(1), small(2), path_cells(&siblings, None, false), 5, DEPTH as u64))
+            .expect_failure_extended(
+                ExceptionCode::InvalidOpcode,
+                Some(&format!("POSEIDON2_PATH7 at version {version}")),
+            );
+    }
+}
+
+/// The five refusals the specification names, each with the input that trips
+/// it. Removing any one of them makes exactly one of these pass.
+#[test]
+fn every_malformed_path_is_refused() {
+    let siblings = sample(DEPTH);
+    let good = || path_cells(&siblings, None, false);
+    let run = |stack: Stack, code: ExceptionCode, what: &str| {
+        test_case("POSEIDON2_PATH7")
+            .with_block_version(PATH7_VERSION)
+            .with_stack(stack)
+            .expect_failure_extended(code, Some(what));
+    };
+
+    // A cell that is not three field elements.
+    run(
+        path_stack(small(1), small(2), path_cells(&siblings, Some(4), false), 5, DEPTH as u64),
+        ExceptionCode::CellUnderflow,
+        "a short level",
+    );
+    // A reference where the layout allows none.
+    run(
+        path_stack(small(1), small(2), path_cells(&siblings, None, true), 5, DEPTH as u64),
+        ExceptionCode::CellUnderflow,
+        "an extra reference on the last cell",
+    );
+    // A sibling at the modulus, which must be rejected and not reduced.
+    let mut poisoned = siblings.clone();
+    poisoned[3][2] = MODULUS_BE;
+    run(
+        path_stack(small(1), small(2), path_cells(&poisoned, None, false), 5, DEPTH as u64),
+        ExceptionCode::RangeCheckError,
+        "a sibling at the modulus",
+    );
+    // A depth past the bound, and one below it.
+    run(
+        path_stack(small(1), small(2), good(), 5, 65),
+        ExceptionCode::RangeCheckError,
+        "a depth past the bound",
+    );
+    run(path_stack(small(1), small(2), good(), 5, 0), ExceptionCode::RangeCheckError, "a zero depth");
+    // An index with a digit left over after the depth given.
+    run(
+        path_stack(small(1), small(2), good(), 13_841_287_201, DEPTH as u64),
+        ExceptionCode::RangeCheckError,
+        "an index past the depth",
+    );
+    // A path shorter than the depth.
+    run(
+        path_stack(small(1), small(2), path_cells(&sample(DEPTH - 1), None, false), 5, DEPTH as u64),
+        ExceptionCode::CellUnderflow,
+        "a path shorter than its depth",
+    );
 }
