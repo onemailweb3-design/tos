@@ -1,11 +1,15 @@
-# Structural carrier inventory for the canonical persisted block_signatures_simplex_pq#13 BOC.
-# These are structural verdicts against production route admission limits. They are not live
-# round trips of complete production objects: the post-quantum TL variants and their checked
-# parser do not exist yet, so constructing such objects here would create a modeled parser path.
+# Static carrier inventory for the canonical persisted block_signatures_simplex_pq#13 BOC,
+# the deterministic node/lite SignatureSet schema projections, and the still-unavailable
+# complete production objects. These are not live carrier round trips.
 #
-# Deferred owner: the unit that adds those TL variants and the checked parser must put complete
-# finality-broadcast and lite forward-proof objects at 21 and 100 signers through the real
-# generated serializers and the real admission checks.
+# Deferred owner: the unit that adds the PQ TL variants and checked parser must match the
+# projected sizes byte-for-byte, then put complete finality-broadcast and lite forward-proof
+# objects at 21 and 100 signers through the real generated serializers and admission checks.
+# A mismatch reopens the frozen persisted-envelope decision.
+#
+# Lite-gate implementer note: despite the design text mentioning RLDP max_answer_size, this tree's
+# production lite client uses AdnlExtClient::send_query over framed TCP and does not use RLDP on
+# this path. Build the later gate against the actual route unless production routing changes.
 #
 # layer columns: kind, route, layer, operation, source, named_constant, recorded_bytes, observation
 layer	finality-broadcast	overlay-manager-send	limit	overlay/overlay-manager.cpp	overlay::Overlays::max_fec_broadcast_size	16777216	CHECK_aborts_instead_of_refusing
@@ -22,16 +26,41 @@ layer	lite-forward-proof	answer-boxing	overhead	tl/generate/scheme/tos_api.tl	to
 minimum	finality-broadcast	16777216
 minimum	v2-broadcast	16777216
 minimum	lite-forward-proof	16777112
-# verdict columns: kind, route, signers, persisted_object_bytes, verdict, margin_bytes
-verdict	finality-broadcast	1	2720	fits	16774496
-verdict	finality-broadcast	21	53787	fits	16723429
-verdict	finality-broadcast	100	255396	fits	16521820
-verdict	finality-broadcast	400	1020996	fits	15756220
-verdict	v2-broadcast	1	2720	fits	16774496
-verdict	v2-broadcast	21	53787	fits	16723429
-verdict	v2-broadcast	100	255396	fits	16521820
-verdict	v2-broadcast	400	1020996	fits	15756220
-verdict	lite-forward-proof	1	2720	fits	16774392
-verdict	lite-forward-proof	21	53787	fits	16723325
-verdict	lite-forward-proof	100	255396	fits	16521716
-verdict	lite-forward-proof	400	1020996	fits	15756116
+# verdict columns: kind, object/signers, measured_or_projected_serialized_bytes, carrier_layer,
+# carrier_configured_or_admitted_maximum, framing_headroom, verdict
+verdict	persisted-#13-boc/1	measured:2720	finality-broadcast/minimum	16777216	16774496	STATIC FIT
+verdict	persisted-#13-boc/21	measured:53787	finality-broadcast/minimum	16777216	16723429	STATIC FIT
+verdict	persisted-#13-boc/100	measured:255396	finality-broadcast/minimum	16777216	16521820	STATIC FIT
+verdict	persisted-#13-boc/400	measured:1020996	finality-broadcast/minimum	16777216	15756220	STATIC FIT
+verdict	projected-tosNode.signatureSet.simplexPq/1	projected:2644	finality-broadcast/minimum	16777216	16774572	UNKNOWN UNTIL N5.3
+verdict	projected-tosNode.signatureSet.simplexPq/21	projected:51924	finality-broadcast/minimum	16777216	16725292	UNKNOWN UNTIL N5.3
+verdict	projected-tosNode.signatureSet.simplexPq/100	projected:246580	finality-broadcast/minimum	16777216	16530636	UNKNOWN UNTIL N5.3
+verdict	projected-tosNode.signatureSet.simplexPq/400	projected:985780	finality-broadcast/minimum	16777216	15791436	UNKNOWN UNTIL N5.3
+verdict	complete-tosNode.blockFinalityBroadcast/1	unknown	finality-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
+verdict	complete-tosNode.blockFinalityBroadcast/21	unknown	finality-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
+verdict	complete-tosNode.blockFinalityBroadcast/100	unknown	finality-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
+verdict	complete-tosNode.blockFinalityBroadcast/400	unknown	finality-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
+verdict	persisted-#13-boc/1	measured:2720	v2-broadcast/minimum	16777216	16774496	STATIC FIT
+verdict	persisted-#13-boc/21	measured:53787	v2-broadcast/minimum	16777216	16723429	STATIC FIT
+verdict	persisted-#13-boc/100	measured:255396	v2-broadcast/minimum	16777216	16521820	STATIC FIT
+verdict	persisted-#13-boc/400	measured:1020996	v2-broadcast/minimum	16777216	15756220	STATIC FIT
+verdict	projected-tosNode.signatureSet.simplexPq/1	projected:2644	v2-broadcast/minimum	16777216	16774572	UNKNOWN UNTIL N5.3
+verdict	projected-tosNode.signatureSet.simplexPq/21	projected:51924	v2-broadcast/minimum	16777216	16725292	UNKNOWN UNTIL N5.3
+verdict	projected-tosNode.signatureSet.simplexPq/100	projected:246580	v2-broadcast/minimum	16777216	16530636	UNKNOWN UNTIL N5.3
+verdict	projected-tosNode.signatureSet.simplexPq/400	projected:985780	v2-broadcast/minimum	16777216	15791436	UNKNOWN UNTIL N5.3
+verdict	complete-tosNode.blockBroadcastCompressedV2/1	unknown	v2-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
+verdict	complete-tosNode.blockBroadcastCompressedV2/21	unknown	v2-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
+verdict	complete-tosNode.blockBroadcastCompressedV2/100	unknown	v2-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
+verdict	complete-tosNode.blockBroadcastCompressedV2/400	unknown	v2-broadcast/minimum	16777216	unknown	UNKNOWN UNTIL N5.3
+verdict	persisted-#13-boc/1	measured:2720	lite-forward-proof/minimum	16777112	16774392	STATIC FIT
+verdict	persisted-#13-boc/21	measured:53787	lite-forward-proof/minimum	16777112	16723325	STATIC FIT
+verdict	persisted-#13-boc/100	measured:255396	lite-forward-proof/minimum	16777112	16521716	STATIC FIT
+verdict	persisted-#13-boc/400	measured:1020996	lite-forward-proof/minimum	16777112	15756116	STATIC FIT
+verdict	projected-liteServer.signatureSet.simplexPq/1	projected:2644	lite-forward-proof/minimum	16777112	16774468	UNKNOWN UNTIL N5.3
+verdict	projected-liteServer.signatureSet.simplexPq/21	projected:51924	lite-forward-proof/minimum	16777112	16725188	UNKNOWN UNTIL N5.3
+verdict	projected-liteServer.signatureSet.simplexPq/100	projected:246580	lite-forward-proof/minimum	16777112	16530532	UNKNOWN UNTIL N5.3
+verdict	projected-liteServer.signatureSet.simplexPq/400	projected:985780	lite-forward-proof/minimum	16777112	15791332	UNKNOWN UNTIL N5.3
+verdict	complete-lite-answer/1	unknown	lite-forward-proof/minimum	16777112	unknown	UNKNOWN UNTIL N5.3
+verdict	complete-lite-answer/21	unknown	lite-forward-proof/minimum	16777112	unknown	UNKNOWN UNTIL N5.3
+verdict	complete-lite-answer/100	unknown	lite-forward-proof/minimum	16777112	unknown	UNKNOWN UNTIL N5.3
+verdict	complete-lite-answer/400	unknown	lite-forward-proof/minimum	16777112	unknown	UNKNOWN UNTIL N5.3

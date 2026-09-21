@@ -9,6 +9,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "adnl/adnl-ext-limits.h"
@@ -92,12 +93,18 @@ void check_source(const std::string& relative_path, const std::string& constant)
   }
 }
 
-std::map<std::size_t, std::size_t> measured_object_sizes() {
+struct Measurement {
+  std::size_t boc;
+  std::size_t node_projection;
+  std::size_t lite_projection;
+};
+
+std::map<std::size_t, Measurement> measured_object_sizes() {
   std::ifstream input(MEASUREMENTS_FILE);
   if (!input) {
     fail("ROUTE_INVENTORY_MISSING_MEASUREMENTS");
   }
-  std::map<std::size_t, std::size_t> result;
+  std::map<std::size_t, Measurement> result;
   std::string line;
   while (std::getline(input, line)) {
     if (line.empty() || line[0] == '#' || line.rfind("signers\t", 0) == 0) {
@@ -105,7 +112,9 @@ std::map<std::size_t, std::size_t> measured_object_sizes() {
     }
     auto row = fields(line);
     if (row.size() == 11 && row[3] != "REFUSED") {
-      result.emplace(number(row[0], "measurement signers"), number(row[3], "measurement BOC"));
+      result.emplace(number(row[0], "measurement signers"),
+                     Measurement{number(row[3], "measurement BOC"), number(row[6], "node projection"),
+                                 number(row[7], "lite projection")});
     }
   }
   return result;
@@ -122,17 +131,24 @@ int main() {
   std::map<std::string, std::size_t> capacities;
   std::map<std::string, std::size_t> expected_minima;
   struct Verdict {
-    std::string route;
+    std::string object;
     std::size_t signers;
-    std::size_t object_bytes;
+    std::string serialized_bytes;
+    std::string route;
+    std::size_t carrier_max;
+    std::string headroom;
     std::string result;
-    std::size_t margin;
   };
   std::vector<Verdict> verdicts;
   std::size_t layers = 0;
+  bool saw_lite_transport_note = false;
   std::string line;
   while (std::getline(input, line)) {
-    if (line.empty() || line[0] == '#') {
+    if (!line.empty() && line[0] == '#') {
+      saw_lite_transport_note |= line.find("does not use RLDP") != std::string::npos;
+      continue;
+    }
+    if (line.empty()) {
       continue;
     }
     const auto row = fields(line);
@@ -163,17 +179,24 @@ int main() {
         fail("ROUTE_INVENTORY_BAD_MINIMUM: " + line);
       }
     } else if (row[0] == "verdict") {
-      if (row.size() != 6) {
+      if (row.size() != 7) {
         fail("ROUTE_INVENTORY_BAD_VERDICT: " + line);
       }
-      verdicts.push_back(Verdict{row[1], number(row[2], "verdict signers"), number(row[3], "verdict object"), row[4],
-                                 number(row[5], "verdict margin")});
+      const auto object_separator = row[1].rfind('/');
+      const auto layer_separator = row[3].rfind('/');
+      if (object_separator == std::string::npos || layer_separator == std::string::npos ||
+          row[3].substr(layer_separator + 1) != "minimum") {
+        fail("ROUTE_INVENTORY_BAD_VERDICT_SUBJECT: " + line);
+      }
+      verdicts.push_back(Verdict{
+          row[1].substr(0, object_separator), number(row[1].substr(object_separator + 1), "verdict signers"), row[2],
+          row[3].substr(0, layer_separator), number(row[4], "verdict carrier maximum"), row[5], row[6]});
     } else {
       fail("ROUTE_INVENTORY_UNKNOWN_ROW: " + line);
     }
   }
 
-  if (capacities.size() != 3 || expected_minima.size() != 3 || layers != 10) {
+  if (capacities.size() != 3 || expected_minima.size() != 3 || layers != 10 || !saw_lite_transport_note) {
     fail("ROUTE_INVENTORY_INCOMPLETE");
   }
   for (const auto& [route, capacity] : capacities) {
@@ -188,30 +211,86 @@ int main() {
 
   const auto measurements = measured_object_sizes();
   constexpr std::size_t signer_counts[]{1, 21, 100, 400};
-  std::set<std::pair<std::string, std::size_t>> seen;
+  using VerdictKey = std::tuple<std::string, std::string, std::size_t>;
+  std::set<VerdictKey> seen;
   for (const auto& verdict : verdicts) {
     const auto capacity = capacities.find(verdict.route);
     const auto measured = measurements.find(verdict.signers);
-    if (capacity == capacities.end() || measured == measurements.end() || measured->second != verdict.object_bytes) {
-      fail("ROUTE_VERDICT_INPUT_DRIFT: route=" + verdict.route + " signers=" + std::to_string(verdict.signers));
+    if (capacity == capacities.end() || measured == measurements.end() || verdict.carrier_max != capacity->second) {
+      fail("ROUTE_VERDICT_INPUT_DRIFT: object=" + verdict.object + " route=" + verdict.route +
+           " signers=" + std::to_string(verdict.signers));
     }
-    const bool fits = verdict.object_bytes <= capacity->second;
-    const auto margin = fits ? capacity->second - verdict.object_bytes : verdict.object_bytes - capacity->second;
-    if (verdict.result != (fits ? "fits" : "refused") || verdict.margin != margin) {
-      fail("ROUTE_VERDICT_MISMATCH: route=" + verdict.route + " signers=" + std::to_string(verdict.signers));
+
+    std::string expected_kind;
+    std::size_t expected_bytes = 0;
+    bool has_bytes = true;
+    if (verdict.object == "persisted-#13-boc") {
+      expected_kind = "measured";
+      expected_bytes = measured->second.boc;
+    } else if (verdict.object == "projected-tosNode.signatureSet.simplexPq" &&
+               (verdict.route == "finality-broadcast" || verdict.route == "v2-broadcast")) {
+      expected_kind = "projected";
+      expected_bytes = measured->second.node_projection;
+    } else if (verdict.object == "projected-liteServer.signatureSet.simplexPq" &&
+               verdict.route == "lite-forward-proof") {
+      expected_kind = "projected";
+      expected_bytes = measured->second.lite_projection;
+    } else if ((verdict.object == "complete-tosNode.blockFinalityBroadcast" && verdict.route == "finality-broadcast") ||
+               (verdict.object == "complete-tosNode.blockBroadcastCompressedV2" && verdict.route == "v2-broadcast") ||
+               (verdict.object == "complete-lite-answer" && verdict.route == "lite-forward-proof")) {
+      has_bytes = false;
+    } else {
+      fail("ROUTE_VERDICT_UNEXPECTED_SUBJECT: object=" + verdict.object + " route=" + verdict.route);
     }
-    if (!seen.emplace(verdict.route, verdict.signers).second) {
+
+    if (has_bytes) {
+      const auto separator = verdict.serialized_bytes.find(':');
+      if (separator == std::string::npos || verdict.serialized_bytes.substr(0, separator) != expected_kind) {
+        fail("ROUTE_VERDICT_BAD_SIZE_KIND: object=" + verdict.object + " signers=" + std::to_string(verdict.signers));
+      }
+      const auto recorded_bytes = number(verdict.serialized_bytes.substr(separator + 1), "verdict serialized bytes");
+      if (recorded_bytes != expected_bytes) {
+        std::ostringstream error;
+        error << "ROUTE_PROJECTION_SIZE_MISMATCH: object=" << verdict.object << " signers=" << verdict.signers
+              << " recorded=" << recorded_bytes << " measurement=" << expected_bytes;
+        fail(error.str());
+      }
+      const auto margin =
+          expected_bytes <= capacity->second ? capacity->second - expected_bytes : expected_bytes - capacity->second;
+      if (verdict.headroom != std::to_string(margin)) {
+        fail("ROUTE_VERDICT_HEADROOM_MISMATCH: object=" + verdict.object +
+             " signers=" + std::to_string(verdict.signers));
+      }
+      const auto expected_result = verdict.object == "persisted-#13-boc"
+                                       ? (expected_bytes <= capacity->second ? "STATIC FIT" : "STATIC DOES NOT FIT")
+                                       : "UNKNOWN UNTIL N5.3";
+      if (verdict.result != expected_result) {
+        fail("ROUTE_VERDICT_RESULT_MISMATCH: object=" + verdict.object + " signers=" + std::to_string(verdict.signers));
+      }
+    } else if (verdict.serialized_bytes != "unknown" || verdict.headroom != "unknown" ||
+               verdict.result != "UNKNOWN UNTIL N5.3") {
+      fail("ROUTE_COMPLETE_OBJECT_NOT_UNKNOWN: object=" + verdict.object +
+           " signers=" + std::to_string(verdict.signers));
+    }
+    if (!seen.emplace(verdict.object, verdict.route, verdict.signers).second) {
       fail("ROUTE_VERDICT_DUPLICATE");
     }
   }
-  for (const auto& [route, unused] : capacities) {
+  const std::map<std::string, std::pair<std::string, std::string>> route_objects{
+      {"finality-broadcast", {"projected-tosNode.signatureSet.simplexPq", "complete-tosNode.blockFinalityBroadcast"}},
+      {"v2-broadcast", {"projected-tosNode.signatureSet.simplexPq", "complete-tosNode.blockBroadcastCompressedV2"}},
+      {"lite-forward-proof", {"projected-liteServer.signatureSet.simplexPq", "complete-lite-answer"}},
+  };
+  for (const auto& [route, objects] : route_objects) {
     for (const auto signers : signer_counts) {
-      if (!seen.contains({route, signers})) {
-        fail("ROUTE_VERDICT_MISSING: route=" + route + " signers=" + std::to_string(signers));
+      for (const auto& object : {std::string("persisted-#13-boc"), objects.first, objects.second}) {
+        if (!seen.contains({object, route, signers})) {
+          fail("ROUTE_VERDICT_MISSING: object=" + object + " route=" + route + " signers=" + std::to_string(signers));
+        }
       }
     }
   }
-  if (seen.size() != 12) {
+  if (seen.size() != 36) {
     fail("ROUTE_VERDICT_UNEXPECTED_COUNT");
   }
 
