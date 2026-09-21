@@ -82,7 +82,22 @@ impl RootKey {
     fn new(index: u8) -> Self {
         let file = std::env::temp_dir().join(format!("tos-controller-root-{index}.key"));
         if !file.exists() {
-            run_key_tool(&["keygen", file.to_str().expect("path")]);
+            // Generated under a name of this call's own and only then published by linking,
+            // because these tests run on threads of one process: generating straight into
+            // the shared name let two threads write it at once, and let a third read it
+            // half-written. A name is not made unique by a process id when every racer
+            // shares the process. The shared published name is deliberate -- generating an
+            // ML-DSA key is slow and the tests only need the same key each time.
+            static SCRATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let scratch = SCRATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mine = file.with_extension(format!("{}.{scratch}.tmp", std::process::id()));
+            run_key_tool(&["keygen", mine.to_str().expect("path")]);
+            match std::fs::hard_link(&mine, &file) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => panic!("the key could not be put in place: {e}"),
+            }
+            let _ = std::fs::remove_file(&mine);
         }
         let public_key =
             hex::decode(&run_key_tool(&["public", file.to_str().expect("path")])[0]).expect("hex");

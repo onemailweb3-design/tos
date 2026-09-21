@@ -4129,7 +4129,17 @@ impl PqValidator {
     fn new(index: u8) -> Self {
         let key_file = std::env::temp_dir().join(format!("tos-pq-elector-test-{index}.key"));
         if !key_file.exists() {
-            let mine = key_file.with_extension(format!("{}.tmp", std::process::id()));
+            // The scratch name has to be unique per call, not per process. These tests run
+            // on threads of one process, so a process id names the same file for all of
+            // them: two validators built at once had one thread removing the file the other
+            // was still linking, or generating over it while the other read it. The shared
+            // published name is deliberate -- generating an ML-DSA key is slow and the tests
+            // only need it to be the same key -- and it is safe because it comes into
+            // existence by linking a file the generator has already finished writing, so it
+            // never exists half-written.
+            static SCRATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let scratch = SCRATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mine = key_file.with_extension(format!("{}.{scratch}.tmp", std::process::id()));
             run_key_tool(&["keygen", mine.to_str().expect("path")]);
             // Losing the race is fine: whoever won wrote a key, and this one is discarded.
             match std::fs::hard_link(&mine, &key_file) {
