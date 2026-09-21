@@ -65,13 +65,23 @@ TOS = 1_000_000_000
 # contract at all: the instructions are not merely absent, they are refused.
 GLOBAL_VERSION = 18
 
-# A real internal message pays a forward fee out of its own value, so the
-# msg_value the contract sees is less than the value the wallet sent.  The
-# sandbox charges no forward fee, which is why every funding figure measured
-# there is a lower bound on what a sender must attach.  This is the allowance
-# on top of the fixture's minimum; the run reports what was actually consumed
-# so the number can stop being a guess.
-FORWARD_FEE_ALLOWANCE = 50_000_000
+# Nothing on top of what section 14.1's funding rule demands.
+#
+# This was 50,000,000, added on the theory that a real internal message pays a
+# forward fee out of its own value and so arrives worth less than it was sent
+# for.  It does not, here: the wallet sends with mode 3, which pays transfer
+# fees separately from the message value, so the whole value arrives and the
+# contract's `msg_value >= get_compute_fee(ceiling)` sees exactly what was
+# attached.  Measured with the allowance at zero, all four paths still pass.
+#
+# So it goes to zero, and not merely because it was unnecessary: a run that
+# attaches more than the rule demands is not testing the rule.  Sending the
+# exact minimum is what shows that the minimum really is sufficient on a chain
+# -- forward fees, storage, action phase and all -- which is the one thing a
+# sandbox measurement of it cannot show.
+#
+# The flag remains for anyone who needs slack while chasing something else.
+FORWARD_FEE_ALLOWANCE = 0
 
 
 class Failed(RuntimeError):
@@ -691,7 +701,14 @@ def main() -> int:
     parser.add_argument("--base-port", type=int, default=21000)
     parser.add_argument("--boot-timeout", type=float, default=180.0)
     parser.add_argument("--step-timeout", type=float, default=120.0)
-    parser.add_argument("--fee-allowance", type=int, default=FORWARD_FEE_ALLOWANCE)
+    parser.add_argument(
+        "--fee-allowance",
+        type=int,
+        default=FORWARD_FEE_ALLOWANCE,
+        help="nanotos to attach on top of what section 14.1's funding rule demands. "
+             "Zero by default, because a message carrying more than the rule asks for "
+             "does not test the rule",
+    )
     parser.add_argument(
         "--refuse",
         action="store_true",
