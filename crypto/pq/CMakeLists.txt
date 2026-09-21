@@ -181,7 +181,9 @@ if(TARGET tos_crypto)
   target_include_directories(block-signature-carrier-measure PRIVATE "${TOS_MLDSA_SOURCE_DIR}/mldsa")
   target_compile_definitions(block-signature-carrier-measure PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
   target_compile_definitions(block-signature-carrier-measure PRIVATE
-    MEASUREMENTS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measurements.tsv")
+    MEASUREMENTS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-measurements.tsv"
+    TOS_API_SCHEMA_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../tl/generate/scheme/tos_api.tl"
+    LITE_API_SCHEMA_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../tl/generate/scheme/lite_api.tl")
   add_test(NAME block-signature-carrier-measure COMMAND block-signature-carrier-measure)
   add_executable(test-block-signature-carrier-bound
     "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/block-signature-carrier-bound-test.cpp")

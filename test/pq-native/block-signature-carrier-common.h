@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "auto/tl/tos_api.h"
@@ -29,6 +30,16 @@ inline constexpr std::uint32_t validator_set_hash = 0x31415926;
 inline constexpr std::uint32_t catchain_seqno = 1789434;
 inline constexpr std::uint32_t slot = 2718281;
 inline constexpr std::uint64_t signature_weight = 1;
+inline constexpr auto algorithm_id =
+    static_cast<std::underlying_type_t<tos::pq::PQAlgorithmId>>(tos::pq::PQAlgorithmId::mldsa44);
+
+// These constructors do not exist in the authoritative TL schemas yet. The
+// placeholders model the four-byte constructor fields, and nothing else; their
+// numeric values are not measurements of generated code.
+inline constexpr std::uint32_t modeled_node_signature_set_constructor = 0x590da166;
+inline constexpr std::uint32_t modeled_node_signature_constructor = 0x535666d0;
+inline constexpr std::uint32_t modeled_lite_signature_set_constructor = 0xf9f0b390;
+inline constexpr std::uint32_t modeled_lite_signature_constructor = 0xfb759362;
 
 inline td::Bits256 hash_of(const std::string& text) {
   td::Bits256 out;
@@ -124,7 +135,7 @@ inline td::Ref<vm::Cell> signature_set_cell(const std::vector<SignatureInput>& s
       std::abort();
     }
     vm::CellBuilder pair;
-    if (!(pair.store_bits_bool(signatures[i].validator_id.cbits(), 256) && pair.store_long_bool(1, 16) &&
+    if (!(pair.store_bits_bool(signatures[i].validator_id.cbits(), 256) && pair.store_long_bool(algorithm_id, 16) &&
           pair.store_ref_bool(packed.move_as_ok()) &&
           dict.set_builder(td::BitArray<16>{static_cast<unsigned>(i)}, pair, vm::Dictionary::SetMode::Add))) {
       std::abort();
@@ -195,23 +206,25 @@ inline void append_bytes(td::BufferSlice& out, std::size_t& pos, td::Slice value
   }
 }
 
+// These two encoders model the proposed field layouts by hand. They do not call
+// generated TL code because the constructors are not present in the schemas.
 inline td::BufferSlice node_tl(const std::vector<SignatureInput>& signatures) {
   const auto candidate_bytes = tos::serialize_tl_object(candidate(), true);
   const std::size_t pair_size = 4 + 32 + 4 + tl_bytes_field_size(tos::pq::mldsa44_signature_bytes);
   const std::size_t size = 4 + 4 + 4 + 4 + 4 + 4 + signatures.size() * pair_size + 32 + 4 + candidate_bytes.size();
   td::BufferSlice out(size);
   std::size_t pos = 0;
-  append_u32(out, pos, 0x590da166);  // tosNode.signatureSet.simplexPq
+  append_u32(out, pos, modeled_node_signature_set_constructor);
   append_u32(out, pos, 0x997275b5);  // boolTrue
   append_u32(out, pos, catchain_seqno);
   append_u32(out, pos, validator_set_hash);
   append_u32(out, pos, 0x1cb5c415);  // vector
   append_u32(out, pos, static_cast<std::uint32_t>(signatures.size()));
   for (const auto& signature : signatures) {
-    append_u32(out, pos, 0x535666d0);  // tosNode.pqBlockSignature
+    append_u32(out, pos, modeled_node_signature_constructor);
     std::memcpy(out.data() + pos, signature.validator_id.data(), 32);
     pos += 32;
-    append_u32(out, pos, 1);
+    append_u32(out, pos, algorithm_id);
     append_bytes(out, pos, signature.signature.as_slice());
   }
   std::memcpy(out.data() + pos, session_id().data(), 32);
@@ -232,16 +245,16 @@ inline td::BufferSlice lite_tl(const std::vector<SignatureInput>& signatures) {
       4 + 4 + 4 + 4 + 4 + signatures.size() * pair_size + 32 + 4 + tl_bytes_field_size(candidate_bytes.size());
   td::BufferSlice out(size);
   std::size_t pos = 0;
-  append_u32(out, pos, 0xf9f0b390);  // liteServer.signatureSet.simplexPq
+  append_u32(out, pos, modeled_lite_signature_set_constructor);
   append_u32(out, pos, catchain_seqno);
   append_u32(out, pos, validator_set_hash);
   append_u32(out, pos, 0x1cb5c415);  // vector
   append_u32(out, pos, static_cast<std::uint32_t>(signatures.size()));
   for (const auto& signature : signatures) {
-    append_u32(out, pos, 0xfb759362);  // liteServer.pqSignature
+    append_u32(out, pos, modeled_lite_signature_constructor);
     std::memcpy(out.data() + pos, signature.validator_id.data(), 32);
     pos += 32;
-    append_u32(out, pos, 1);
+    append_u32(out, pos, algorithm_id);
     append_bytes(out, pos, signature.signature.as_slice());
   }
   std::memcpy(out.data() + pos, session_id().data(), 32);
@@ -275,6 +288,7 @@ struct Measurement {
   std::size_t cells;
   std::size_t depth;
   std::size_t signatures_boc_bytes;
+  std::string signatures_boc_sha256;
   std::size_t block_proof_boc_bytes;
   std::size_t node_tl_bytes;
   std::size_t lite_tl_bytes;
@@ -290,12 +304,15 @@ inline Measurement measure(std::size_t count, bool valid) {
     std::abort();
   }
   const auto signature_boc = boc(root);
+  td::Bits256 signature_boc_hash;
+  td::sha256(signature_boc.as_slice(), signature_boc_hash.as_slice());
   const auto proof_boc = boc(block_proof_cell(root));
   const auto cert_size = certificate_tl_bytes(signatures);
   return Measurement{count,
                      static_cast<std::size_t>(stat.cells),
                      root->get_depth(),
                      signature_boc.size(),
+                     signature_boc_hash.to_hex(),
                      proof_boc.size(),
                      node_tl(signatures).size(),
                      lite_tl(signatures).size(),

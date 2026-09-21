@@ -6,42 +6,87 @@
 #include <cassert>
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "block-signature-carrier-common.h"
 
+namespace {
+
+bool file_contains(const char* path, const char* needle) {
+  std::ifstream input(path);
+  assert(input && "an authoritative TL schema must be readable");
+  const std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+  return contents.find(needle) != std::string::npos;
+}
+
+}  // namespace
+
 int main() {
+  if (file_contains(TOS_API_SCHEMA_FILE, "tosNode.signatureSet.simplexPq") ||
+      file_contains(LITE_API_SCHEMA_FILE, "liteServer.signatureSet.simplexPq")) {
+    std::fprintf(stderr,
+                 "MODELED_TL_SCHEMA_PRESENT: a modeled PQ signature-set schema now exists; re-measure both TL "
+                 "columns against generated code, then delete the schema-absence assertion\n");
+    return 1;
+  }
+
   constexpr std::array<std::size_t, 6> counts{1, 21, 32, 64, 100, 400};
-  std::ostringstream measured_output;
-  measured_output << "signers\tcells\tdepth\tblock_signatures_boc\tblock_proof_boc\tnode_tl\tlite_tl\t"
-                     "simplex_certificate_tl\tboc_minus_certificate\tinput\n";
+  std::vector<std::string> measured_lines;
+  measured_lines.emplace_back(
+      "signers\tcells\tdepth\tblock_signatures_boc\tblock_signatures_boc_sha256\t"
+      "block_proof_boc\tnode_tl\tlite_tl\tsimplex_certificate_tl\t"
+      "boc_minus_certificate\tinput");
   for (const auto count : counts) {
     const bool valid = count <= 100;
     const auto measured = block_signature_carrier_test::measure(count, valid);
-    measured_output << measured.signers << '\t' << measured.cells << '\t' << measured.depth << '\t'
-                    << measured.signatures_boc_bytes << '\t' << measured.block_proof_boc_bytes << '\t'
-                    << measured.node_tl_bytes << '\t' << measured.lite_tl_bytes << '\t' << measured.certificate_tl_bytes
-                    << '\t' << measured.boc_minus_certificate << '\t' << (valid ? "valid" : "deterministic-size")
-                    << '\n';
+    std::ostringstream line;
+    line << measured.signers << '\t' << measured.cells << '\t' << measured.depth << '\t'
+         << measured.signatures_boc_bytes << '\t' << measured.signatures_boc_sha256 << '\t'
+         << measured.block_proof_boc_bytes << '\t' << measured.node_tl_bytes << '\t' << measured.lite_tl_bytes << '\t'
+         << measured.certificate_tl_bytes << '\t' << measured.boc_minus_certificate << '\t'
+         << (valid ? "valid" : "deterministic-size");
+    measured_lines.push_back(line.str());
   }
-  measured_output << "401\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tstructural\n";
+  measured_lines.emplace_back(
+      "401\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tREFUSED\tstructural");
 
   std::ifstream input(MEASUREMENTS_FILE);
   assert(input && "the committed carrier measurement file must be readable");
-  std::string expected;
+  std::vector<std::string> expected_lines;
   std::string line;
   while (std::getline(input, line)) {
     if (!line.empty() && line[0] != '#') {
-      expected += line + '\n';
+      expected_lines.push_back(line);
     }
   }
-  const auto measured_text = measured_output.str();
-  if (measured_text != expected) {
-    std::fprintf(stderr, "MEASUREMENT_DRIFT: measured carrier bytes differ from the committed TSV\n%s",
-                 measured_text.c_str());
+  if (expected_lines.size() != measured_lines.size()) {
+    std::fprintf(stderr, "MEASUREMENT_DRIFT: committed TSV has %zu data rows; measured %zu\n", expected_lines.size(),
+                 measured_lines.size());
     return 1;
   }
-  std::fwrite(measured_text.data(), 1, measured_text.size(), stdout);
+  for (std::size_t i = 0; i < measured_lines.size(); ++i) {
+    if (measured_lines[i] != expected_lines[i]) {
+      const char* row = i == 0 ? "header" : (i + 1 == measured_lines.size() ? "401" : nullptr);
+      const auto signer = i > 0 && i + 1 < measured_lines.size() ? counts[i - 1] : 0;
+      if (row != nullptr) {
+        std::fprintf(stderr, "MEASUREMENT_DRIFT: row=%s\nexpected: %s\nmeasured: %s\n", row, expected_lines[i].c_str(),
+                     measured_lines[i].c_str());
+      } else {
+        std::fprintf(stderr, "MEASUREMENT_DRIFT: signers=%zu\nexpected: %s\nmeasured: %s\n", signer,
+                     expected_lines[i].c_str(), measured_lines[i].c_str());
+      }
+      std::fprintf(stderr, "full measured table:\n");
+      for (const auto& measured_line : measured_lines) {
+        std::fprintf(stderr, "%s\n", measured_line.c_str());
+      }
+      return 1;
+    }
+  }
+  for (const auto& measured_line : measured_lines) {
+    std::printf("%s\n", measured_line.c_str());
+  }
   return 0;
 }
