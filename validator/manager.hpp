@@ -44,6 +44,7 @@
 #include "td/utils/port/Poll.h"
 #include "td/utils/port/StdStreams.h"
 
+#include "finality-cache-policy.h"
 #include "liteserver-admission.h"
 #include "manager-init.h"
 #include "manager-resource-policy.h"
@@ -68,9 +69,14 @@ class WaitShardState;
 class WaitBlockData;
 class AppliedExtMessageCleanupActor;
 
-struct PendingBlockFinality {
+struct PendingBlockFinalityCandidate {
   td::Ref<block::BlockSignatureSet> sig_set;
   BroadcastSource source;
+};
+
+struct PendingBlockFinality {
+  static constexpr std::size_t max_candidates = 4;
+  PendingFinalityCandidates<PendingBlockFinalityCandidate, max_candidates> candidates;
 };
 
 class BlockHandleLru : public td::ListNode {
@@ -613,6 +619,9 @@ class ValidatorManagerImpl : public ValidatorManager {
   void add_shard_block_description(td::Ref<ShardTopBlockDescription> desc);
   void add_cached_block_data(BlockIdExt block_id, td::BufferSlice data);
   void try_process_pending_block_finality(BlockIdExt block_id);
+  void checked_pending_block_finality(BlockIdExt block_id, BlockBroadcast broadcast, BroadcastSource source,
+                                      bool was_final, td::Result<td::Unit> result);
+  void processed_pending_block_finality(BlockIdExt block_id, bool was_final, td::Result<td::Unit> result);
   void preload_msg_queue_to_masterchain(td::Ref<ShardTopBlockDescription> desc, td::Promise<td::Unit> promise);
   void loaded_msg_queue_to_masterchain(td::Ref<ShardTopBlockDescription> desc, td::Ref<OutMsgQueueProof> res,
                                        td::Promise<td::Unit> promise);

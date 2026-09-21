@@ -663,16 +663,12 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
     co_return td::Unit{};
   }
 
-  auto cached = pending_block_finality_.get_if_exists(finality.block_id, false);
-  if (!should_replace_pending_finality(cached != nullptr, cached != nullptr && cached->sig_set->is_final(),
-                                       finality.sig_set->is_final())) {
-    co_return td::Unit{};
-  }
-
   // A finality-only broadcast does not carry the verified header coordinates needed to
-  // derive the trusted PQ session.  Keep bounded, structurally checked PQ evidence pending
-  // until the block arrives; ValidateBroadcast then derives the context from its proof and
-  // performs the authoritative check.  Classical evidence can still be checked immediately.
+  // derive the trusted PQ session. Keep a bounded arrival-ordered set of structurally checked,
+  // explicitly unverified PQ candidates until the block arrives. ValidateBroadcast then derives
+  // the context from its proof and tries each candidate until one is genuinely valid. Classical
+  // evidence can still be checked immediately and is marked verified before cache admission.
+  bool signatures_verified = false;
   if (!finality.sig_set->is_pq()) {
     auto status =
         co_await check_finality_signatures(finality.block_id, finality.sig_set, last_masterchain_state_).wrap();
@@ -680,16 +676,33 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
       VLOG(VALIDATOR_WARNING) << "dropping block finality broadcast: " << status.move_as_error();
       co_return td::Unit{};
     }
+    signatures_verified = true;
+  }
 
-    if (!finality.block_id.is_masterchain() && finality.sig_set->is_final() && has_local_validator_keys()) {
-      generate_shard_block_description(finality.block_id, finality.sig_set).start().detach();
-    }
-    if (!finality.block_id.is_masterchain() && finality.sig_set->is_final()) {
-      process_accepted_nonfinal_block(finality.block_id, finality.sig_set->get_catchain_seqno()).start().detach();
+  auto block_id = finality.block_id;
+  auto incoming_is_final = finality.sig_set->is_final();
+  auto cached = pending_block_finality_.get_if_exists(block_id, false);
+  if (cached == nullptr) {
+    PendingBlockFinality pending;
+    pending.candidates.admit(PendingBlockFinalityCandidate{finality.sig_set, source}, signatures_verified,
+                             incoming_is_final);
+    pending_block_finality_.put(block_id, std::move(pending));
+  } else {
+    auto action = cached->candidates.admit(
+        PendingBlockFinalityCandidate{finality.sig_set, source}, signatures_verified, incoming_is_final);
+    if (action == PendingFinalityAdmission::Keep) {
+      VLOG(VALIDATOR_DEBUG) << "dropping block finality broadcast because its bounded candidate set did not admit it: "
+                            << block_id.to_str();
+      co_return td::Unit{};
     }
   }
-  pending_block_finality_.put(finality.block_id, PendingBlockFinality{std::move(finality.sig_set), source});
-  try_process_pending_block_finality(finality.block_id);
+  if (signatures_verified && !block_id.is_masterchain() && incoming_is_final && has_local_validator_keys()) {
+    generate_shard_block_description(block_id, finality.sig_set).start().detach();
+  }
+  if (signatures_verified && !block_id.is_masterchain() && incoming_is_final) {
+    process_accepted_nonfinal_block(block_id, finality.sig_set->get_catchain_seqno()).start().detach();
+  }
+  try_process_pending_block_finality(block_id);
   co_return td::Unit{};
 }
 
@@ -866,8 +879,9 @@ void ValidatorManagerImpl::add_cached_block_data(BlockIdExt block_id, td::Buffer
 void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_id) {
   auto candidate = block_id.is_masterchain() ? cached_masterchain_block_candidates_.get_if_exists(block_id)
                                              : cached_block_data_.get_if_exists(block_id);
-  auto finality = pending_block_finality_.get_if_exists(block_id);
-  if (candidate == nullptr || finality == nullptr || last_masterchain_state_.is_null()) {
+  auto pending = pending_block_finality_.get_if_exists(block_id);
+  if (candidate == nullptr || pending == nullptr || pending->candidates.empty() || pending->candidates.processing() ||
+      last_masterchain_state_.is_null()) {
     return;
   }
 
@@ -884,11 +898,17 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
     return;
   }
 
+  auto finality = pending->candidates.begin_processing();
+  if (finality == nullptr) {
+    return;
+  }
   td::Result<td::BufferSlice> proof =
       block_id.is_masterchain()
-          ? WaitBlockData::generate_proof(block_id, block.ok()->root_cell(), finality->sig_set, last_masterchain_state_)
+          ? WaitBlockData::generate_proof(block_id, block.ok()->root_cell(), finality->evidence.sig_set,
+                                          last_masterchain_state_)
           : WaitBlockData::generate_proof_link(block_id, block.ok()->root_cell());
   if (proof.is_error()) {
+    pending->candidates.cancel_processing();
     auto error = proof.move_as_error();
     if (error.code() == ErrorCode::notready) {
       VLOG(VALIDATOR_DEBUG) << "failed to create pending block proof for " << block_id.to_str() << ": " << error;
@@ -903,27 +923,88 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
     return;
   }
 
-  auto sig_set = finality->sig_set;
-  auto finality_source = finality->source;
-  if (block_id.is_masterchain()) {
-    cached_masterchain_block_candidates_.erase(block_id);
-  }
-  pending_block_finality_.erase(block_id);
+  auto sig_set = finality->evidence.sig_set;
+  auto finality_source = finality->evidence.source;
+  auto was_final = finality->is_final;
   BlockBroadcast broadcast{block_id, std::move(sig_set), std::move(data), proof.move_as_ok()};
   const bool signatures_checked = !broadcast.sig_set->is_pq();
+  if (!signatures_checked) {
+    auto broadcast_for_validation = broadcast.clone();
+    validate_block_broadcast_signatures(
+        std::move(broadcast_for_validation),
+        [SelfId = actor_id(this), block_id, broadcast = std::move(broadcast), finality_source,
+         was_final](td::Result<td::Unit> result) mutable {
+          td::actor::send_closure(SelfId, &ValidatorManagerImpl::checked_pending_block_finality, block_id,
+                                  std::move(broadcast), finality_source, was_final, std::move(result));
+        });
+    return;
+  }
   new_block_broadcast(std::move(broadcast), signatures_checked, finality_source,
-                      [block_id](td::Result<td::Unit> R) mutable {
-                        if (R.is_error()) {
-                          auto error = R.move_as_error();
-                          if (error.code() == ErrorCode::notready || error.code() == ErrorCode::timeout) {
-                            VLOG(VALIDATOR_DEBUG) << "dropped pending block finality broadcast for "
-                                                  << block_id.to_str() << ": " << error;
-                          } else {
-                            VLOG(VALIDATOR_INFO) << "dropped pending block finality broadcast for " << block_id.to_str()
-                                                 << ": " << error;
-                          }
-                        }
+                      [SelfId = actor_id(this), block_id, was_final](td::Result<td::Unit> result) mutable {
+                        td::actor::send_closure(SelfId, &ValidatorManagerImpl::processed_pending_block_finality,
+                                                block_id, was_final, std::move(result));
                       });
+}
+
+void ValidatorManagerImpl::checked_pending_block_finality(BlockIdExt block_id, BlockBroadcast broadcast,
+                                                           BroadcastSource source, bool was_final,
+                                                           td::Result<td::Unit> result) {
+  auto pending = pending_block_finality_.get_if_exists(block_id);
+  if (pending == nullptr || !pending->candidates.processing()) {
+    return;
+  }
+  if (result.is_error()) {
+    auto error = result.move_as_error();
+    pending->candidates.complete_front(false);
+    VLOG(VALIDATOR_INFO) << "rejected unverified pending block finality candidate for " << block_id.to_str() << ": "
+                         << error;
+    if (pending->candidates.empty()) {
+      pending_block_finality_.erase(block_id);
+    } else {
+      try_process_pending_block_finality(block_id);
+    }
+    return;
+  }
+  pending->candidates.mark_front_verified();
+  new_block_broadcast(std::move(broadcast), true, source,
+                      [SelfId = actor_id(this), block_id, was_final](td::Result<td::Unit> apply_result) mutable {
+                        td::actor::send_closure(SelfId, &ValidatorManagerImpl::processed_pending_block_finality,
+                                                block_id, was_final, std::move(apply_result));
+                      });
+}
+
+void ValidatorManagerImpl::processed_pending_block_finality(BlockIdExt block_id, bool was_final,
+                                                             td::Result<td::Unit> result) {
+  auto pending = pending_block_finality_.get_if_exists(block_id);
+  if (pending == nullptr || !pending->candidates.processing()) {
+    return;
+  }
+  bool accepted = result.is_ok();
+  if (!accepted) {
+    pending->candidates.cancel_processing();
+    auto error = result.move_as_error();
+    if (error.code() == ErrorCode::notready || error.code() == ErrorCode::timeout) {
+      VLOG(VALIDATOR_DEBUG) << "failed to apply verified pending block finality for " << block_id.to_str() << ": "
+                            << error;
+    } else {
+      VLOG(VALIDATOR_INFO) << "failed to apply verified pending block finality for " << block_id.to_str() << ": "
+                           << error;
+    }
+    return;
+  }
+  pending->candidates.complete_front(true);
+  if (was_final) {
+    if (block_id.is_masterchain()) {
+      cached_masterchain_block_candidates_.erase(block_id);
+    }
+    pending_block_finality_.erase(block_id);
+    return;
+  }
+  if (pending->candidates.empty()) {
+    pending_block_finality_.erase(block_id);
+    return;
+  }
+  try_process_pending_block_finality(block_id);
 }
 
 void ValidatorManagerImpl::add_ext_server_id(adnl::AdnlNodeIdShort id) {

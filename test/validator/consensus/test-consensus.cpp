@@ -2934,12 +2934,14 @@ int main(int argc, char* argv[]) {
           overlay::BroadcastCheckResult::Forbidden);
   }
 
-  CHECK(should_replace_pending_finality(false, false, false));
-  CHECK(should_replace_pending_finality(false, false, true));
-  CHECK(!should_replace_pending_finality(true, false, false));
-  CHECK(should_replace_pending_finality(true, false, true));
-  CHECK(!should_replace_pending_finality(true, true, false));
-  CHECK(!should_replace_pending_finality(true, true, true));
+  CHECK(pending_finality_admission(false, false, false, false, false) == PendingFinalityAdmission::Replace);
+  CHECK(pending_finality_admission(false, false, false, false, true) == PendingFinalityAdmission::Replace);
+  CHECK(pending_finality_admission(true, true, false, false, false) == PendingFinalityAdmission::Keep);
+  CHECK(pending_finality_admission(true, true, false, true, true) == PendingFinalityAdmission::Replace);
+  CHECK(pending_finality_admission(true, true, true, false, false) == PendingFinalityAdmission::Keep);
+  // Equal-strength unverified finals coexist until trusted block context can
+  // identify the first cryptographically valid candidate.
+  CHECK(pending_finality_admission(true, false, true, false, true) == PendingFinalityAdmission::Append);
 
   CHECK(NewConsensusConfig{}.noncritical_params.target_rate == std::chrono::milliseconds{400});
   CHECK(NewConsensusConfig{}.protocol_version_supported());

@@ -795,6 +795,13 @@ target_include_directories(test-validator-transport-authority PRIVATE ${CMAKE_CU
 target_link_libraries(test-validator-transport-authority PRIVATE overlay tos_block tos_crypto keys tdutils tdactor adnl
                       tl_api dht)
 
+add_executable(test-pending-finality-cache test/pq-native/pending-finality-cache-test.cpp)
+target_include_directories(test-pending-finality-cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                           ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
+target_link_libraries(test-pending-finality-cache PRIVATE tos_block tos_crypto tos_mldsa44 tos_pq_consensus_signer
+                      tos_pq_consensus tl_lite_api tdutils)
+target_compile_definitions(test-pending-finality-cache PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
+
 add_executable(test-pq-lite-forward-proof test/pq-native/pq-lite-forward-proof-test.cpp)
 target_include_directories(test-pq-lite-forward-proof PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                            ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
@@ -1187,6 +1194,7 @@ tos_test(test-download-state-budget)
 tos_test(test-pq-network-parser-resource)
 tos_test(test-pq-signature-persistence)
 tos_test(test-validator-transport-authority)
+tos_test(test-pending-finality-cache)
 tos_test(test-pq-lite-forward-proof)
 tos_test(test-download-next-blocks-validation)
 tos_test(test-ext-message-pool)
