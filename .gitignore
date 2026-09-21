@@ -62,8 +62,14 @@ test/integration/.toscan-*/
 # rather than stored.
 crypto/smartcont/artifacts/
 
-# The phase-1 slice: eighteen megabytes of somebody else's ceremony, fetched by
-# scripts/shielded-pool-phase1-slice.py. Not stored here -- it is identified by
-# the hashes in doc/shielded-pool-ceremony.md and reproducible from the
-# published transcript with five range reads.
-artifacts/phase1/
+# The phase-1 slices: eighteen megabytes each of somebody else's ceremony,
+# fetched by scripts/shielded-pool-phase1-slice.py. The bytes are not stored
+# here -- they are public, reproducible from the published transcripts with
+# five range reads, and identified by the hashes in the provenance records
+# beside them.
+#
+# The records themselves ARE stored, at about 1.6 KB each. They are what lets
+# somebody who obtained the bytes by any other route -- a mirror, a torrent, a
+# colleague's disk -- check them, which they could not do if the only way to
+# get a record were to re-download the thing being checked.
+artifacts/phase1/*.bin

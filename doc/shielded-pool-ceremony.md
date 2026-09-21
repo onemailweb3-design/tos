@@ -105,34 +105,51 @@ are in each fetch's provenance record and pinned in
 
 ### Where the artifacts live, and why losing them does not matter
 
-Both slices sit in **`artifacts/phase1/`**, which `.gitignore` excludes:
+Everything lives in **`artifacts/phase1/`**, and the two kinds of file there
+are treated differently on purpose:
 
 ```
-artifacts/phase1/phase1-zcash-2m15.bin       18,874,464 bytes   1bfd7acd…
-artifacts/phase1/phase1-zcash-2m15.json
-artifacts/phase1/phase1-filecoin-2m15.bin    18,874,464 bytes   d1616146…
-artifacts/phase1/phase1-filecoin-2m15.json
+artifacts/phase1/phase1-zcash-2m15.json         1.6 KB    committed
+artifacts/phase1/phase1-filecoin-2m15.json      1.6 KB    committed
+artifacts/phase1/phase1-zcash-2m15.bin      18,874,464    ignored    1bfd7acd…
+artifacts/phase1/phase1-filecoin-2m15.bin   18,874,464    ignored    d1616146…
 ```
 
-They are deliberately **not committed**. Eighteen megabytes of somebody else's
-ceremony belongs beside a build, not in a history that everyone clones for
-ever — and there is nothing to protect, because the bytes are public and the
-hashes above are what identifies them.
+**The bytes are not committed.** Eighteen megabytes of somebody else's ceremony
+belongs beside a build, not in a history that everyone clones for ever — and
+there is nothing to protect, because the bytes are public and the record beside
+them is what identifies them.
 
-**So these files are disposable.** Delete the directory and nothing is lost:
-re-fetching gives the same bytes, and the pinned hashes are what says so.
-Zcash's takes seconds; Filecoin's takes about twenty-five minutes through its
-IPFS gateway. What is *not* disposable is the hashes — they live in this
-document and in the test, in git, and they are the reason a re-fetch can be
-checked rather than trusted.
+**So the `.bin` files are disposable.** Delete them and nothing is lost:
+re-fetching gives the same bytes, and the hashes are what says so. Zcash's
+takes seconds; Filecoin's takes about twenty-five minutes through its IPFS
+gateway.
 
-The same reasoning keeps the reference string out of the repository: seven
-seconds of arithmetic from a slice that is itself reproducible. Storing a
-derived artifact buys nothing but a second copy that can go stale.
+**The records are committed**, at about 1.6 KB each. They carry the ceremony's
+name, the ranges by offset and length, each section's SHA-256, the slice's own,
+and the custody sentence. That is what lets somebody who obtained the bytes by
+*any other route* — a mirror, a torrent, a colleague's disk — check them.
+Without the record in the repository the only way to get one would be to
+re-download the very thing being checked, which is not a check.
 
-The tests that need these files are `#[ignore]`d rather than skipping quietly
-when the directory is empty, because a test that passes while doing nothing is
-the failure this repository's `CLAUDE.md` opens with.
+The same reasoning keeps the reference string out: seven seconds of arithmetic
+from a slice that is itself reproducible, so a stored copy buys nothing but one
+that can go stale.
+
+There is one real cost to this arrangement, and it is worth naming rather than
+discovering. Zcash's original S3 host is already dead; only the Internet
+Archive copy survives. If that went too, the hashes would still identify the
+bytes but nobody might have them. Committing eighteen megabytes is not the
+answer to that — pinning the slice on IPFS, or keeping it in an asset store, is
+— but the risk is real and it is the reason the records are committed even
+though the bytes are not.
+
+The tests that need the bytes are `#[ignore]`d rather than skipping quietly,
+because a test that passes while doing nothing is the failure this
+repository's `CLAUDE.md` opens with. They look for a record with a `.bin`
+beside it rather than the first record they find, so fetching one ceremony and
+not the other works — and when no bytes are present at all they say so, and how
+to fix it, instead of naming a missing file.
 
 Getting those offsets wrong is the worst error available here: the bytes would
 parse, the points would be on the curve and in the right subgroup, and

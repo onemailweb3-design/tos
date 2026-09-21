@@ -10,17 +10,19 @@
 //! which is what lets them be broken on purpose -- and means none of them has
 //! ever seen the real thing. This one has.
 //!
-//! **Ignored by default, and on purpose.** The artifact is eighteen megabytes
-//! of somebody else's ceremony and is not in the repository, so a test that
-//! ran unconditionally would either fail for everyone who has not fetched it
-//! or, worse, skip quietly and pass. A test that passes while doing nothing is
-//! the failure this repository's `CLAUDE.md` opens with. So: fetch it, then
+//! **Ignored by default, and on purpose.** Each slice is eighteen megabytes of
+//! somebody else's ceremony, so the bytes are not in the repository -- only the
+//! 1.6 KB provenance record beside them is. A test that ran unconditionally
+//! would therefore either fail for everyone who has not fetched a slice or,
+//! worse, skip quietly and pass. A test that passes while doing nothing is the
+//! failure this repository's `CLAUDE.md` opens with. So: fetch one, then
 //!
 //!     cargo test --release --test the_real_slice -- --ignored
 //!
 //! Fetching:
 //!
 //!     uv run python scripts/shielded-pool-phase1-slice.py --out artifacts/phase1
+//!     # --transcript filecoin for the other ceremony
 
 use std::path::PathBuf;
 
@@ -64,25 +66,44 @@ fn pinned_for(transcript: &str) -> &'static Pinned {
         .unwrap_or_else(|| panic!("no pinned hashes for the {transcript} ceremony"))
 }
 
-/// Whichever slice is on disk. Either ceremony's is acceptable here; what is
-/// not acceptable is a slice nobody pinned.
+/// Whichever slice's **bytes** are on disk. Either ceremony's is acceptable
+/// here; what is not acceptable is a slice nobody pinned.
+///
+/// The records are committed and the bytes are not, so the ordinary state of a
+/// fresh checkout is "every record present, no bytes at all". That is why this
+/// looks for a record *with a file beside it* rather than taking the first
+/// record it finds: otherwise a developer who fetched only Zcash would be told
+/// that `phase1-filecoin-2m15.bin` is missing, which is true and useless.
 fn load() -> (Vec<u8>, slice::Provenance) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let directory = root.join("artifacts/phase1");
-    let missing = || -> String {
-        format!(
-            "{}\n\nFetch a slice first:\n  uv run python \
-             scripts/shielded-pool-phase1-slice.py --out artifacts/phase1",
-            directory.display()
-        )
-    };
+    let how_to_fetch = "\n\nFetch one:\n  uv run python \
+                        scripts/shielded-pool-phase1-slice.py --out artifacts/phase1\n  \
+                        (add --transcript filecoin for the other ceremony)";
+
     let mut records: Vec<PathBuf> = std::fs::read_dir(&directory)
-        .unwrap_or_else(|error| panic!("{}: {error}", missing()))
+        .unwrap_or_else(|error| panic!("{}: {error}{how_to_fetch}", directory.display()))
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
         .collect();
     records.sort();
-    let json = records.first().unwrap_or_else(|| panic!("no provenance record in {}", missing()));
+    if records.is_empty() {
+        panic!("no provenance record in {}{how_to_fetch}", directory.display());
+    }
+
+    let Some(json) = records.iter().find(|json| json.with_extension("bin").exists()) else {
+        let named: Vec<String> = records
+            .iter()
+            .filter_map(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+            .collect();
+        panic!(
+            "{} holds records for {} but the bytes for none of them. The records are committed \
+             and the slices are not, which is deliberate -- they are public, reproducible and \
+             identified by the hashes in the record.{how_to_fetch}",
+            directory.display(),
+            named.join(", ")
+        );
+    };
 
     let record: slice::Provenance = serde_json::from_slice(
         &std::fs::read(json).unwrap_or_else(|error| panic!("{}: {error}", json.display())),
