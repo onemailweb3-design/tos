@@ -91,10 +91,11 @@ Commits:
 - `b199f068243c56f81d5c9391365dc0a73805aff6` — one shared session derivation, exact Param30-cell commitment, and governing-snapshot vectors.
 - `ab4e32f743db8e8e300cc03010f2f775c4c03753` — trusted expected-session verification boundary and production caller source guard.
 - `1347c91435908902296e61b3a76470723baba2c9` — bidirectional classical-carrier inventory and removal of the dead, misleading disk-manager session helper.
+- `1897d48329ca80d21d11f0005c7b4684a1aca50b` — admission-path carrier markers classified by their actual classical-only or PQ-reachable branches.
 - `fe0896df8c8604ca6f4572e3f284bb0b0a7105e6` — session-options hashing moved below consensus to preserve link boundaries.
 
-The bidirectional classical-carrier inventory contains 50 rows covering 44
-Git-tracked paths, 85 distinct marker entries and 278 source sites.  Its earlier
+The bidirectional classical-carrier inventory contains 51 rows covering 44
+Git-tracked paths, 86 distinct marker entries and 280 source sites.  Its earlier
 408-site figure included 130 occurrences in eight untracked
 `tl/generate/auto/tl/*` build outputs.  Those derived copies are now excluded;
 their two authoritative tracked schema inputs remain inventoried.
