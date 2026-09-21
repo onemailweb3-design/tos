@@ -125,13 +125,30 @@ MUTANTS = [
         "validator_controller_sandbox",
         "every_field_of_an_authorisation",
     ),
+    # Two rules, not one, and each anchored on the line above it.
+    #
+    # There is a cosignature proof in the rotation path and another in the consensus-key
+    # binding path, and they are written identically. A single rule anchored on the throw
+    # alone matched both, and this harness refuses an ambiguous anchor rather than mutating
+    # whichever it finds first -- so from the day the second proof was added until this was
+    # split, the harness could not start, and nothing here was being checked at all.
     (
         "controller-successor-proof",
         "validator-controller-v1.fc",
-        "    throw(ctl::error::bad_cosignature);",
-        "    return ();",
+        "                          next_chain)) {\n    throw(ctl::error::bad_cosignature);",
+        "                          next_chain)) {\n    return ();",
         "validator_controller_sandbox",
         "a_root_rotation_needs_both",
+    ),
+    (
+        "controller-consensus-key-proof",
+        "validator-controller-v1.fc",
+        "                            pq::stored_signature(next_algorithm, cosignature), next_chain)) {\n"
+        "      throw(ctl::error::bad_cosignature);",
+        "                            pq::stored_signature(next_algorithm, cosignature), next_chain)) {\n"
+        "      return ();",
+        "validator_controller_sandbox",
+        "binding_a_consensus_key_needs_the_root_and_the_key_itself",
     ),
     # ---------------------------------------------------------------------------
     # The birth witness
@@ -243,16 +260,16 @@ MUTANTS = [
     (
         "elector-witness-required",
         "elector-code.fc",
-        "    if (cell_null?(controller_birth_witness)) {\n      return return_stake(s_addr, query_id, 8);\n    }",
-        "    if (false) {\n      return return_stake(s_addr, query_id, 8);\n    }",
+        "    if (cell_null?(controller_birth_witness)) {\n      return return_stake(owner_addr, query_id, 8);\n    }",
+        "    if (false) {\n      return return_stake(owner_addr, query_id, 8);\n    }",
         "elector_sandbox",
         "a_stake_carrying_another_accounts_witness",
     ),
     (
         "elector-retirement",
         "elector-code.fc",
-        "    ifnot (pq::controller_admitted?(admitted_codes, held_code)) {\n      return return_stake(s_addr, query_id, 12);\n    }",
-        "    ifnot (true) {\n      return return_stake(s_addr, query_id, 12);\n    }",
+        "    ifnot (pq::controller_admitted?(admitted_codes, held_code)) {\n      return return_stake(owner_addr, query_id, 12);\n    }",
+        "    ifnot (true) {\n      return return_stake(owner_addr, query_id, 12);\n    }",
         "elector_sandbox",
         "retiring_a_controller_code",
     ),
@@ -452,13 +469,32 @@ def main():
     if args.only:
         mutants = [m for m in mutants if m[0] == args.only]
 
+    # Every anchor is checked before anything is built, and all the broken ones are
+    # reported together.
+    #
+    # This used to be checked inside the loop, one rule at a time, after a build. So a stale
+    # anchor stopped the run at the first one it reached and said nothing about the rest --
+    # and since a run takes the better part of an hour, and this harness only runs where
+    # nothing before it has failed, two rules sat broken for weeks: one whose guard had been
+    # written a second time elsewhere in the contract, and one naming a variable that had
+    # been renamed. Nothing was measured in all that time, and nothing said so.
+    stale = []
+    for name, filename, before, _after, _binary, _filter in mutants:
+        found = (SMARTCONT / filename).read_text().count(before)
+        if found != 1:
+            stale.append(
+                f"  {name}: matches {found} places in {filename}, and must match exactly one"
+            )
+    if stale:
+        raise ValueError(
+            "these rules no longer name one place in the contract they guard:\n" + "\n".join(stale)
+        )
+
     build()
     reports, survivors = [], []
     for name, filename, before, after, binary, filter_ in mutants:
         source = SMARTCONT / filename
         original = source.read_text()
-        if original.count(before) != 1:
-            raise ValueError(f"{name}: the rule must appear exactly once in {filename}")
         try:
             source.write_text(original.replace(before, after))
             build()  # A contract that no longer compiles is not a killed mutation.
