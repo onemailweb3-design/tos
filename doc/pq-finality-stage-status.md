@@ -242,7 +242,7 @@ Commit:
 
 | Design gate | Registered subject test | Proves | Does not prove |
 |---|---|---|---|
-| `n5-pq-transport-authority` | `test-validator-transport-authority` | A PQ descriptor authorizes its explicit Ed25519 ADNL ID; a held matching key issues a certificate; permanent/other keys do not; consensus rotation preserves and ADNL rotation changes authority; startup/add/delete/expiry/overlap/no-key registry behavior holds. | A live fast-sync overlay graph, or rejection when fast-sync roots are changed to a wrong non-`classical_key()` source. |
+| `n5-pq-transport-authority` | `test-validator-transport-authority` | A PQ descriptor authorizes its explicit Ed25519 ADNL ID; a held matching key issues a certificate; `validator_id` and unrelated permanent-key roots cannot authorize or issue it on the fast-sync path; consensus rotation preserves and ADNL rotation changes authority; startup/add/delete/expiry/overlap/no-key registry behavior holds. | A live fast-sync overlay graph. |
 | `n5-no-classical-finality-fallback` | `consensus-no-fallback` plus workflow `.github/workflows/classical-key-inventory.yml` | Consensus source has no keyring-signing fallback, and every `classical_key()` use is inventoried with no `aborts-on-pq` row. | Arbitrary wrong-source substitutions that do not spell `classical_key()`. |
 
 Mutations observed:
@@ -255,9 +255,11 @@ Mutations observed:
   `classical-key check failed: validator/full-node-fast-sync-overlays.cpp reads a classical key (1 sites) and is not in the inventory`.
 
 The focused behavior test covers the full-node authority helper.  Fast-sync uses
-the same `validator_transport_root` helper and is source-inventoried, but it has
-no equivalent behavior negative for substituting `validator_id` or a permanent
-Ed25519 identity without using `classical_key()`.
+the production `fast_sync_validator_transport_authority` extraction used by the
+overlay update path.  Its positive proves the matching ADNL key can issue an
+authorized certificate; separate negatives prove that sourcing roots from
+`validator_id` or an unrelated permanent Ed25519 key cannot authorize that
+certificate or select the held ADNL signer.
 
 ## Section 10: lite proof chain and accepted-chain checklist
 
@@ -325,14 +327,7 @@ The following are gaps, not green claims.
    covered by the available integration harness; it is not evidence that the caller
    works merely because adjacent end-to-end tests are green.
 
-2. **Wrong transport-root sources other than `classical_key()` are not generally guarded.**
-   The bidirectional inventory catches a revert to `classical_key()`.  The focused
-   full-node test also proves an unrelated permanent Ed25519 key is outside the
-   authorized roots.  Fast-sync has no equivalent behavior negative for replacing
-   its root source with `validator_id` or another permanent key.  This is a missing
-   test, not a claim that it cannot be tested.
-
-3. **Three API/tooling consumers remain incomplete.**
+2. **Three API/tooling consumers remain incomplete.**
 
    - `toslib/toslib/ToslibClient.cpp` explicitly returns
      `post-quantum block signatures are not supported by toslib yet`; this is a
@@ -347,17 +342,17 @@ The following are gaps, not green claims.
      it cannot itself turn a PQ value into an empty classical list.  This is
      unfinished static type support, not a second silent downgrade.
 
-4. **Carrier route rows are resolved.**
+3. **Carrier route rows are resolved.**
    No `UNKNOWN` row remains in `block-signature-carrier-routes.tsv`; compressed-V2
    complete objects are measured at 1/21/100/400 and marked `STATIC FIT`.
 
-5. **A live overlay peer graph is not exercised by the carrier gates.**
+4. **A live overlay peer graph is not exercised by the carrier gates.**
    The capacity gate calls the production admission functions, and the semantic
    gate serializes, parses, and verifies complete objects, but neither stands up
    a live overlay peer graph.  This is a harness boundary, not an unresolved row
    in the route table.
 
-6. **Section 10.5 is only partially met.**
+5. **Section 10.5 is only partially met.**
    The old carrier-missing normal path is gone, accepted blocks and finalized
    markers continue, the two disabled accepted-chain scenarios are restored, and
    the PQ loss/restart/partition/byzantine/adversarial variants remain registered.
@@ -380,7 +375,7 @@ The following are gaps, not green claims.
    required crash property.  These are missing scenarios, not a claim that the
    properties are intrinsically untestable.
 
-7. **Mutation transcripts are not repository artifacts.**
+6. **Mutation transcripts are not repository artifacts.**
    This file records the exact failure lines retained in the implementation/review
    record.  Two early C++ reason-shadowing mutations retained only their exact
    `VECTOR_REASON_MISMATCH` marker, not the full dynamic suffix.  Reproducing raw

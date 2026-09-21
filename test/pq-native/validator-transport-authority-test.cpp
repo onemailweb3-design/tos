@@ -71,10 +71,12 @@ int main() {
                              transport_id.bits256_value()};
   tos::ValidatorDescr after{validator_id, 1, key_id_after, std::string(1312, '\x22'), 10,
                             transport_id.bits256_value()};
-  auto roots = tos::validator::canonical_validator_transport_roots(
-      {tos::validator::validator_transport_root(before)});
+  auto fast_sync_authority = tos::validator::fast_sync_validator_transport_authority({before});
+  auto &roots = fast_sync_authority.roots;
   require(roots.size() == 1 && roots[0] == transport_id.pubkey_hash(),
-          "post-quantum descriptor did not authorize its explicit ADNL identity");
+          "fast-sync post-quantum descriptor did not authorize its explicit ADNL identity");
+  require(fast_sync_authority.validator_adnl_ids == std::vector{transport_id},
+          "fast-sync validator membership did not use the explicit ADNL identity");
 
   tos::validator::ValidatorAdnlRefCounts local_validator_adnl_ids;
   require(tos::validator::add_validator_adnl_reference(local_validator_adnl_ids, transport_id),
@@ -83,7 +85,23 @@ int main() {
   require(certificate.has_value(), "matching validator ADNL key did not issue a certificate");
   require(certificate->check_signature(recipient_id).is_ok(), "issued validator ADNL certificate did not verify");
   require(authorized(roots, *certificate), "issued validator ADNL certificate is outside the authorized roots");
-  std::cout << "CERTIFICATE_ISSUED: validator ADNL signer selected and authorized\n";
+  std::cout << "FAST_SYNC_CERTIFICATE_ISSUED: validator ADNL signer selected and authorized\n";
+
+  auto validator_id_roots =
+      tos::validator::canonical_validator_transport_roots({tos::PublicKeyHash{validator_id.value}});
+  require(!authorized(validator_id_roots, *certificate),
+          "fast-sync validator_id root authorized the validator ADNL certificate");
+  require(!issue_certificate(validator_id_roots, local_validator_adnl_ids, transport_key, recipient_id).has_value(),
+          "fast-sync validator_id root issued a certificate with the validator ADNL key");
+  std::cout << "FAST_SYNC_CERTIFICATE_NOT_ISSUED: validator_id is not transport authority\n";
+
+  auto permanent_key_roots =
+      tos::validator::canonical_validator_transport_roots({permanent_key.compute_short_id()});
+  require(!authorized(permanent_key_roots, *certificate),
+          "fast-sync unrelated permanent-key root authorized the validator ADNL certificate");
+  require(!issue_certificate(permanent_key_roots, local_validator_adnl_ids, transport_key, recipient_id).has_value(),
+          "fast-sync unrelated permanent-key root issued a certificate with the validator ADNL key");
+  std::cout << "FAST_SYNC_CERTIFICATE_NOT_ISSUED: unrelated permanent key is not transport authority\n";
 
   tos::validator::ValidatorAdnlRefCounts old_permanent_source;
   tos::validator::add_validator_adnl_reference(

@@ -13,6 +13,11 @@ namespace tos::validator {
 
 using ValidatorAdnlRefCounts = std::map<adnl::AdnlNodeIdShort, std::size_t>;
 
+struct FastSyncValidatorTransportAuthority {
+  std::vector<PublicKeyHash> roots;
+  std::vector<adnl::AdnlNodeIdShort> validator_adnl_ids;
+};
+
 // Overlay membership is an Ed25519 transport authority. A post-quantum
 // consensus key, stable validator identity, and historical permanent key are
 // deliberately outside this namespace.
@@ -40,6 +45,28 @@ inline std::vector<PublicKeyHash> canonical_validator_transport_roots(std::vecto
   std::sort(roots.begin(), roots.end());
   roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
   return roots;
+}
+
+// Fast-sync overlays authorize certificates and direct validator membership from
+// the same descriptor field. Keeping this extraction in one production helper is
+// what makes a wrong namespace (validator_id, consensus key, or permanent key)
+// observable as a behavioral failure rather than two internally consistent lists.
+inline FastSyncValidatorTransportAuthority fast_sync_validator_transport_authority(
+    const std::vector<ValidatorDescr> &validators) {
+  FastSyncValidatorTransportAuthority result;
+  result.roots.reserve(validators.size());
+  result.validator_adnl_ids.reserve(validators.size());
+  for (const auto &validator : validators) {
+    auto root = validator_transport_root(validator);
+    result.roots.push_back(root);
+    result.validator_adnl_ids.emplace_back(root);
+  }
+  result.roots = canonical_validator_transport_roots(std::move(result.roots));
+  std::sort(result.validator_adnl_ids.begin(), result.validator_adnl_ids.end());
+  result.validator_adnl_ids.erase(
+      std::unique(result.validator_adnl_ids.begin(), result.validator_adnl_ids.end()),
+      result.validator_adnl_ids.end());
+  return result;
 }
 
 inline PublicKeyHash select_validator_transport_signer(const std::vector<PublicKeyHash> &roots,

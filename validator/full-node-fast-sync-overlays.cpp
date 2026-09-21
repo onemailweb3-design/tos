@@ -630,24 +630,19 @@ void FullNodeFastSyncOverlays::update_overlays(
   if (!last_key_block_seqno_ || last_key_block_seqno_.value() != state->last_key_block_id().seqno()) {
     updated_validators = true;
     last_key_block_seqno_ = state->last_key_block_id().seqno();
-    root_public_keys_.clear();
-    current_validators_adnl_.clear();
+    std::vector<ValidatorDescr> validators;
     // Previous, current and next validator sets
     for (int i = -1; i <= 1; ++i) {
       auto val_set = state->get_total_validator_set(i);
       if (val_set.is_null()) {
         continue;
       }
-      for (const ValidatorDescr &val : val_set->export_vector()) {
-        root_public_keys_.push_back(validator_transport_root(val));
-        current_validators_adnl_.emplace_back(block::validator_adnl_identity(val));
-      }
+      auto set_validators = val_set->export_vector();
+      validators.insert(validators.end(), set_validators.begin(), set_validators.end());
     }
-    std::sort(root_public_keys_.begin(), root_public_keys_.end());
-    root_public_keys_.erase(std::unique(root_public_keys_.begin(), root_public_keys_.end()), root_public_keys_.end());
-    std::sort(current_validators_adnl_.begin(), current_validators_adnl_.end());
-    current_validators_adnl_.erase(std::unique(current_validators_adnl_.begin(), current_validators_adnl_.end()),
-                                   current_validators_adnl_.end());
+    auto authority = fast_sync_validator_transport_authority(validators);
+    root_public_keys_ = std::move(authority.roots);
+    current_validators_adnl_ = std::move(authority.validator_adnl_ids);
 
     for (auto &[local_id, overlays_info] : id_to_overlays_) {
       overlays_info.is_validator_ =
