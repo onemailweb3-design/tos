@@ -50,6 +50,7 @@ CRATE = ROOT / 'tools/shielded-pool-ceremony'
 CONTRIBUTION = CRATE / 'src/contribution.rs'
 SECRET = CRATE / 'src/secret.rs'
 ENTROPY = CRATE / 'src/entropy.rs'
+RECORD = CRATE / 'src/record.rs'
 
 # Deliberately not backed by a test. See the module docstring.
 UNTESTED = '<no test: rests on the security proof, not on this suite>'
@@ -193,6 +194,27 @@ CASES = [
          '        formatter.write_str("Secret(<withheld>)")',
          '        write!(formatter, "Secret({})", self.value.into_bigint())',
          'secret::tests::the_value_is_not_in_the_debug_output'),
+
+    # What a ceremony leaves on disk. None of this is cryptography and all of
+    # it is what an auditor is handed, so a directory that lies quietly is as
+    # bad as a pairing that passes wrongly.
+    Case('record-overwrite', 'a ceremony may be begun over an existing one', RECORD,
+         '        if self.exists() {', '        if false {',
+         'record::tests::beginning_over_an_existing_ceremony_is_refused'),
+    Case('record-key-digest', 'the key is not held to the digest the record states', RECORD,
+         '        if actual != recorded {', '        if false {',
+         'record::tests::a_key_that_does_not_match_its_record_is_refused'),
+    Case('record-ragged', 'a contributions file of any length is accepted', RECORD,
+         '        if bytes.len() % CONTRIBUTION_BYTES != 0 {', '        if false {',
+         'record::tests::a_contributions_file_of_the_wrong_length_is_refused'),
+    Case('record-protocol', "another protocol's record is read as this one", RECORD,
+         '        if record.protocol != PROTOCOL {', '        if false {',
+         'record::tests::a_record_for_another_protocol_is_refused'),
+
+    Case('record-beacon-last', 'a beacon with contributions after it goes unnoticed', RECORD,
+         '                *position != last && matches!(entry.step, Step::Beacon { .. })',
+         '                false && *position != last && matches!(entry.step, Step::Beacon { .. })',
+         'record::tests::a_beacon_that_is_not_last_is_spotted'),
 
     # The entropy source.
     Case('entropy-constant', 'a source returning one repeated byte is used', ENTROPY,

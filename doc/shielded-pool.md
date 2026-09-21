@@ -553,23 +553,30 @@ source and no build of its own, all ten failed at baseline with
 `POSEIDON2_HASH7:-?`. That looks like a broken contract and is a missing
 assembler. They now share one resolver that finds the build.
 
-**Still not built**: the production Groth16 ceremony. Everything this
-paragraph used to list is built — section 15's withdrawal payout and its
-bounce recovery, section 16.3, the wallet and the zerostate generator — and a
+**Still not run**: the production Groth16 ceremony. Everything this paragraph
+used to list is built — section 15's withdrawal payout and its bounce
+recovery, section 16.3, the wallet and the zerostate generator — and a
 withdrawal now runs end to end in the sandbox, is refused, bounces, and comes
 back as a recovery note, with every figure above measured on that path. What
-is not built is a verifying key anyone should trust with money: the
-development key comes from a single-party setup, so **no proof under a
-production key has ever been produced**, and nothing here is evidence about
-one.
+does not exist is a verifying key anyone should trust with money: the
+development key comes from a single-party setup whose seed is in the source,
+so **no proof under a production key has ever been produced**, and nothing
+here is evidence about one.
 
-Phase 1 is **done**: the circuit needs a 2^15 domain, and a slice that size
-has been fetched from the Zcash Sapling powers of tau, verified as a
-well-formed powers-of-tau string, and turned into the Lagrange basis a setup
-consumes. The phase-2 circuit-specific contribution has to be ours and is the
-only remaining engineering task. `doc/shielded-pool-ceremony.md` holds the
-plan; the choice between the Zcash and Filecoin ceremonies, and the audit of
-the round counts behind it, are in
+The *machinery* is now built and exercised end to end. Phase 1 is a 2^15 slice
+fetched from the Zcash Sapling powers of tau, committed, verified as a
+well-formed powers-of-tau string and turned into the Lagrange basis a setup
+consumes. Phase 2 is a multi-party computation written against arkworks, with
+four binaries a ceremony is actually run from, and the whole pipeline —
+committed slice, starting key, contributions, beacon, 1,248 bytes — has been
+driven into a deployed pool that accepted a real private transfer, while the
+same pool refused a proof made under the pre-ceremony key.
+
+So what remains is not engineering. It is **participants**, a **beacon named
+before the ceremony opens**, a second independent verifier, and the two circuit
+questions that have to be answered before a verifying key is frozen.
+`doc/shielded-pool-ceremony.md` holds all of it; the choice between the Zcash
+and Filecoin ceremonies, and the audit of the round counts behind it, are in
 `memo/privacy/measurements/zcash-transcript-audit-20260921/`.
 
 ## What gates this branch

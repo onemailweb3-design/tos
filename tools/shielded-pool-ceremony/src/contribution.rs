@@ -327,26 +327,13 @@ fn apply(
     delta: &Fr,
     blind: &Fr,
 ) -> Result<Contribution> {
+    let contribution = build(key.delta_g1, key.vk.delta_g2, transcript, delta, blind)?;
+
     // Knowing this is knowing the secret, so it is wiped before the function
     // returns rather than left on the stack for the next frame to inherit.
     let mut inverse = delta
         .inverse()
         .ok_or_else(|| Error::Structure("the contribution scalar has no inverse".into()))?;
-
-    let s = (G1Affine::generator() * blind).into_affine();
-    let s_delta = (s * delta).into_affine();
-    let challenge = challenge_point(transcript, &s, &s_delta)?;
-    let r_delta = (challenge * delta).into_affine();
-
-    let delta_g1 = (key.delta_g1 * delta).into_affine();
-    let delta_g2 = (key.vk.delta_g2 * delta).into_affine();
-    if delta_g1.is_zero() || delta_g2.is_zero() || s.is_zero() || s_delta.is_zero() {
-        return Err(Error::Structure(
-            "scaling produced the identity; either the scalar was zero or the key this was \
-             applied to was already degenerate"
-                .into(),
-        ));
-    }
 
     let divide = |points: &[G1Affine]| -> Vec<G1Affine> {
         let scaled: Vec<G1Projective> = points.iter().map(|point| *point * inverse).collect();
@@ -354,10 +341,42 @@ fn apply(
     };
     key.l_query = divide(&key.l_query);
     key.h_query = divide(&key.h_query);
-    key.delta_g1 = delta_g1;
-    key.vk.delta_g2 = delta_g2;
+    key.delta_g1 = contribution.delta_g1;
+    key.vk.delta_g2 = contribution.delta_g2;
 
     zeroize::Zeroize::zeroize(&mut inverse);
+    Ok(contribution)
+}
+
+/// A contribution's five published points, from the previous `delta` and a
+/// scalar.
+///
+/// **The only place these are computed.** It takes the previous `delta` rather
+/// than the key it came from, because that is all the points depend on -- and
+/// because an auditor recomputing a beacon step has the published `delta` of
+/// every step and none of the intermediate keys. A version of this that needed
+/// a key would quietly make the audit depend on artifacts nobody keeps.
+fn build(
+    previous_g1: G1Affine,
+    previous_g2: G2Affine,
+    transcript: &Transcript,
+    delta: &Fr,
+    blind: &Fr,
+) -> Result<Contribution> {
+    let s = (G1Affine::generator() * blind).into_affine();
+    let s_delta = (s * delta).into_affine();
+    let challenge = challenge_point(transcript, &s, &s_delta)?;
+    let r_delta = (challenge * delta).into_affine();
+
+    let delta_g1 = (previous_g1 * delta).into_affine();
+    let delta_g2 = (previous_g2 * delta).into_affine();
+    if delta_g1.is_zero() || delta_g2.is_zero() || s.is_zero() || s_delta.is_zero() {
+        return Err(Error::Structure(
+            "scaling produced the identity; either the scalar was zero or the delta this was \
+             applied to was already degenerate"
+                .into(),
+        ));
+    }
     Ok(Contribution { delta_g1, delta_g2, s, s_delta, r_delta })
 }
 
@@ -422,6 +441,12 @@ pub fn finalise(
     transcript: &Transcript,
     beacon: &[u8],
 ) -> Result<Contribution> {
+    let (delta, blind) = beacon_scalars(beacon)?;
+    apply(key, transcript, &delta, &blind)
+}
+
+/// The two scalars a beacon determines, with the length floor enforced once.
+fn beacon_scalars(beacon: &[u8]) -> Result<(Fr, Fr)> {
     if beacon.len() < MINIMUM_BEACON_BYTES {
         return Err(Error::Structure(format!(
             "a beacon of {} bytes is too short to be unpredictable; {MINIMUM_BEACON_BYTES} is the \
@@ -429,9 +454,23 @@ pub fn finalise(
             beacon.len()
         )));
     }
-    let delta = beacon_scalar(beacon, b"delta")?;
-    let blind = beacon_scalar(beacon, b"blind")?;
-    apply(key, transcript, &delta, &blind)
+    Ok((beacon_scalar(beacon, b"delta")?, beacon_scalar(beacon, b"blind")?))
+}
+
+/// The finalising contribution a beacon determines, from published data alone.
+///
+/// Takes the previous step's published `delta` -- which is in the record --
+/// rather than the key before the beacon, which nobody keeps. This is what
+/// lets the whole ceremony, beacon included, be audited from the record and
+/// the finished key.
+pub fn beacon_contribution(
+    previous_g1: G1Affine,
+    previous_g2: G2Affine,
+    transcript: &Transcript,
+    beacon: &[u8],
+) -> Result<Contribution> {
+    let (delta, blind) = beacon_scalars(beacon)?;
+    build(previous_g1, previous_g2, transcript, &delta, &blind)
 }
 
 /// Is this contribution the one the announced beacon determines?
@@ -441,15 +480,16 @@ pub fn finalise(
 /// a participant-chosen scalar wearing the beacon's name, and it would defeat
 /// the only thing the beacon is for.
 ///
-/// `previous` is the key as it stood before the finalising step.
+/// `previous_g1`/`previous_g2` are the `delta` the step before published --
+/// the starting key's generators when the beacon is the only step.
 pub fn verify_beacon_step(
-    previous: &ProvingKey<Bls12_381>,
+    previous_g1: G1Affine,
+    previous_g2: G2Affine,
     transcript: &Transcript,
     beacon: &[u8],
     contribution: &Contribution,
 ) -> Result<()> {
-    let mut rebuilt = previous.clone();
-    let expected = finalise(&mut rebuilt, transcript, beacon)?;
+    let expected = beacon_contribution(previous_g1, previous_g2, transcript, beacon)?;
     if expected.to_bytes() != contribution.to_bytes() {
         return Err(Error::Structure(
             "the finalising contribution is not the one this beacon determines; its scalar came \

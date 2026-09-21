@@ -929,8 +929,14 @@ fn a_beacon_finishes_a_ceremony_and_the_key_still_proves() {
     let ending = finalise(&mut key, &transcript, BEACON).expect("the beacon step");
     published.push(ending.clone());
 
-    verify_beacon_step(&before_the_beacon, &transcript, BEACON, &ending)
-        .expect("the beacon step is not the one this beacon determines");
+    verify_beacon_step(
+        before_the_beacon.delta_g1,
+        before_the_beacon.vk.delta_g2,
+        &transcript,
+        BEACON,
+        &ending,
+    )
+    .expect("the beacon step is not the one this beacon determines");
     verify_chain(&initial, &key, &published, &mut auditor())
         .expect("a ceremony ending in a beacon was rejected");
     assert!(the_key_works(&key), "the key stopped proving after the beacon");
@@ -993,7 +999,7 @@ fn a_chosen_scalar_wearing_the_beacons_name_is_caught() {
         .expect("as a chain entry it is perfectly valid, which is the point");
     rejected(
         "a participant-chosen scalar presented as the beacon's",
-        verify_beacon_step(&initial, &transcript, BEACON, &chosen),
+        verify_beacon_step(initial.delta_g1, initial.vk.delta_g2, &transcript, BEACON, &chosen),
     );
 }
 
@@ -1025,7 +1031,60 @@ fn the_beacon_step_is_bound_to_where_it_sits() {
     let elsewhere = transcript.extend(&ending);
     rejected(
         "a beacon step checked at a different position",
-        verify_beacon_step(&before, &elsewhere, BEACON, &ending),
+        verify_beacon_step(before.delta_g1, before.vk.delta_g2, &elsewhere, BEACON, &ending),
+    );
+}
+
+/// The beacon step is checkable from the **published record alone**.
+///
+/// This is the property the signature is shaped for. An auditor arriving years
+/// later has the starting key they rebuilt, the contributions, and the
+/// finished key -- and no intermediate keys, because a ceremony keeps none. So
+/// the recomputation takes the previous step's *published* delta, which is in
+/// the record, and never a key.
+///
+/// Nothing after the setup below touches a `ProvingKey`. If
+/// `verify_beacon_step` ever needs one again this stops compiling, which is
+/// the intended alarm.
+#[test]
+fn the_beacon_step_checks_out_against_the_record_and_nothing_else() {
+    let initial = starting_key();
+    let mut key = initial.clone();
+    let mut transcript = Transcript::begin(&key).expect("a transcript");
+    let first = contribute(
+        &mut key,
+        &transcript,
+        &mut Repeatable::from(b"test-only-record-only-audit-01!!"),
+    )
+    .expect("a contribution");
+    transcript = transcript.extend(&first);
+    let ending = finalise(&mut key, &transcript, BEACON).expect("the beacon step");
+
+    // From here, only what a record carries: two 672-byte blobs, the beacon's
+    // bytes, and the transcript replayed from the starting key.
+    let published = [first, ending];
+    let replayed = Transcript::begin(&initial).expect("a transcript").extend(&published[0]);
+
+    verify_beacon_step(
+        published[0].delta_g1,
+        published[0].delta_g2,
+        &replayed,
+        BEACON,
+        &published[1],
+    )
+    .expect("the beacon step did not check out from the record");
+
+    // And it still refuses the wrong thing when read this way, so the check
+    // survived losing its key.
+    rejected(
+        "a participant's contribution presented as the beacon's, checked from the record",
+        verify_beacon_step(
+            initial.delta_g1,
+            initial.vk.delta_g2,
+            &Transcript::begin(&initial).expect("a transcript"),
+            BEACON,
+            &published[0],
+        ),
     );
 }
 

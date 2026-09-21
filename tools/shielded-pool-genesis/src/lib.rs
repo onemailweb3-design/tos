@@ -392,6 +392,36 @@ pub const WITHDRAWAL_FEE: u128 = 50_000_000;
 pub const DENOMINATIONS: [u128; 4] =
     [1_000_000_000, 10_000_000_000, 100_000_000_000, 1_000_000_000_000];
 
+/// The same parameters with a ceremony's verifying key in place of the
+/// development one.
+///
+/// The last mile. A phase-2 ceremony ends with 1,248 bytes -- `phase2-verify
+/// --vk-out` writes them -- and until this existed there was no supported way
+/// to get from those bytes to a genesis state: the only path was hand-editing
+/// the development fixture, which is the sort of step that gets done once,
+/// wrongly, under time pressure.
+///
+/// Everything else comes from [`development_parameters`], so there is no
+/// second copy of the profile, the Poseidon2 manifest or the constants to
+/// drift. Only the key differs, and the key is the whole point: it changes
+/// the genesis state, so it changes the state hash, so it changes the address
+/// the pool is deployed at. That is why no address can be published before a
+/// ceremony ends.
+pub fn parameters_with_verifying_key(
+    root: &std::path::Path,
+    verifying_key: Vec<u8>,
+) -> Result<Parameters> {
+    if verifying_key.len() != VK_BYTES {
+        return Err(Error::Parameter(format!(
+            "a {}-byte verifying key, not {VK_BYTES}",
+            verifying_key.len()
+        )));
+    }
+    let mut parameters = development_parameters(root)?;
+    parameters.verifying_key = verifying_key;
+    Ok(parameters)
+}
+
 /// The parameters of the state the frozen manifest names, read out of the
 /// repository at `root`.
 ///
@@ -450,7 +480,7 @@ fn extract_verifying_key(fixture: &str) -> Result<Vec<u8>> {
     let tail = &quoted[first + 1..];
     let end = tail.find('"').ok_or_else(malformed)?;
     let digits = &tail[..end];
-    if digits.len() % 2 != 0 {
+    if !digits.len().is_multiple_of(2) {
         return Err(Error::Parameter("a verifying key of an odd number of hex digits".to_string()));
     }
     (0..digits.len() / 2)

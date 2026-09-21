@@ -435,7 +435,7 @@ wearing the beacon's name would verify perfectly well.
 ### What the evidence is
 
 `test/shielded-pool/mutations-ceremony.py` weakens one check at a time and
-requires the suite to report it **by name**. 32 mutations; 31 are killed by the
+requires the suite to report it **by name**. 37 mutations; 36 are killed by the
 test aimed at them, and one is recorded as not test-backed.
 
 The by-name rule is not pedantry. Several checks here shadow each other, and
@@ -451,6 +451,91 @@ The recorded survivor is `pok-challenge-points`: dropping the participant's own
 extractor work in the security proof this follows; no concrete forgery in the
 suite distinguishes a build without it, and inventing a test that appeared to
 would be worse than recording the gap.
+
+### And the binaries, which no Rust test touches
+
+The library's tests call `contribute` and `verify_chain` directly, on keys they
+built in memory. Everything between a person and those functions — reading a
+directory somebody else wrote, refusing to begin over an existing ceremony,
+refusing to contribute after the beacon, noticing an artifact that was altered
+on disk — is code none of them exercises, and building a binary is not running
+it.
+
+`test/shielded-pool/ceremony-cli.py` drives all four commands the way people
+will, then breaks one artifact at a time and requires a refusal *for the right
+reason*. Writing it found a real hole:
+
+> **The first contribution had nothing tying `key.bin` to the starting key.**
+> With no contributions yet there is no chain for `verify_chain` to audit, and
+> `read_key` only establishes that the file matches the record's
+> `key_sha256` — but whoever prepared the directory wrote both of those. A
+> record could carry the true `starting_key_sha256` beside a `key_sha256` for
+> some *other* valid proving key over the same circuit, and the first
+> participant would contribute to that instead, to no effect on the key
+> everyone else was working on.
+
+Closed by requiring, when the chain is empty, that the record's current key be
+the starting key this checkout rebuilt. The script now constructs exactly that
+directory and requires the refusal.
+
+### Breaking something the wrong way proves nothing
+
+This came up four separate times while writing the above, in four different
+places, and it is the single easiest mistake to make here. A test that breaks
+an artifact has to break it in a way that **only the check under test** can
+notice, and the natural way to break something is almost never that way:
+
+| broken how | refused by | what it proved about the intended check |
+|---|---|---|
+| a bit flipped in `contributions.bin` | blst, `BLST_POINT_NOT_ON_CURVE` | nothing — the point decoder |
+| `beacon.bin` swapped | the record's own `beacon_sha256` | nothing — the record's self-consistency |
+| a bit flipped in `key.bin` | `deserialize_compressed`, in a second | nothing — a corrupted curve point |
+| `b"not a key"` written as `key.bin` | the same | nothing — and this one hid behind an `||` in the assertion |
+
+The fixed versions are: **exchange** two contributions, so every point stays
+valid and only the chain can object; swap `beacon.bin` **and** rewrite
+`beacon_sha256` to match, so only the recomputation is left; and change the
+*record's* `key_sha256` rather than the key, so the key still reads and only
+the comparison between the two files can fail.
+
+Three of the four were found by the mutation battery reporting a survivor. The
+fourth was found by the battery too — `record-key-digest` stayed green — and
+its test had been written permissively enough (`contains(A) || contains(B)`) to
+pass either way, which is the shape of an assertion that has stopped asserting.
+
+Two of the script's own checks had to be sharpened for the same reason the
+mutation battery names its tests.
+
+### The whole chain, once, on the real thing
+
+Every section above is evidence about one link, and a chain of verified links
+can still be bolted together wrongly. So
+`crosscheck/tests/ceremony_end_to_end.rs` runs the whole thing and asks the
+only question that settles it:
+
+> the committed phase-1 slice -> Lagrange basis -> starting key -> two
+> contributions -> a beacon -> 1,248 bytes -> **a deployed pool that accepts a
+> real private transfer**
+
+Nothing in it is mocked or shortened. Measured on the real circuit:
+
+```
+slice: the zcash ceremony, 18874464 bytes
+starting key: 19 IC points, L 18215, H 32767
+3 contributions, 2016 bytes of published record
+ceremony key 8b3bd9e9d72af025 -> pool 0:58a21c71… -> transact exit 0 at 1144235 gas
+a proof under the pre-ceremony key: exit 262
+```
+
+The last line is the sharp one. Everything above it would also pass for a
+pipeline that quietly handed back the key it started from — and that key's
+`delta` is one, known to everyone, forgeable by anyone. A pool carrying the
+ceremony's key has to *refuse* a proof made under the pre-ceremony key, and it
+does.
+
+The key that test produces comes from labelled test seeds, so it is a
+development key and no more deployable than the one in `groth16.rs`. What it
+establishes is that the machinery produces a key the chain accepts.
 
 ### What none of it establishes
 
@@ -510,6 +595,13 @@ is a claim about a serializer.
 It reports the key's digest, its IC count, its length, the deployment address
 the key implies, and the transact's exit code.
 
+Every key in `ceremony_acceptance.rs` is built from a seed in that file, so
+until the `ceremony-gate` example existed there was no way to point the gate at
+an actual ceremony's output -- the tests never read a ceremony directory. That
+example is the missing step; `parameters_with_verifying_key` and the genesis
+binary's `--verifying-key` are the one after it. See **And then the 1,248 bytes
+become a deployment** above.
+
 Five tests establish that the gate judges rather than nods:
 
 * it accepts the key this repository ships (digest `5b760517…`);
@@ -523,16 +615,114 @@ Five tests establish that the gate judges rather than nods:
 * and two different keys give two different deployment addresses — which is
   why no address can be published before the ceremony ends.
 
+## Running a ceremony
+
+Four commands. Each one rebuilds the starting key from the committed slice
+before doing anything, which is the slow part (a couple of minutes) and the
+reason to trust the result: a participant who reads a starting key out of the
+directory has checked that their contribution was applied to *something*.
+
+```
+# the coordinator opens it
+cargo run --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml \
+    --bin phase2-begin -- /path/to/ceremony
+
+# each participant, on their own machine
+cargo run --release ... --bin phase2-contribute -- /path/to/ceremony
+#   --entropy-file <path>   stirs extra material into the draw: dice, a
+#                           hardware token, a second machine. Mixed in, never
+#                           substituted, so the result is unpredictable if
+#                           *either* source was.
+
+# the coordinator closes it, with the beacon named before it opened
+cargo run --release ... --bin phase2-finalise -- /path/to/ceremony beacon.bin
+
+# anybody, afterwards
+cargo run --release ... --bin phase2-verify -- /path/to/ceremony --vk-out vk.bin
+```
+
+`phase2-contribute` audits the chain it was handed **before** drawing anything.
+A contribution added to a chain that does not audit is wasted: the ceremony
+gets re-run and the participant's scalar — destroyed by then — cannot be used
+again.
+
+### And then the 1,248 bytes become a deployment
+
+`phase2-verify --vk-out` writes the key; two steps turn it into something to
+deploy, and both have to pass before anyone does.
+
+```
+# does the chain accept it? deploys a pool carrying exactly these bytes,
+# proves a real transfer under the ceremony's proving key, and requires exit 0
+TOS_ROOT=<a checkout with a built func/fift> \
+cargo run --release --manifest-path \
+    tools/shielded-pool-circuit/crosscheck/Cargo.toml \
+    --example ceremony-gate -- /path/to/ceremony
+
+# what would it deploy as? the key is part of the genesis state, so it fixes
+# the state hash, so it fixes the address
+cargo run --manifest-path tools/shielded-pool-genesis/Cargo.toml --bin genesis -- \
+    . out/manifest.json --verifying-key vk.bin
+```
+
+Until `--verifying-key` existed there was no supported route from a ceremony's
+output to a genesis state: the only way was hand-editing the development
+fixture, which is exactly the sort of step that gets done once, wrongly, under
+time pressure. Everything except the key still comes from
+`development_parameters`, so there is no second copy of the profile, the
+Poseidon2 manifest or the constants to drift.
+
+It is also how a *candidate* key's deployment address is found before anyone
+commits to it — and the reason no address can be published before a ceremony
+ends is that one bit of the key moves it.
+
+### What a ceremony directory holds
+
+```
+key.bin            the proving key as it now stands  (~10 MB)
+contributions.bin  every published contribution, 672 bytes each, in order
+beacon.bin         the beacon output it was closed with
+ceremony.json      what each step was, and the digests to compare
+```
+
+No intermediate key is kept. That is not a space saving, it is the shape of the
+audit: `verify_chain` needs the starting key, the record and the finished key,
+so keeping intermediates would create a second source of truth nobody checks.
+The beacon step is recomputed from `beacon.bin` and the *previous step's
+published `delta`*, so it too needs no key.
+
+There is no field anywhere for a participant's scalar, no optional file and no
+debug mode that writes one. **A ceremony directory can be published whole the
+moment it exists**, and that is the intended use.
+
+### What a participant publishes
+
+Two digests, signed, saying they drew a scalar and destroyed it:
+
+```
+contribution   <sha256 of their 672 bytes>
+transcript     <the transcript after their step>
+```
+
+The second names their position in a way nobody can move afterwards: the
+challenge every later contribution is bound to is hashed from it, so reordering
+the chain, dropping an entry or substituting one invalidates every proof after
+the change.
+
+Attribution is deliberately *not* in `ceremony.json`. A name in the record
+would look as though something had checked it.
+
 ## What is needed from people
 
 1. **Participants.** Any number; the property needed is that at least one
    destroys their randomness. Each contributes to the phase-2 transcript and
    publishes an attestation.
 2. **A random beacon** to finalise, fixed in advance: what it is, at what
-   height or time, and who witnesses it. The mechanism exists (`finalise`, and
-   `verify_beacon_step` to check it was really that beacon); what is missing is
-   the decision, and a decision taken after the ceremony has begun is worth
-   nothing.
+   height or time, and who witnesses it. The mechanism is built and
+   `phase2-verify` recomputes the finalising step from the beacon's bytes, so
+   a scalar wearing the beacon's name is caught. What no program can check is
+   *when* the beacon was chosen — and a beacon chosen after the contributions
+   are in is decoration. That decision is the thing still outstanding.
 3. **A second verifier.** Someone outside this repository running the
    acceptance gate against the produced key and getting the same digest.
 
@@ -552,9 +742,10 @@ have to be answered first:
 Neither is urgent on its own. Both become unfixable the moment the verifying
 key is frozen.
 
-## Running it
+## Running the checks
 
-The slices are in the repository, so nothing has to be fetched first.
+Not the ceremony -- that is above. These are the tests, and the slices are in
+the repository so nothing has to be fetched first.
 
 ```
 # everything, including the real slices, their hashes and the basis change
@@ -575,6 +766,19 @@ cargo test --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml \
 # the evidence that the phase-2 checks are checks: each one removed in turn,
 # and the test aimed at it required to go red by name
 uv run python test/shielded-pool/mutations-ceremony.py
+
+# the binaries, driven the way people will drive them, then broken one
+# artifact at a time. Building a binary is not running it, and no Rust test
+# here touches them: they call the library directly with keys built in memory
+uv run python test/shielded-pool/ceremony-cli.py
+
+# the whole pipeline: the committed slice through a real ceremony to a pool
+# that accepts a private transfer. Minutes, and the one that would catch a
+# mistake between two links rather than inside one
+TOS_ROOT=<a checkout with a built func/fift> \
+cargo test --release --manifest-path \
+    tools/shielded-pool-circuit/crosscheck/Cargo.toml \
+    --test ceremony_end_to_end -- --ignored --nocapture
 
 # the gate a ceremony's verifying key has to pass
 cargo test --release --manifest-path tools/shielded-pool-circuit/crosscheck/Cargo.toml \

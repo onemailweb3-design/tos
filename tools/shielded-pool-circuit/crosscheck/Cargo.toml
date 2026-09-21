@@ -19,6 +19,18 @@ ark-ff = "=0.5.0"
 # the contract itself computes. Pinned exactly; never used outside tests.
 fips204 = { version = "=0.4.6", default-features = false, features = ["ml-dsa-44", "default-rng"] }
 
+[dev-dependencies]
+# The ceremony, for one test: run a real phase-2 over the committed phase-1
+# slice and put its output through the acceptance gate. A dev-dependency
+# because the gate itself must stay usable by anyone holding a key pair,
+# whatever produced it.
+shielded-pool-ceremony = { path = "../../shielded-pool-ceremony" }
+ark-bls12-381 = "=0.5.0"
+# A seeded generator, so the end-to-end test is reproducible. Test-only by
+# construction: the ceremony library offers no seeded entropy source at all.
+rand = "=0.8.5"
+rand_chacha = "=0.3.1"
+
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"

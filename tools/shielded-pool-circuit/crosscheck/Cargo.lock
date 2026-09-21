@@ -1765,6 +1765,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "shielded-pool-ceremony"
+version = "0.1.0"
+dependencies = [
+ "ark-bls12-381",
+ "ark-ec",
+ "ark-ff",
+ "ark-groth16",
+ "ark-poly",
+ "ark-r1cs-std",
+ "ark-relations",
+ "ark-serialize",
+ "ark-snark",
+ "ark-std",
+ "blst",
+ "hex",
+ "rand",
+ "rand_chacha",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shielded-pool-circuit",
+ "zeroize",
+]
+
+[[package]]
 name = "shielded-pool-circuit"
 version = "0.1.0"
 dependencies = [
@@ -1790,10 +1815,14 @@ dependencies = [
 name = "shielded-pool-circuit-crosscheck"
 version = "0.1.0"
 dependencies = [
+ "ark-bls12-381",
  "ark-ff",
  "chain_block",
  "fips204",
+ "rand",
+ "rand_chacha",
  "serde_json",
+ "shielded-pool-ceremony",
  "shielded-pool-circuit",
  "shielded-pool-genesis",
  "shielded-pool-wallet",

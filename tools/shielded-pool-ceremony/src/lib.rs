@@ -34,7 +34,18 @@
 //!   standalone audit that needs only the starting key, the published
 //!   contributions and the finished key -- no intermediate keys at all;
 //! * [`entropy`] and [`secret`] -- where a contribution's scalar comes from,
-//!   and why it never leaves the function that draws it.
+//!   and why it never leaves the function that draws it;
+//! * [`committed`] -- the slice this repository ships, and the one
+//!   construction of the circuit every caller uses, so two keys over "the same
+//!   circuit" cannot come out different;
+//! * [`record`] -- what a ceremony leaves on disk, which is everything an
+//!   auditor needs and nothing a participant has to keep secret.
+//!
+//! The binaries are the ceremony itself: `phase2-begin`, `phase2-contribute`,
+//! `phase2-finalise` and `phase2-verify`. Each rebuilds the starting key from
+//! the committed slice before doing anything, which is slow on purpose --
+//! reading it from the ceremony directory would check that a contribution was
+//! applied to *something*.
 //!
 //! `ark-groth16` 0.5 has no MPC module -- checked in its source, not assumed
 //! -- and the two mature implementations, Filecoin's `phase2` and gnark's
@@ -62,6 +73,7 @@
 //! produces: the `h` query is 32,767 long and so is the transform's, because
 //! they are the same object.
 
+pub mod committed;
 pub mod contribution;
 pub mod entropy;
 pub mod error;
@@ -69,15 +81,14 @@ pub mod lagrange;
 pub mod layout;
 pub mod phase2;
 pub mod points;
+pub mod record;
 pub mod secret;
 pub mod slice;
 pub mod verify;
 
 pub use error::{Error, Result};
 
-use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem};
 use shielded_pool_circuit::circuit::ShieldedTransactionCircuit;
-use shielded_pool_circuit::field::Fr;
 
 /// The R1CS shape the ceremony has to cover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,14 +135,16 @@ impl Shape {
 /// Measured, never configured. If the circuit grows past 32,768 the slice
 /// moves to a different set of byte ranges and every fetched byte is the wrong
 /// one, so this is the number the rest of the ceremony is derived from.
+///
+/// Measured **the way the setup measures it**, by going through
+/// [`phase2::matrices`]: setup mode, the constraint optimisation goal, and
+/// `finalize` before counting. This used to synthesise in the default proving
+/// mode without finalising, which is a different measurement of the same
+/// circuit in two ways that both happen to agree today -- and it could not run
+/// at all on a circuit with no witness, which is exactly the shape a setup is
+/// handed. A number that describes what the ceremony must cover has to come
+/// from the synthesis the ceremony performs.
 pub fn shape(circuit: ShieldedTransactionCircuit) -> Result<Shape> {
-    let cs = ConstraintSystem::<Fr>::new_ref();
-    circuit
-        .generate_constraints(cs.clone())
-        .map_err(|error| Error::Layout(format!("synthesising the circuit: {error}")))?;
-    Ok(Shape {
-        constraints: cs.num_constraints(),
-        instance_variables: cs.num_instance_variables(),
-        witness_variables: cs.num_witness_variables(),
-    })
+    let (matrices, instance_variables, witness_variables) = phase2::matrices(circuit)?;
+    Ok(Shape { constraints: matrices.num_constraints, instance_variables, witness_variables })
 }
