@@ -11,7 +11,8 @@
 use super::*;
 use crate::{
     config_params::ConfigParamEnum, read_boc, write_read_and_assert, Block, BlockSignaturesSimplex,
-    BlockSignaturesVariant, Cell, ShardIdent, SliceData, TopBlockDescr, UInt256,
+    BlockSignaturesSimplexPq, BlockSignaturesVariant, Cell, ShardIdent, SliceData, TopBlockDescr,
+    UInt256,
 };
 use std::{fs::File, io::Read};
 
@@ -153,6 +154,35 @@ fn test_top_block_descr() {
     descr.append_proof(SliceData::new(vec![3, 0xF0]).into_cell().unwrap());
 
     write_read_and_assert(descr);
+}
+
+#[test]
+fn test_top_block_descr_pq_accessors_and_roundtrip() {
+    let block_id = BlockIdExt::with_params(
+        ShardIdent::default(),
+        3784686,
+        UInt256::from([3; 32]),
+        UInt256::from([4; 32]),
+    );
+    let mut candidate = vec![0u8; 120];
+    candidate[..4].copy_from_slice(&0x8354_642du32.to_le_bytes());
+    let signatures = BlockSignaturesSimplexPq {
+        validator_info: ValidatorBaseInfo::with_params(12313, 4546),
+        sig_count: 0,
+        sig_weight: 0,
+        signatures: Vec::new(),
+        session_id: UInt256::from([5; 32]),
+        slot: 17,
+        candidate_data: BlockSignaturesSimplex::bytes_to_cell_tree(&candidate).unwrap(),
+    };
+    let mut descr = TopBlockDescr::with_id_and_simplex_pq_signatures(block_id, signatures);
+    descr.append_proof(SliceData::new(vec![1, 0xF0]).into_cell().unwrap());
+
+    let cell = descr.serialize().unwrap();
+    let parsed = TopBlockDescr::construct_from_cell(cell).unwrap();
+    assert!(parsed.simplex_pq_signatures().unwrap().is_some());
+    assert!(parsed.ordinary_signatures().is_err());
+    assert!(parsed.simplex_signatures().is_err());
 }
 
 // ============= BlockSignaturesSimplex tests =============

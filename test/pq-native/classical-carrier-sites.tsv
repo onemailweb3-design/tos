@@ -44,9 +44,9 @@ tosctl/src/block-json/src/deserialize.rs	*	4	historical	offline JSON decoder con
 tosctl/src/block-json/src/serialize.rs	*	2	historical	offline JSON encoder reports explicit classical block-proof variants
 tosctl/src/block-json/src/tests/test_deserialize.rs	*	10	historical	JSON classical carrier fixtures
 tosctl/src/block-json/src/tests/test_serialize.rs	*	6	historical	JSON classical carrier fixtures
-tosctl/src/block/src/blocks.rs	*	11	reachable	TopBlockDescr classical constructors/accessors remain live; the typed persistence consumer unit owns them
+tosctl/src/block/src/blocks.rs	*	13	historical	TopBlockDescr preserves #13 through its primary and PQ accessors; classical-only accessors now fail loudly on PQ
 tosctl/src/block/src/signature.rs	*	30	definition	the Rust #11/#12 codecs, variants and guarded classical verifier
-tosctl/src/block/src/tests/test_signature.rs	*	53	historical	Rust byte-layout, parse, serialize and verification fixtures for #11/#12
+tosctl/src/block/src/tests/test_signature.rs	*	54	historical	Rust byte-layout and round-trip fixtures; classical sites remain historical while the PQ TopBlockDescr path is exercised explicitly
 tosctl/src/block/src/tests/test_validators.rs	*	1	historical	classical validator-signature verification fixture
 tosctl/src/tl/api/src/tos/dynamic.rs	*	4	definition	generated dynamic dispatch for node/lite classical TL variants
 tosctl/src/tl/api/src/tos/lite_server/mod.rs	*	14	definition	generated Rust enum and codec retains classical lite variants alongside simplexPq
@@ -63,10 +63,8 @@ validator/full-node-custom-overlays.cpp	*	1	reachable	custom overlay uses the ch
 validator/full-node-fast-sync-overlays.cpp	*	1	reachable	fast-sync overlay uses the checked dual-carrier parser; outbound PQ materialization remains at the carrier-missing seam
 validator/full-node-serializer.cpp	*	1	reachable	broadcast deserialization accepts both carriers through checked parsing before V2 decompression; serialization retains the carrier-missing seam
 validator/full-node-shard.cpp	*	1	reachable	public overlay uses the checked dual-carrier parser; outbound PQ materialization remains at the carrier-missing seam
-validator/impl/accept-block.cpp	cpp_factory	2	placeholder	the two is_fake constructors use an empty #11 set as a null object; typed no-signatures persistence owns them
-validator/impl/accept-block.cpp	tlb_tag	1	placeholder	the is_fake persistence path writes an empty #11 object rather than evidence
 validator/impl/accept-block.cpp	carrier_io	1	historical	generic persistence serialization can emit #13; classical output remains for explicitly classical sets
-validator/impl/accept-block.cpp	verify	2	historical	generic acceptance is fail-closed for PQ without trusted context; classical verification remains for classical sets
+validator/impl/accept-block.cpp	verify	2	historical	PQ acceptance uses the trusted-session boundary; these low-level calls remain only for explicitly classical sets
 validator/impl/check-proof.cpp	*	6	historical	proof parsing and verification bind #13 to trusted context; #11/#12 remain for classical history
 validator/impl/check-proof.hpp	*	1	historical	actor entry point for the proof verification path
 validator/impl/liteserver.cpp	*	3	reachable	forward-proof construction still reaches the carrier-missing adapter; the later carrier-admission unit owns connection

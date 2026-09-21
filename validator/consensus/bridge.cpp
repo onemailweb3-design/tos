@@ -59,12 +59,13 @@ class ManagerFacadeImpl : public ManagerFacade {
   }
 
   td::actor::Task<> accept_block(BlockIdExt id, td::Ref<BlockData> data, size_t creator_idx,
-                                 td::Ref<block::BlockSignatureSet> signatures, int block_broadcast_mode,
+                                 td::Ref<block::BlockSignatureSet> signatures,
+                                 ValidatorSessionId expected_session_id, int block_broadcast_mode,
                                  int finality_broadcast_mode, bool send_shard_block_desc, bool apply) override {
     while (true) {
       auto [task, promise] = td::actor::StartedTask<>::make_bridge();
-      run_accept_block_query(id, data, {}, validator_set_, signatures, block_broadcast_mode, finality_broadcast_mode,
-                             send_shard_block_desc, apply, manager_, std::move(promise));
+      run_accept_block_query(id, data, {}, validator_set_, signatures, expected_session_id, block_broadcast_mode,
+                             finality_broadcast_mode, send_shard_block_desc, apply, manager_, std::move(promise));
       auto result = co_await std::move(task).wrap();
       if (result.is_ok() || result.error().code() == ErrorCode::cancelled) {
         break;

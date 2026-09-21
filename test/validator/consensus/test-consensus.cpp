@@ -555,7 +555,8 @@ class TestManagerFacade : public ManagerFacade {
   }
 
   td::actor::Task<> accept_block(BlockIdExt id, td::Ref<BlockData> data, size_t creator_idx,
-                                 td::Ref<block::BlockSignatureSet> signatures, int block_broadcast_mode,
+                                 td::Ref<block::BlockSignatureSet> signatures,
+                                 ValidatorSessionId expected_session_id, int block_broadcast_mode,
                                  int finality_broadcast_mode, bool send_shard_block_desc, bool apply) override;
 
   td::actor::Task<td::Ref<vm::Cell>> wait_block_state_root(BlockIdExt block_id, td::Timestamp timeout) override;
@@ -2434,8 +2435,12 @@ class TestConsensus : public td::actor::Actor {
 
 td::actor::Task<> TestManagerFacade::accept_block(BlockIdExt id, td::Ref<BlockData> data, size_t creator_idx,
                                                   td::Ref<block::BlockSignatureSet> signatures,
+                                                  ValidatorSessionId expected_session_id,
                                                   int block_broadcast_mode, int finality_broadcast_mode,
                                                   bool send_shard_block_desc, bool apply) {
+  if (signatures->is_pq() && signatures->pq_session_id().move_as_ok() != expected_session_id) {
+    co_return td::Status::Error("manager facade received a PQ carrier for an unexpected session");
+  }
   CHECK(id.shard_full() == SHARD);
   CHECK(!send_shard_block_desc);
   LOG(WARNING) << "Accept block #" << id.seqno() << " (" << (signatures->is_final() ? "final" : "notarize")
