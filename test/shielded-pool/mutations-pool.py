@@ -22,6 +22,30 @@ import sys
 # This repository, never another checkout: TOS_ROOT points at the built
 # toolchain, which may live somewhere else entirely.
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def toolchain_root() -> Path:
+    """The checkout whose `build/` holds func, fift and the fift stdlib.
+
+    Usually this tree. Not when the battery runs from a git worktree, which
+    has every source but no build of its own -- so it falls back to the main
+    checkout rather than to a hardcoded path, which is what this used to use
+    and which breaks anyone whose checkout is somewhere else.
+    """
+    if (ROOT / 'build/crypto/func').exists():
+        return ROOT
+    common = subprocess.run(
+        ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+        cwd=ROOT, capture_output=True, text=True, check=False)
+    if common.returncode == 0:
+        main = Path(common.stdout.strip()).parent
+        if (main / 'build/crypto/func').exists():
+            return main
+    raise SystemExit(
+        f'no built toolchain: neither {ROOT}/build/crypto/func nor the main '
+        "checkout's exists. Build it, or set TOS_ROOT to a checkout that has one.")
+
+
 POOL = ROOT / 'crypto/smartcont/tos-shielded-pool-v1.fc'
 ANCHORS = ROOT / 'crypto/smartcont/shielded/anchors.fc'
 # Not a contract. The recovery path's authentication rests on the executor
@@ -126,6 +150,18 @@ CASES = [
          'int transact_gas_ceiling() asm "1470000 PUSHINT";',
          'int transact_gas_ceiling() asm "1465000 PUSHINT";',
          MATURE_TRANSACT_TEST, MATURE_TRANSACT_SUITE, CROSSCHECK),
+    # A ceiling that is not the rule's, but is still above the path at every
+    # age, so nothing stops working and no cost test notices. The only thing
+    # wrong with 180,000 is that the rule gives 220,000, and a sender under it
+    # would be charged for a budget nobody derived. This is what a suite
+    # holding its own copy of the ceiling could never catch: until 2026-09-21
+    # the check compared 220,000 written in the test against 220,000 computed
+    # in the test, and passed whatever the contract said.
+    Case('gas-ceiling-off-the-rule',
+         'the deposit ceiling is not the one the production rule gives', POOL,
+         'int deposit_gas_ceiling() asm "220000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "180000 PUSHINT";',
+         'the_gas_ceiling_does_not_depend_on_how_much_money_arrived', SUITE, CONTRACTS),
 
     # Section 19 gate 17, over runs rather than single messages. These four
     # are aimed at the traffic tests in the crosscheck crate, which are the
@@ -278,7 +314,7 @@ def run_suite(suite: str = SUITE, crate: Path = CONTRACTS) -> subprocess.Complet
     env['CARGO_TERM_COLOR'] = 'never'
     # TOS_ROOT only locates the built func/fift toolchain and stdlib.fc; the
     # library under test is found from the crate manifest, inside this tree.
-    env.setdefault('TOS_ROOT', str(Path.home() / 'tos-privacy'))
+    env.setdefault('TOS_ROOT', str(toolchain_root()))
     return subprocess.run(['cargo', 'test', '--release', '--test', suite, '--',
                            '--test-threads=1'],
                           cwd=crate, capture_output=True, text=True, timeout=3600, env=env)

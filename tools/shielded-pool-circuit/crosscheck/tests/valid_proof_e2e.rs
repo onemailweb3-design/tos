@@ -26,7 +26,9 @@ use shielded_pool_circuit::circuit::{HeldNote, ShieldedTransactionCircuit, Trans
 use shielded_pool_circuit::field::Fr;
 use shielded_pool_circuit::tree::Frontier;
 use shielded_pool_circuit::{groth16, imt, notes, wire};
-use shielded_pool_circuit_crosscheck::pool::{be, dec, development_vk_bytes, Pool, DENOMINATION};
+use shielded_pool_circuit_crosscheck::pool::{
+    be, contract_gas_ceiling, dec, development_vk_bytes, Pool, DENOMINATION,
+};
 use shielded_pool_circuit_crosscheck::transact::{Anchor, AuthKey, Transact};
 use shielded_pool_circuit_crosscheck::wire::byte_chain;
 
@@ -312,19 +314,21 @@ fn a_private_transfer_with_a_proof_that_verifies() {
     let (exit, used) = pool.run(COMPUTE_FEE * 4, build(Tamper::default())).expect("transact");
     assert_eq!(exit, 0, "the transfer was refused with exit {exit}");
 
-    /// Section 14.1. The contract sets this on itself, and a sender prepays
-    /// `get_compute_fee(ceiling)` rather than what the path costs, so the
-    /// headroom is not free -- it is what every sender overpays.
-    const TRANSACT_GAS_CEILING: i64 = 1_470_000;
+    // Section 14.1. The contract sets this on itself, and a sender prepays
+    // `get_compute_fee(ceiling)` rather than what the path costs, so the
+    // headroom is not free -- it is what every sender overpays. Read out of
+    // the contract rather than copied, so lowering the contract's ceiling
+    // under the measured path fails here instead of passing.
+    let ceiling = contract_gas_ceiling("transact_gas_ceiling").expect("the transact ceiling");
     eprintln!(
-        "a successful private transfer: {used} gas, {}% of the {TRANSACT_GAS_CEILING} ceiling, \
-         {} to spare",
-        used * 100 / TRANSACT_GAS_CEILING,
-        TRANSACT_GAS_CEILING - used
+        "a successful private transfer: {used} gas, {}% of the {ceiling} ceiling, {} to spare",
+        used * 100 / ceiling,
+        ceiling - used
     );
     assert!(
-        used < TRANSACT_GAS_CEILING,
-        "a successful transfer uses {used} gas and no longer fits the profile's own ceiling"
+        used < ceiling,
+        "a successful transfer uses {used} gas and no longer fits the profile's own ceiling \
+         of {ceiling}"
     );
 
     // --- what it did ------------------------------------------------------

@@ -8,10 +8,38 @@
 
 use std::path::PathBuf;
 
+/// The directory the pool's sources live in.
+fn smartcont() -> &'static str {
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../crypto/smartcont")
+}
+
+/// A section 14.1 gas ceiling, read out of the contract that enforces it.
+///
+/// A test that keeps its own copy of a ceiling asserts a relationship between
+/// two numbers in the same file, and says nothing about the contract. That is
+/// not hypothetical here. One suite checked that a deposit ceiling was the one
+/// the production rule gives by comparing 220,000 written in the test against
+/// 220,000 computed in the test, and passed against a contract declaring
+/// 180,000. Another reported a recovery at 61% of a 280,000 ceiling the
+/// contract has never granted.
+///
+/// Panics rather than returning an error: a suite that cannot read the
+/// contract's ceiling has nothing to test.
+pub fn gas_ceiling(name: &str) -> i64 {
+    let path = PathBuf::from(format!("{}/tos-shielded-pool-v1.fc", smartcont()));
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let needle = format!("int {name}() asm \"");
+    let at = source.find(&needle).unwrap_or_else(|| panic!("{name} is not declared in the pool"));
+    let rest = &source[at + needle.len()..];
+    let end = rest.find(" PUSHINT").unwrap_or_else(|| panic!("{name} is not a PUSHINT constant"));
+    rest[..end].trim().parse().unwrap_or_else(|error| panic!("{name}: {error}"))
+}
+
 /// Every FunC source of the shielded pool, in dependency order, ending with
 /// the contract itself.
 pub fn pool_sources() -> Vec<PathBuf> {
-    let library = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../crypto/smartcont");
+    let library = smartcont();
     [
         "shielded/domains.fc",
         "shielded/empty-roots.fc",

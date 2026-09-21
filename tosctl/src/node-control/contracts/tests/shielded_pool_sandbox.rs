@@ -59,7 +59,13 @@ const OP_UNKNOWN: u32 = 0x5348_50ff;
 /// growth -- the store is a level chain rather than a dictionary, and its
 /// dearest append is a pool's first -- so the rings are the whole of it.
 /// `deposit_in_a_mature_pool.rs` in the crosscheck crate is what measures it.
-const DEPOSIT_GAS_CEILING: i64 = 220_000;
+///
+/// Read out of the contract, never written down here. A ceiling copied into a
+/// test is a number this file can check against itself while the deployed
+/// contract says something else entirely.
+fn deposit_gas_ceiling() -> i64 {
+    shielded_pool_library::gas_ceiling("deposit_gas_ceiling")
+}
 const DEPOSIT_MEASURED_MAX_GAS: i64 = 171_280;
 /// ConfigParam 21 of this chain's zero state, which
 /// `chain_gas_envelope_sandbox.rs` generates and holds against the
@@ -67,9 +73,15 @@ const DEPOSIT_MEASURED_MAX_GAS: i64 = 171_280;
 const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
 /// Section 14.1, frozen by the production rule: a top-up executes no
 /// Poseidon2, so the tariff cannot move it, and 10,000 is the rule's floor.
-const TOPUP_GAS_CEILING: i64 = 10_000;
-/// Measured on the deployed configuration. The ceiling has to stay above it
-/// with the ruled 25% headroom.
+fn topup_gas_ceiling() -> i64 {
+    shielded_pool_library::gas_ceiling("topup_gas_ceiling")
+}
+/// The same on the deployed configuration and on the shorter denomination
+/// list most of this file uses, which is not an assumption:
+/// `a_reserve_top_up_adds_balance_and_nothing_else` measures both and requires
+/// them equal. A top-up never parses the state cell, so it has no read of the
+/// configuration to grow -- unlike the deposit and transact maxima, which were
+/// both low for exactly that reason until they were re-measured.
 const TOPUP_MEASURED_MAX_GAS: i64 = 2_380;
 /// ConfigParam 21 of this chain's zero state, beyond the flat segment.
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
@@ -91,10 +103,12 @@ const fn compute_fee(gas: u64) -> u64 {
     }
 }
 const RESERVE_FLOOR: u64 = 5 * TOS;
-/// What a deposit must carry beyond its principal. 500,000 gas at the sandbox's
-/// 400 nanotos per gas unit, which the suite re-derives rather than assumes.
-/// What a deposit has to fund: the ceiling, not what it will use.
-const COMPUTE_FEE: u64 = compute_fee(DEPOSIT_GAS_CEILING as u64);
+/// What a deposit must carry beyond its principal: the ceiling the contract
+/// declares, priced by the same arithmetic the VM uses -- not what the path
+/// will actually spend.
+fn deposit_compute_fee() -> u64 {
+    compute_fee(deposit_gas_ceiling() as u64)
+}
 
 type Field = [u8; 32];
 const ZERO: Field = [0u8; 32];
@@ -226,10 +240,15 @@ fn store_coins(builder: &mut BuilderData, amount: u128) {
 }
 
 const DENOMINATIONS: [u64; 3] = [TOS, 10 * TOS, 100 * TOS];
+/// The list section 12.1 really deploys with. Most tests here want the
+/// shorter one, because the amounts they send are easier to read; anything
+/// that measures what a path *costs* has to use this one, since the contract
+/// walks the list to validate an amount.
+const DEPLOYED_DENOMINATIONS: [u64; 4] = [TOS, 10 * TOS, 100 * TOS, 1_000 * TOS];
 
-fn denomination_chain() -> Cell {
+fn denomination_chain(denominations: &[u64]) -> Cell {
     let mut chain: Option<Cell> = None;
-    for amount in DENOMINATIONS.iter().rev() {
+    for amount in denominations.iter().rev() {
         let mut builder = BuilderData::new();
         store_coins(&mut builder, *amount as u128);
         if let Some(next) = chain {
@@ -240,14 +259,14 @@ fn denomination_chain() -> Cell {
     chain.expect("a chain")
 }
 
-fn config_store() -> Cell {
+fn config_store(denominations: &[u64]) -> Cell {
     let mut builder = BuilderData::new();
     builder.append_raw(&[0x11; 32], 256).unwrap();
     builder.append_raw(&[0x22; 32], 256).unwrap();
     builder.append_raw(&[0x33; 32], 256).unwrap();
     store_coins(&mut builder, 50_000_000);
-    builder.append_u8(DENOMINATIONS.len() as u8).unwrap();
-    builder.checked_append_reference(denomination_chain()).unwrap();
+    builder.append_u8(denominations.len() as u8).unwrap();
+    builder.checked_append_reference(denomination_chain(denominations)).unwrap();
     builder.into_cell().expect("a config store")
 }
 
@@ -288,7 +307,7 @@ fn empty_ring_holder() -> Cell {
     builder.into_cell().unwrap()
 }
 
-fn genesis_state() -> Cell {
+fn genesis_state(denominations: &[u64]) -> Cell {
     let mut builder = BuilderData::new();
     builder.append_u32(MAGIC).unwrap();
     builder.append_u16(VERSION).unwrap();
@@ -304,7 +323,7 @@ fn genesis_state() -> Cell {
     anchors.checked_append_reference(empty_ring_holder()).unwrap();
     anchors.checked_append_reference(empty_ring_holder()).unwrap();
     builder.checked_append_reference(anchors.into_cell().unwrap()).unwrap();
-    builder.checked_append_reference(config_store()).unwrap();
+    builder.checked_append_reference(config_store(denominations)).unwrap();
     builder.checked_append_reference(vk_store()).unwrap();
     builder.into_cell().expect("the genesis state")
 }
@@ -328,13 +347,21 @@ struct Pool {
 
 impl Pool {
     fn deploy() -> Self {
+        Self::deploy_with(&DENOMINATIONS)
+    }
+
+    /// A pool whose configuration store carries exactly `denominations`.
+    /// Anything measuring a path's cost deploys with `DEPLOYED_DENOMINATIONS`;
+    /// a measurement taken against a list nobody deploys is a measurement of a
+    /// different contract.
+    fn deploy_with(denominations: &[u64]) -> Self {
         let mut bc = Blockchain::with_global_version_and_base_workchain(ACTIVE_VERSION)
             .expect("blockchain at version 17");
         bc.set_workchain(0);
         let payer = bc.treasury("depositor", 100_000 * TOS).expect("treasury");
         let code = compile_func_with_stdlib(&shielded_pool_library::pool_sources())
             .expect("compile the pool (needs build/crypto/func)");
-        let si = StateInit::with_code_and_data(code, genesis_state());
+        let si = StateInit::with_code_and_data(code, genesis_state(denominations));
         let hash = si.write_to_new_cell().unwrap().into_cell().unwrap().hash(0);
         let addr = MsgAddressInt::with_params(0, hash).unwrap();
         // The deploy value is reserve, not liability.
@@ -389,7 +416,8 @@ impl Pool {
 
     fn deposit(&mut self, amount: u64, owner: &Field, seed: u8) -> SendResult {
         let (payload, bytes) = output_data(seed);
-        let result = self.send(amount + COMPUTE_FEE, deposit_body(amount, owner, payload));
+        let result =
+            self.send(amount + deposit_compute_fee(), deposit_body(amount, owner, payload));
         let body = note_body_commitment(*owner, amount_field(amount), output_data_hash(&bytes));
         let index = self.leaves.len() as u64;
         self.leaves.push(note_commitment(body, amount_field(index)));
@@ -508,7 +536,8 @@ fn the_gas_ceiling_does_not_depend_on_how_much_money_arrived() {
 
     // A hundred TOS buys a quarter of a billion gas at the sandbox's price.
     // The ceiling is what the handler runs under, not that.
-    let result = pool.send(100 * TOS + COMPUTE_FEE, deposit_body(100 * TOS, &[1u8; 32], payload));
+    let result =
+        pool.send(100 * TOS + deposit_compute_fee(), deposit_body(100 * TOS, &[1u8; 32], payload));
     result.expect_success();
     let vm = compute_phase(&result);
     let used: i64 = vm.gas_used.to_string().parse().expect("gas used");
@@ -516,7 +545,7 @@ fn the_gas_ceiling_does_not_depend_on_how_much_money_arrived() {
     // about four times the room. The number is not pinned exactly: what has to
     // hold is that it fits.
     assert!(
-        used < DEPOSIT_GAS_CEILING,
+        used < deposit_gas_ceiling(),
         "the largest legal deposit uses {used} gas and does not fit its own ceiling"
     );
 
@@ -529,14 +558,16 @@ fn the_gas_ceiling_does_not_depend_on_how_much_money_arrived() {
     // cannot raise a transaction above the network's limit; a ceiling below
     // what the path needs stops the path. Both halves are asserted here rather
     // than left to whoever next changes one of the three numbers.
+    let deposit_ceiling = deposit_gas_ceiling();
+    let topup_ceiling = topup_gas_ceiling();
     assert!(
-        DEPOSIT_GAS_CEILING <= BASECHAIN_GAS_LIMIT,
-        "the deposit ceiling ({DEPOSIT_GAS_CEILING}) is above what this chain grants a \
+        deposit_ceiling <= BASECHAIN_GAS_LIMIT,
+        "the deposit ceiling ({deposit_ceiling}) is above what this chain grants a \
          transaction ({BASECHAIN_GAS_LIMIT}), so it can never take effect"
     );
     assert!(
-        TOPUP_GAS_CEILING <= BASECHAIN_GAS_LIMIT,
-        "the top-up ceiling is above what this chain grants a transaction"
+        topup_ceiling <= BASECHAIN_GAS_LIMIT,
+        "the top-up ceiling ({topup_ceiling}) is above what this chain grants a transaction"
     );
     // And the frozen ceiling still satisfies the rule it was frozen by:
     // C = max(10,000, round_up_10,000(ceil(M * 5 / 4))). A top-up's measured
@@ -546,12 +577,12 @@ fn the_gas_ceiling_does_not_depend_on_how_much_money_arrived() {
         10_000.max((with_headroom + 9_999) / 10_000 * 10_000)
     };
     assert_eq!(
-        TOPUP_GAS_CEILING,
+        topup_ceiling,
         by_rule(TOPUP_MEASURED_MAX_GAS),
         "the top-up ceiling is no longer the one the production rule gives"
     );
     assert_eq!(
-        DEPOSIT_GAS_CEILING,
+        deposit_ceiling,
         by_rule(DEPOSIT_MEASURED_MAX_GAS),
         "the deposit ceiling is no longer the one the production rule gives"
     );
@@ -584,10 +615,10 @@ fn a_deposit_must_fund_its_principal_and_its_execution() {
     // Exactly the principal, nothing for execution.
     pool.send(TOS, deposit_body(TOS, &[5u8; 32], payload.clone())).expect_exit_code(203);
     // One nanotos short of the whole requirement.
-    pool.send(TOS + COMPUTE_FEE - 1, deposit_body(TOS, &[5u8; 32], payload.clone()))
+    pool.send(TOS + deposit_compute_fee() - 1, deposit_body(TOS, &[5u8; 32], payload.clone()))
         .expect_exit_code(203);
     // And the boundary itself is enough.
-    pool.send(TOS + COMPUTE_FEE, deposit_body(TOS, &[5u8; 32], payload)).expect_success();
+    pool.send(TOS + deposit_compute_fee(), deposit_body(TOS, &[5u8; 32], payload)).expect_success();
 
     assert_eq!(pool.get("native_liability"), TOS.to_string(), "only the funded deposit counted");
     assert!(pool.balance() > before, "the accepted deposit did not add its principal");
@@ -602,7 +633,7 @@ fn only_a_configured_denomination_and_the_frozen_body_shape_are_accepted() {
 
     // An amount that is not on the list, one either side of one that is.
     for amount in [TOS + 1, TOS - 1, 5 * TOS] {
-        pool.send(amount + COMPUTE_FEE, deposit_body(amount, &owner, payload.clone()))
+        pool.send(amount + deposit_compute_fee(), deposit_body(amount, &owner, payload.clone()))
             .expect_exit_code(202);
     }
 
@@ -614,7 +645,7 @@ fn only_a_configured_denomination_and_the_frozen_body_shape_are_accepted() {
     trailing.append_raw(&owner, 256).unwrap();
     trailing.append_bit_zero().unwrap();
     trailing.checked_append_reference(payload.clone()).unwrap();
-    pool.send(TOS + COMPUTE_FEE, trailing.into_cell().unwrap()).expect_exit_code(200);
+    pool.send(TOS + deposit_compute_fee(), trailing.into_cell().unwrap()).expect_exit_code(200);
 
     let mut two_refs = BuilderData::new();
     two_refs.append_u32(OP_DEPOSIT).unwrap();
@@ -623,7 +654,7 @@ fn only_a_configured_denomination_and_the_frozen_body_shape_are_accepted() {
     two_refs.append_raw(&owner, 256).unwrap();
     two_refs.checked_append_reference(payload.clone()).unwrap();
     two_refs.checked_append_reference(Cell::default()).unwrap();
-    pool.send(TOS + COMPUTE_FEE, two_refs.into_cell().unwrap()).expect_exit_code(200);
+    pool.send(TOS + deposit_compute_fee(), two_refs.into_cell().unwrap()).expect_exit_code(200);
 
     // And a body with no payload at all. This is the half of the reference
     // rule that fires on its own: too many references is caught by nothing
@@ -634,7 +665,7 @@ fn only_a_configured_denomination_and_the_frozen_body_shape_are_accepted() {
     no_ref.append_u64(1).unwrap();
     store_coins(&mut no_ref, TOS as u128);
     no_ref.append_raw(&owner, 256).unwrap();
-    pool.send(TOS + COMPUTE_FEE, no_ref.into_cell().unwrap()).expect_exit_code(200);
+    pool.send(TOS + deposit_compute_fee(), no_ref.into_cell().unwrap()).expect_exit_code(200);
 
     // An operation this contract does not have. It has to be one of none of
     // them: OP_TRANSACT used to stand in here, and once transact was built
@@ -646,7 +677,7 @@ fn only_a_configured_denomination_and_the_frozen_body_shape_are_accepted() {
     );
     let mut other = BuilderData::new();
     other.append_u32(OP_UNKNOWN).unwrap();
-    pool.send(TOS + COMPUTE_FEE, other.into_cell().unwrap()).expect_exit_code(201);
+    pool.send(TOS + deposit_compute_fee(), other.into_cell().unwrap()).expect_exit_code(201);
 
     assert_eq!(pool.get("commitment_next_index"), "0", "a refused message appended a leaf");
     assert_eq!(pool.get("native_liability"), "0", "a refused message was credited");
@@ -673,9 +704,36 @@ fn a_reserve_top_up_adds_balance_and_nothing_else() {
     // floor is far above it, so this does not move the ceiling -- it is
     // printed and checked so that the number in the contract's comment is one
     // something still produces.
-    let used: i64 =
-        compute_phase(&result).gas_used.to_string().parse().expect("gas used");
+    let used: i64 = compute_phase(&result).gas_used.to_string().parse().expect("gas used");
     eprintln!("a reserve top-up: {used} gas");
+
+    // The same measurement on the configuration section 12.1 actually deploys,
+    // which is four denominations rather than the three most of this file
+    // uses -- and it comes first, because it is the reason the number below
+    // may be pinned from a three-denomination pool at all.
+    //
+    // The deposit and transact maxima were both wrong for a while because they
+    // were taken against a shorter list: the contract walks it to validate an
+    // amount. So "measured on the deployed configuration" is a claim to check,
+    // not to assert in a comment. Here it holds for a reason worth writing
+    // down: `handle_reserve_topup` never parses the state cell, and
+    // `recv_internal` does not parse it before dispatching, so this path has
+    // no read of the configuration to grow. The day someone adds one, these
+    // two stop being equal, and the pinned figure below stops meaning what it
+    // says.
+    let mut deployed = Pool::deploy_with(&DEPLOYED_DENOMINATIONS);
+    deployed.deposit(TOS, &[8u8; 32], 0).expect_success();
+    let on_deployed = deployed.send(4 * TOS, top_up.clone());
+    on_deployed.expect_success();
+    let deployed_used: i64 =
+        compute_phase(&on_deployed).gas_used.to_string().parse().expect("gas used");
+    assert_eq!(
+        deployed_used, used,
+        "a top-up costs {deployed_used} gas on the deployed four denominations against {used} \
+         on three, so this path now reads the configuration and the figure the ceiling was \
+         ruled from was taken on the wrong pool"
+    );
+
     assert_eq!(
         used, TOPUP_MEASURED_MAX_GAS,
         "a top-up costs {used} gas, not the {TOPUP_MEASURED_MAX_GAS} the ceiling was ruled from"
@@ -692,7 +750,7 @@ fn a_reserve_top_up_adds_balance_and_nothing_else() {
     // flat segment costs exactly its own gas at the same price, so that comes
     // to the ceiling times the price per gas. The pair of sends below is what
     // checks that identity: if it were wrong, one of them would not behave.
-    let fee = compute_fee(TOPUP_GAS_CEILING as u64);
+    let fee = compute_fee(topup_gas_ceiling() as u64);
     pool.send(fee - 1, top_up.clone()).expect_exit_code(203);
     pool.send(fee, top_up).expect_success();
 

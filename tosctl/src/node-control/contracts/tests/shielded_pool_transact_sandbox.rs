@@ -56,7 +56,13 @@ const RESERVE_FLOOR: u64 = 5 * TOS;
 /// have them. Full rings make a transact dearer and a higher leaf index makes
 /// it slightly cheaper, so the maximum is at neither end of a pool's life --
 /// 1,175,034 there, against 1,171,462 in a pool with nothing in it.
-const TRANSACT_GAS_CEILING: i64 = 1_470_000;
+///
+/// Read out of the contract, never written down here. A ceiling copied into a
+/// test is a number this file can check against itself while the deployed
+/// contract says something else entirely.
+fn transact_gas_ceiling() -> i64 {
+    shielded_pool_library::gas_ceiling("transact_gas_ceiling")
+}
 const TRANSACT_MEASURED_MAX_GAS: i64 = 1_175_034;
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
 /// flat 6,667 for the first hundred gas, then 4,369,067 per 65,536 gas with
@@ -76,7 +82,11 @@ const fn compute_fee(gas: u64) -> u64 {
         FLAT_PRICE + ((gas - FLAT_LIMIT) * GAS_PRICE).div_ceil(65_536)
     }
 }
-const TRANSACT_FEE: u64 = compute_fee(TRANSACT_GAS_CEILING as u64);
+/// What a transact has to fund: the ceiling the contract declares, priced by
+/// the same arithmetic the VM uses.
+fn transact_fee() -> u64 {
+    compute_fee(transact_gas_ceiling() as u64)
+}
 
 type Field = [u8; 32];
 const ZERO: Field = [0u8; 32];
@@ -793,7 +803,7 @@ fn each_step_fails_with_its_own_code_and_in_its_own_place() {
     broken.anchor_root = small(1);
     broken.nullifiers[0] = small(1);
     assert_eq!(
-        pool.exit_of(TRANSACT_FEE - 1, broken.body()),
+        pool.exit_of(transact_fee() - 1, broken.body()),
         203,
         "an underfunded message was judged on its contents"
     );
@@ -804,14 +814,14 @@ fn each_step_fails_with_its_own_code_and_in_its_own_place() {
     let mut odd_amount = withdrawing(good(), small(0x11));
     odd_amount.public_amount_out = DENOMINATION + 1;
     assert_eq!(
-        pool.exit_of(TRANSACT_FEE, odd_amount.body()),
+        pool.exit_of(transact_fee(), odd_amount.body()),
         202,
         "an amount outside the denomination list was paid out"
     );
     let mut wrong_fee = withdrawing(good(), small(0x11));
     wrong_fee.withdrawal_fee = CONFIG_WITHDRAWAL_FEE - 1;
     assert_ne!(
-        pool.exit_of(TRANSACT_FEE, wrong_fee.body()),
+        pool.exit_of(transact_fee(), wrong_fee.body()),
         0,
         "a fee other than the configured one was accepted"
     );
@@ -821,14 +831,14 @@ fn each_step_fails_with_its_own_code_and_in_its_own_place() {
     let mut unaddressed = withdrawing(good(), small(0x11));
     unaddressed.recipient = None;
     assert_eq!(
-        pool.exit_of(TRANSACT_FEE, unaddressed.body()),
+        pool.exit_of(transact_fee(), unaddressed.body()),
         238,
         "a withdrawal with no recipient was accepted"
     );
     let mut addressed_transfer = good();
     addressed_transfer.recipient = Some(small(0x11));
     assert_eq!(
-        pool.exit_of(TRANSACT_FEE, addressed_transfer.body()),
+        pool.exit_of(transact_fee(), addressed_transfer.body()),
         239,
         "a transfer that named a recipient was accepted"
     );
@@ -836,11 +846,11 @@ fn each_step_fails_with_its_own_code_and_in_its_own_place() {
     // Step 5: the intent's hour.
     let mut stale = good();
     stale.valid_until = now - 1;
-    assert_eq!(pool.exit_of(TRANSACT_FEE, stale.body()), 140, "a stale intent was accepted");
+    assert_eq!(pool.exit_of(transact_fee(), stale.body()), 140, "a stale intent was accepted");
     let mut far = good();
     far.valid_until = now + 3601;
     assert_eq!(
-        pool.exit_of(TRANSACT_FEE, far.body()),
+        pool.exit_of(transact_fee(), far.body()),
         141,
         "an intent beyond the hour was accepted"
     );
@@ -850,22 +860,30 @@ fn each_step_fails_with_its_own_code_and_in_its_own_place() {
     let mut forged_anchor = good();
     forged_anchor.anchor_root = small(7);
     assert_eq!(
-        pool.exit_of(TRANSACT_FEE, forged_anchor.body()),
+        pool.exit_of(transact_fee(), forged_anchor.body()),
         152,
         "a root the pool never held was accepted as the current anchor"
     );
     let mut wrong_kind = good();
     wrong_kind.anchor_kind = 3;
-    assert_eq!(pool.exit_of(TRANSACT_FEE, wrong_kind.body()), 151, "an unknown anchor kind passed");
+    assert_eq!(
+        pool.exit_of(transact_fee(), wrong_kind.body()),
+        151,
+        "an unknown anchor kind passed"
+    );
     let mut recent = good();
     recent.anchor_kind = 1;
-    assert_eq!(pool.exit_of(TRANSACT_FEE, recent.body()), 153, "an empty recent slot was accepted");
+    assert_eq!(
+        pool.exit_of(transact_fee(), recent.body()),
+        153,
+        "an empty recent slot was accepted"
+    );
 
     // Step 10: the witnesses, before the signatures. A witness for the wrong
     // nullifier must fail as a witness and not as a signature.
     let mut swapped = good();
     swapped.witnesses.swap(0, 1);
-    let exit = pool.exit_of(TRANSACT_FEE, swapped.body());
+    let exit = pool.exit_of(transact_fee(), swapped.body());
     assert!(
         (100..=129).contains(&exit),
         "a mismatched witness failed with {exit}, which is not the nullifier tree's"
@@ -877,7 +895,7 @@ fn each_step_fails_with_its_own_code_and_in_its_own_place() {
     let other = small(999);
     misauthorized.signatures[1] = byte_chain(&keys[1].authorize(&other));
     assert_eq!(
-        pool.exit_of(TRANSACT_FEE, misauthorized.body()),
+        pool.exit_of(transact_fee(), misauthorized.body()),
         138,
         "a signature over another digest was accepted"
     );
@@ -891,7 +909,7 @@ fn each_step_fails_with_its_own_code_and_in_its_own_place() {
     let attacker = Key::generate();
     impostor.keys[0] = byte_chain(&attacker.public_bytes);
     impostor.signatures[0] = byte_chain(&attacker.authorize(&digest));
-    let exit = pool.exit_of(TRANSACT_FEE, impostor.body());
+    let exit = pool.exit_of(transact_fee(), impostor.body());
     assert!(
         exit != 137 && exit != 138,
         "an attacker's own key pair was refused as a bad signature ({exit}), which it is not"
@@ -917,22 +935,22 @@ fn a_failure_at_any_step_changes_nothing() {
     };
 
     let mut cases: Vec<(&str, Cell, u64)> = Vec::new();
-    cases.push(("underfunded", good().body(), TRANSACT_FEE - 1));
+    cases.push(("underfunded", good().body(), transact_fee() - 1));
     let mut withdrawing = good();
     withdrawing.public_amount_out = TOS;
-    cases.push(("a withdrawal", withdrawing.body(), TRANSACT_FEE));
+    cases.push(("a withdrawal", withdrawing.body(), transact_fee()));
     let mut stale = good();
     stale.valid_until = now - 1;
-    cases.push(("a stale intent", stale.body(), TRANSACT_FEE));
+    cases.push(("a stale intent", stale.body(), transact_fee()));
     let mut forged = good();
     forged.anchor_root = small(7);
-    cases.push(("a forged anchor", forged.body(), TRANSACT_FEE));
+    cases.push(("a forged anchor", forged.body(), transact_fee()));
     let mut swapped = good();
     swapped.witnesses.swap(0, 1);
-    cases.push(("mismatched witnesses", swapped.body(), TRANSACT_FEE));
+    cases.push(("mismatched witnesses", swapped.body(), transact_fee()));
     let mut misauthorized = good();
     misauthorized.signatures[0] = byte_chain(&keys[0].authorize(&small(1)));
-    cases.push(("a wrong signature", misauthorized.body(), TRANSACT_FEE));
+    cases.push(("a wrong signature", misauthorized.body(), transact_fee()));
 
     for (what, body, value) in cases {
         let exit = pool.exit_of(value, body);
@@ -960,7 +978,7 @@ fn a_proof_that_does_not_verify_stops_the_transaction() {
     let mut message = well_formed(&state, &keys, digest);
     message.valid_until = now + 60;
     assert_eq!(
-        pool.exit_of(TRANSACT_FEE * 8, message.body()),
+        pool.exit_of(transact_fee() * 8, message.body()),
         262,
         "a message with an unverifiable proof was not stopped by the proof"
     );
@@ -989,7 +1007,7 @@ fn a_well_formed_withdrawal_reaches_the_proof_like_a_transfer_does() {
     let mut message = withdrawing(well_formed(&state, &keys, digest), small(0x4242));
     message.valid_until = now + 60;
 
-    let (exit, used) = pool.run(TRANSACT_FEE * 8, message.body());
+    let (exit, used) = pool.run(transact_fee() * 8, message.body());
     assert_eq!(exit, 262, "a well-formed withdrawal was stopped before the proof");
     assert_eq!(pool.snapshot(), before, "a withdrawal that failed at the proof moved the state");
     eprintln!("a withdrawal, up to and including the proof: {used} gas");
@@ -1007,7 +1025,7 @@ fn what_a_transact_spends_and_where() {
     let digest = small(0x2222_3333_4444_5555);
     let mut pool = Pool::deploy(state.root());
     let now = pool.bc.now();
-    let value = TRANSACT_FEE * 8;
+    let value = transact_fee() * 8;
 
     let good = || {
         let mut message = well_formed(&state, &keys, digest);
@@ -1084,10 +1102,10 @@ fn what_a_transact_spends_and_where() {
 /// and how much room it has.
 #[test]
 fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
-    /// Section 14.1. Unlike the network limit, this one the contract sets on
-    /// itself, and it is the binding one: it is far below what the chain
-    /// grants, which is the point of having it.
-    const TRANSACT_GAS_CEILING: i64 = 1_470_000;
+    // Section 14.1. Unlike the network limit, this one the contract sets on
+    // itself, and it is the binding one: it is far below what the chain
+    // grants, which is the point of having it.
+    let ceiling = transact_gas_ceiling();
     /// ConfigParam 21 of this chain's zero state.
     const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
 
@@ -1099,17 +1117,17 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
     let mut message = well_formed(&state, &keys, digest);
     message.valid_until = now + 60;
 
-    let (exit, used) = pool.run(TRANSACT_FEE * 8, message.body());
+    let (exit, used) = pool.run(transact_fee() * 8, message.body());
     assert_eq!(exit, 262, "the message did not reach the proof on an ordinary network");
     eprintln!(
         "a transact, up to and including the proof: {used} gas          ({}% of the ceiling, {}% of what the chain grants)",
-        used * 100 / TRANSACT_GAS_CEILING,
+        used * 100 / ceiling,
         used * 100 / BASECHAIN_GAS_LIMIT
     );
 
     assert!(
-        used < TRANSACT_GAS_CEILING,
-        "the path uses {used} gas and no longer fits the profile's own ceiling of          {TRANSACT_GAS_CEILING}"
+        used < ceiling,
+        "the path uses {used} gas and no longer fits the profile's own ceiling of          {ceiling}"
     );
     assert!(
         used < BASECHAIN_GAS_LIMIT,
@@ -1126,7 +1144,7 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
     // needs stops the path. The transact ceiling is the binding one here: it
     // is far below what the chain grants, which is the point of having it.
     assert!(
-        TRANSACT_GAS_CEILING <= BASECHAIN_GAS_LIMIT,
+        ceiling <= BASECHAIN_GAS_LIMIT,
         "the contract's ceiling is above what the chain grants, so it can never take effect"
     );
 
@@ -1141,7 +1159,7 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
     let mut same = well_formed(&RefState::genesis(), &keys, digest);
     same.valid_until = now + 60;
     assert_eq!(
-        starved.exit_of(TRANSACT_FEE * 8, same.body()),
+        starved.exit_of(transact_fee() * 8, same.body()),
         -14,
         "a network granting 500,000 gas ran the whole path after all"
     );

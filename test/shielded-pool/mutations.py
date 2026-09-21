@@ -19,6 +19,33 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def toolchain_root() -> Path:
+    """The checkout whose `build/` holds func, fift and the fift stdlib.
+
+    TOS_ROOT locates only the built toolchain; the sources under test come
+    from this tree, through the crate manifest. The two are usually the same
+    directory, and are not when the battery is run from a git worktree --
+    which has every source but no build of its own. Falling back to the main
+    checkout is what lets a worktree run this at all; hardcoding a path, which
+    two of these batteries used to do, breaks anyone whose checkout is
+    somewhere else.
+    """
+    if (ROOT / 'build/crypto/func').exists():
+        return ROOT
+    common = subprocess.run(
+        ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+        cwd=ROOT, capture_output=True, text=True, check=False)
+    if common.returncode == 0:
+        main = Path(common.stdout.strip()).parent
+        if (main / 'build/crypto/func').exists():
+            return main
+    raise SystemExit(
+        f'no built toolchain: neither {ROOT}/build/crypto/func nor the main '
+        "checkout's exists. Build it, or set TOS_ROOT to a checkout that has one.")
+
+
 NOTES = ROOT / 'crypto/smartcont/shielded/notes.fc'
 TREE = ROOT / 'crypto/smartcont/shielded/tree.fc'
 CONTRACTS = ROOT / 'tosctl/src/node-control/contracts'
@@ -84,7 +111,7 @@ def run_suite() -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env['PATH'] = str(Path.home() / '.cargo/bin') + os.pathsep + env.get('PATH', '')
     env['CARGO_TERM_COLOR'] = 'never'
-    env.setdefault('TOS_ROOT', str(ROOT))
+    env.setdefault('TOS_ROOT', str(toolchain_root()))
     return subprocess.run(['cargo', 'test', '--test', 'shielded_notes_sandbox'],
                           cwd=CONTRACTS, capture_output=True, text=True, timeout=3600, env=env)
 

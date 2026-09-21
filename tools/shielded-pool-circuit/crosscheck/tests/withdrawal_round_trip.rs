@@ -20,7 +20,7 @@
 
 mod support;
 
-use shielded_pool_circuit_crosscheck::pool::{DENOMINATION, WITHDRAWAL_FEE};
+use shielded_pool_circuit_crosscheck::pool::{contract_gas_ceiling, DENOMINATION, WITHDRAWAL_FEE};
 use support::{Withdrawal, ACCEPTER, REFUSER};
 
 fn withdraw_to(name: &'static str, source: &'static str) -> support::Outcome {
@@ -67,18 +67,25 @@ fn a_withdrawal_that_is_refused_comes_back_as_a_note() {
         outcome.gas
     );
 
-    /// Section 14.1. The recovery runs under this, bought by an ACCEPT that
-    /// the withdrawal fee already paid for.
-    const BOUNCE_GAS_CEILING: i64 = 280_000;
+    // Section 14.1. The recovery runs under this, bought by an ACCEPT that the
+    // withdrawal fee already paid for. Read out of the contract, because this
+    // file used to carry its own copy saying 280,000 where the contract grants
+    // 220,000. A recovery that outgrew the real ceiling would still have been
+    // caught -- by the exit code above, since it would run out of gas -- but
+    // the line this test prints reported this recovery at 59% of its budget
+    // where it is really at 75%, and the worst recovery the contract records,
+    // 173,435, at 78%. How much room is left is the whole reason to print the
+    // line, so the ceiling in it has to be the one the contract grants.
+    let bounce_ceiling = contract_gas_ceiling("bounce_gas_ceiling").expect("the bounce ceiling");
     assert_eq!(outcome.recovery_exit, 0, "the recovery itself failed");
     eprintln!(
-        "the recovery: {} gas, {}% of the {BOUNCE_GAS_CEILING} bounce ceiling",
+        "the recovery: {} gas, {}% of the {bounce_ceiling} bounce ceiling",
         outcome.recovery_gas,
-        outcome.recovery_gas * 100 / BOUNCE_GAS_CEILING
+        outcome.recovery_gas * 100 / bounce_ceiling
     );
     assert!(
-        outcome.recovery_gas < BOUNCE_GAS_CEILING,
-        "the recovery uses {} gas and does not fit its own ceiling",
+        outcome.recovery_gas < bounce_ceiling,
+        "the recovery uses {} gas and does not fit its own ceiling of {bounce_ceiling}",
         outcome.recovery_gas
     );
     assert!(recovered > 0, "nothing was recovered");
