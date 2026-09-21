@@ -1,5 +1,5 @@
 # The conformance test for the live Simplex entrypoints lives with the code it exercises,
-# in test/validator/consensus/test-n4-certificate-conformance.cpp. It could not stay here:
+# in test/validator/consensus/test-certificate-conformance.cpp. It could not stay here:
 # it was written against Ed25519 validator descriptors and a PeerValidator that carried a
 # classical verify key, and consensus now signs and verifies with ML-DSA-44 only.
 #

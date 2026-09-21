@@ -123,9 +123,9 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     InFlight,
     // The block is finalized.
     Finalized,
-    // Terminal for this build: the certificate reached the N4/N5 seam and the carrier
+    // Terminal for this build: the certificate reached the carrier seam and the carrier
     // refused. The entry is kept precisely so the conversion is not attempted again.
-    BlockedOnN5,
+    BlockedOnCarrier,
     // Terminal for a different reason: the conversion failed in a way retrying cannot mend.
     // The entry and its certificate are kept, and it is reported, because the certificate is
     // still evidence a quorum agreed on -- what stops is the spinning, not the remembering.
@@ -230,24 +230,24 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   }
 
   template <>
-  td::actor::Task<QueryN5Boundary::Result> process(BusHandle, std::shared_ptr<QueryN5Boundary> query) {
-    QueryN5Boundary::Result result{.blocked_slots = n5_blocked_slots_,
-                                   .slot_is_blocked = false,
-                                   .finalizations_started = finalizations_started_,
-                                   .finalizations_settled = finalizations_settled_,
-                                   .finalization_retries = finalization_retries_,
-                                   .finalization_retries_at_admission = finalization_retries_at_admission_,
-                                   .finalizations_stalled = finalizations_stalled_,
-                                   .pending_finalizations = pending_finalizations_,
-                                   .backlog_over_limit = backlog_over_limit_,
-                                   .finalizations_stalled_permanently = finalizations_stalled_permanently_,
-                                   .slot_attempts = 0};
+  td::actor::Task<QueryFinalizationState::Result> process(BusHandle, std::shared_ptr<QueryFinalizationState> query) {
+    QueryFinalizationState::Result result{.blocked_slots = carrier_blocked_slots_,
+                                          .slot_is_blocked = false,
+                                          .finalizations_started = finalizations_started_,
+                                          .finalizations_settled = finalizations_settled_,
+                                          .finalization_retries = finalization_retries_,
+                                          .finalization_retries_at_admission = finalization_retries_at_admission_,
+                                          .finalizations_stalled = finalizations_stalled_,
+                                          .pending_finalizations = pending_finalizations_,
+                                          .backlog_over_limit = backlog_over_limit_,
+                                          .finalizations_stalled_permanently = finalizations_stalled_permanently_,
+                                          .slot_attempts = 0};
     for (const auto& [id, state] : finalized_blocks_) {
       if (id.slot != query->slot) {
         continue;
       }
       result.slot_attempts = std::max(result.slot_attempts, state.attempts);
-      if (state.state == Finalization::BlockedOnN5) {
+      if (state.state == Finalization::BlockedOnCarrier) {
         result.slot_is_blocked = true;
       }
     }
@@ -333,8 +333,8 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         case Finalization::Finalized:
           touch_finalized_cache(id);
           co_return Finalization::Finalized;
-        case Finalization::BlockedOnN5:
-          co_return Finalization::BlockedOnN5;
+        case Finalization::BlockedOnCarrier:
+          co_return Finalization::BlockedOnCarrier;
         case Finalization::Idle:
           co_return Finalization::Idle;
         case Finalization::InFlight:
@@ -494,9 +494,9 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   InflightAdmission finalized_inflight_{
       cache_limit_from_env("TOS_SIMPLEX_FINALIZED_INFLIGHT_MAX", DEFAULT_FINALIZED_INFLIGHT_MAX)};
   size_t finalized_admission_rejections_ = 0;
-  // Slots latched at the N4/N5 carrier boundary. A non-zero value is the explicit, expected
-  // state of an N4-only build, not a fault to chase.
-  size_t n5_blocked_slots_ = 0;
+  // Slots latched at the block-signature carrier boundary. A non-zero value is the explicit, expected
+  // state of a build with no carrier, not a fault to chase.
+  size_t carrier_blocked_slots_ = 0;
   // Finalizations entered and finished. Kept as two counters rather than one gauge so a
   // finalization that never returns is visible as a gap that stops closing.
   size_t finalizations_started_ = 0;
@@ -512,7 +512,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   bool backlog_over_limit_ = false;
   const size_t pending_finalizations_max_ =
       cache_limit_from_env("TOS_SIMPLEX_PENDING_FINALIZATIONS_MAX", DEFAULT_PENDING_FINALIZATIONS_MAX);
-  bool n5_boundary_announced_ = false;
+  bool carrier_missing_announced_ = false;
   size_t finalized_db_hits_ = 0;
   size_t finalized_db_misses_ = 0;
   size_t finalized_db_skips_ = 0;
@@ -573,7 +573,8 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
                    << " finalized_inflight_admission=" << finalized_inflight_.count() << "/"
                    << finalized_inflight_.capacity()
                    << " finalized_admission_rejections=" << finalized_admission_rejections_
-                   << " n5_blocked_slots=" << n5_blocked_slots_ << " finalization_retries=" << finalization_retries_
+                   << " carrier_blocked_slots=" << carrier_blocked_slots_
+                   << " finalization_retries=" << finalization_retries_
                    << " finalization_retries_at_admission=" << finalization_retries_at_admission_
                    << " finalizations_stalled=" << finalizations_stalled_
                    << " pending_finalizations=" << pending_finalizations_ << "/" << pending_finalizations_max_
@@ -593,12 +594,12 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     switch (co_await finalization_of(id)) {
       case Finalization::Finalized:
         co_return td::Unit{};
-      case Finalization::BlockedOnN5:
+      case Finalization::BlockedOnCarrier:
         // Already latched. Answer without re-running the conversion and without logging
         // again, and above all without waiting: nothing will ever move this entry.
-        co_return td::Status::Error(n5_carrier_required_error_code, PSTRING()
-                                                                        << "Simplex state-resolver: slot " << id.slot
-                                                                        << " is blocked at the N4/N5 carrier boundary");
+        co_return td::Status::Error(carrier_missing_error_code,
+                                    PSTRING() << "Simplex state-resolver: slot " << id.slot
+                                              << " is blocked at the block-signature carrier boundary");
       case Finalization::InFlight:
         // The attempt this waited on finished and another has already started. Fall through
         // to the re-read below, which attaches to whichever attempt is now running.
@@ -614,10 +615,10 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         case Finalization::Finalized:
           touch_finalized_cache(id);
           co_return td::Unit{};
-        case Finalization::BlockedOnN5:
-          co_return td::Status::Error(
-              n5_carrier_required_error_code,
-              PSTRING() << "Simplex state-resolver: slot " << id.slot << " is blocked at the N4/N5 carrier boundary");
+        case Finalization::BlockedOnCarrier:
+          co_return td::Status::Error(carrier_missing_error_code,
+                                      PSTRING() << "Simplex state-resolver: slot " << id.slot
+                                                << " is blocked at the block-signature carrier boundary");
         case Finalization::InFlight: {
           // Someone else owns the attempt; wait for its verdict rather than starting a
           // second conversion of the same certificate.
@@ -663,25 +664,25 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       if (result.is_ok()) {
         state.state = Finalization::Finalized;
         touch_finalized_cache(id);
-      } else if (is_n5_carrier_required(result.error())) {
+      } else if (is_carrier_missing(result.error())) {
         // Not a transient failure: this build has no post-quantum block-signature carrier,
-        // and never will until N5. Latch the slot as terminally blocked and keep the entry,
+        // and never will until that carrier exists. Latch the slot as terminally blocked and keep the entry,
         // so the refusal is neither retried nor re-logged. The actor stays alive and the
         // manager keeps a healthy group -- stopping it here would recreate the dead-entry
         // lifecycle bug this design already fixed once.
-        state.state = Finalization::BlockedOnN5;
-        ++n5_blocked_slots_;
-        LOG(ERROR) << "Simplex consensus is blocked at the N4/N5 boundary: the certificate for slot " << id.slot
+        state.state = Finalization::BlockedOnCarrier;
+        ++carrier_blocked_slots_;
+        LOG(ERROR) << "Simplex consensus is blocked at the carrier boundary: the certificate for slot " << id.slot
                    << " was agreed and verified, but " << result.error().message()
-                   << ". No block was finalized, accepted or persisted. This is expected in an N4-only build.";
+                   << ". No block was finalized, accepted or persisted. This is expected in a build with no carrier.";
         // Announced once. The event exists to quiesce the group, which is a thing that
         // happens once; every later certificate meets the same seam, and telling listeners
         // again would be telling them something they acted on already. They are idempotent,
         // so this is not a correctness fix -- it is what makes "published once" a property
         // of the code rather than a sentence in a document.
-        if (!n5_boundary_announced_) {
-          n5_boundary_announced_ = true;
-          owning_bus().publish<N5BoundaryReached>(id.slot);
+        if (!carrier_missing_announced_) {
+          carrier_missing_announced_ = true;
+          owning_bus().publish<BlockSignatureCarrierMissing>(id.slot);
         }
       } else {
         switch (classify_failure(result.error())) {
@@ -776,7 +777,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         std::min(finalization_retry_delay * static_cast<double>(attempts), max_finalization_retry_delay);
     co_await td::actor::coro_sleep(td::Timestamp::in(delay));
     auto result = co_await finalize_blocks(id, std::move(final_cert), std::move(final_candidate)).wrap();
-    if (result.is_error() && !is_n5_carrier_required(result.error()) && result.error().code() != ErrorCode::cancelled) {
+    if (result.is_error() && !is_carrier_missing(result.error()) && result.error().code() != ErrorCode::cancelled) {
       LOG(DEBUG) << "Simplex state-resolver: retry of slot " << id.slot
                  << " did not finalize it yet: " << result.error().message();
     }
@@ -814,7 +815,7 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       }
 
       // The certificate is verified by this point. Converting it into a block-finality
-      // carrier is the N4/N5 seam and refuses in an N4-only build; returning that refusal
+      // carrier is the carrier seam and refuses in a build with no carrier; returning that refusal
       // here means no FinalizeBlock is published, no accept_block is reached, and the
       // finalized-block marker below is never written.
       auto sig_set = final_cert ? (*final_cert)->to_signature_set(*final_candidate, bus)

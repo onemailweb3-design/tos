@@ -13,7 +13,7 @@ use super::*;
 fn vectors() -> std::collections::HashMap<String, (usize, String)> {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../test/pq-native/n3-controller-auth-vectors.tsv"
+        "/../../../test/pq-native/controller-auth-vectors.tsv"
     );
     let text = std::fs::read_to_string(path).expect("the shared controller vectors");
     let mut cases = std::collections::HashMap::new();

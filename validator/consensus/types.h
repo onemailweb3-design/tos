@@ -80,7 +80,7 @@ struct PeerValidator {
 
   PeerValidatorId idx;
 
-  // The post-quantum consensus key the set records for this validator: the one N4 signs
+  // The post-quantum consensus key the set records for this validator: the one consensus signs
   // and verifies Simplex messages with. It is not a transport identity.
   tos::pq::ConsensusPQKey consensus_key;
 

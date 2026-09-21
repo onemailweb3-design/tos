@@ -41,7 +41,7 @@ int main() {
   std::map<std::string, std::string> expected;
   std::map<std::string, std::size_t> lengths;
   {
-    std::ifstream file(N3_CONTROLLER_AUTH_VECTORS_FILE);
+    std::ifstream file(CONTROLLER_AUTH_VECTORS_FILE);
     assert(file);
     for (std::string line; std::getline(file, line);) {
       if (line.empty() || line[0] == '#') {
@@ -132,6 +132,6 @@ int main() {
   }
   assert(tos::pq::controller_auth_op != tos::pq::controller_auth_sign_tag);
 
-  std::printf("N3_CONTROLLER_AUTH_VECTORS_OK preimage=%zu bytes context=%zu bytes\n", base.size(), context.size());
+  std::printf("CONTROLLER_AUTH_VECTORS_OK preimage=%zu bytes context=%zu bytes\n", base.size(), context.size());
   return 0;
 }

@@ -2,8 +2,8 @@
 // Authorise one validator-controller action with the offline root key.
 //
 // This is the command an operator runs, and the only way a controller action is
-// authorised outside a test. It lives here rather than in the node for the reason N3.3A
-// created and N3.8 ruled on: the root owns the stake, the validator identity and the
+// authorised outside a test. It lives here rather than in the node for the reason the offline-root split
+// created and the custody ruling settled: the root owns the stake, the validator identity and the
 // power to replace the consensus key, so a validator host that could run this would be a
 // host whose compromise costs the authority rather than the key.
 //

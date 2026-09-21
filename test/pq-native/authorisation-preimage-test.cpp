@@ -40,7 +40,7 @@ int main() {
   std::map<std::string, std::string> expected;
   std::map<std::string, std::size_t> lengths;
   {
-    std::ifstream file(N3_PREIMAGE_VECTORS_FILE);
+    std::ifstream file(AUTHORISATION_PREIMAGE_VECTORS_FILE);
     assert(file);
     for (std::string line; std::getline(file, line);) {
       if (line.empty() || line[0] == '#') {
@@ -98,7 +98,7 @@ int main() {
   assert(vote != complaint);
   assert(vote.substr(0, 4) != complaint.substr(0, 4));
 
-  std::printf("N3_PREIMAGE_VECTORS_OK stake=%zu config-vote=%zu complaint-vote=%zu bytes\n", a.size(), vote.size(),
-              complaint.size());
+  std::printf("AUTHORISATION_PREIMAGE_VECTORS_OK stake=%zu config-vote=%zu complaint-vote=%zu bytes\n", a.size(),
+              vote.size(), complaint.size());
   return 0;
 }

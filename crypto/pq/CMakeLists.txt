@@ -28,7 +28,7 @@ target_include_directories(tos_mldsa44 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
 target_compile_definitions(tos_mldsa44 PRIVATE MLD_CONFIG_FILE="mldsa44-config.h")
 target_link_libraries(tos_mldsa44 PRIVATE tos_mldsa_native)
 
-# PQ-native consensus identity primitives (N1): consensus algorithm id, key/signature
+# PQ-native consensus identity primitives: consensus algorithm id, key/signature
 # value types, stable key-id derivation, structural bounds. Verify-only; the signer is
 # a separate target.
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -52,7 +52,7 @@ target_include_directories(tos_pq_consensus_signer PUBLIC "${CMAKE_CURRENT_SOURC
 target_compile_definitions(tos_pq_consensus_signer PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
 target_link_libraries(tos_pq_consensus_signer PUBLIC tos_pq_consensus PRIVATE tos_pq_consensus_signer_backend OpenSSL::Crypto)
 
-# The offline controller-root domain. A separate library on purpose: the boundary N3.3A
+# The offline controller-root domain. A separate library on purpose: the boundary the offline-root split
 # created is between two machines, so it is a link boundary here. validator-engine links
 # tos_pq_consensus_signer and must never link this, which
 # scripts/check-root-authority-off-the-node.sh enforces.
@@ -120,67 +120,67 @@ if(TARGET tos_crypto)
     CONFIG43_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors.tsv")
   add_test(NAME config43-vectors COMMAND test-config43)
   # Descriptors and the verdicts the node reaches about them.
-  add_executable(n3-descriptor-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-descriptor-vectors-gen.cpp")
-  set_target_properties(n3-descriptor-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(n3-descriptor-vectors-gen PRIVATE tos_block tos_crypto keys)
+  add_executable(descriptor-verdict-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/descriptor-verdict-vectors-gen.cpp")
+  set_target_properties(descriptor-verdict-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(descriptor-verdict-vectors-gen PRIVATE tos_block tos_crypto keys)
   # The bytes each post-quantum authorisation signs.
-  add_executable(n3-preimage-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-preimage-vectors-gen.cpp")
-  set_target_properties(n3-preimage-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(n3-preimage-vectors-gen PRIVATE tos_block tos_crypto)
-  add_executable(n3-carrier-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-vectors-gen.cpp")
-  set_target_properties(n3-carrier-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(n3-carrier-vectors-gen PRIVATE tos_block tos_crypto)
-  add_executable(test-n3-preimage "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-preimage-test.cpp")
-  set_target_properties(test-n3-preimage PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(test-n3-preimage PRIVATE tos_block tos_crypto)
-  target_compile_definitions(test-n3-preimage PRIVATE
-    N3_PREIMAGE_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-preimage-vectors.tsv")
-  add_test(NAME n3-preimage-vectors COMMAND test-n3-preimage)
-  add_executable(test-n3-carrier "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-test.cpp")
-  set_target_properties(test-n3-carrier PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(test-n3-carrier PRIVATE tos_block tos_crypto)
-  target_compile_definitions(test-n3-carrier PRIVATE
-    N3_CARRIER_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-vectors.tsv"
-    N3_CARRIER_TOOLING_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-carrier-vectors-tooling.tsv")
-  add_test(NAME n3-carrier-vectors COMMAND test-n3-carrier)
+  add_executable(authorisation-preimage-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/authorisation-preimage-vectors-gen.cpp")
+  set_target_properties(authorisation-preimage-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(authorisation-preimage-vectors-gen PRIVATE tos_block tos_crypto)
+  add_executable(vote-carrier-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/vote-carrier-vectors-gen.cpp")
+  set_target_properties(vote-carrier-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(vote-carrier-vectors-gen PRIVATE tos_block tos_crypto)
+  add_executable(test-authorisation-preimage "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/authorisation-preimage-test.cpp")
+  set_target_properties(test-authorisation-preimage PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-authorisation-preimage PRIVATE tos_block tos_crypto)
+  target_compile_definitions(test-authorisation-preimage PRIVATE
+    AUTHORISATION_PREIMAGE_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/authorisation-preimage-vectors.tsv")
+  add_test(NAME authorisation-preimage-vectors COMMAND test-authorisation-preimage)
+  add_executable(test-vote-carrier "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/vote-carrier-test.cpp")
+  set_target_properties(test-vote-carrier PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-vote-carrier PRIVATE tos_block tos_crypto)
+  target_compile_definitions(test-vote-carrier PRIVATE
+    VOTE_CARRIER_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/vote-carrier-vectors.tsv"
+    VOTE_CARRIER_TOOLING_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/vote-carrier-vectors-tooling.tsv")
+  add_test(NAME vote-carrier-vectors COMMAND test-vote-carrier)
   # What a validator controller's post-quantum root signs.
-  add_executable(n3-controller-auth-vectors-gen
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-controller-auth-vectors-gen.cpp")
-  set_target_properties(n3-controller-auth-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(n3-controller-auth-vectors-gen PRIVATE tos_block tos_crypto)
-  add_executable(test-n3-controller-auth
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-controller-auth-test.cpp")
-  set_target_properties(test-n3-controller-auth PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(test-n3-controller-auth PRIVATE tos_block tos_crypto tos_mldsa44)
-  target_compile_definitions(test-n3-controller-auth PRIVATE
-    N3_CONTROLLER_AUTH_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-controller-auth-vectors.tsv")
-  add_test(NAME n3-controller-auth-vectors COMMAND test-n3-controller-auth)
+  add_executable(controller-auth-vectors-gen
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/controller-auth-vectors-gen.cpp")
+  set_target_properties(controller-auth-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(controller-auth-vectors-gen PRIVATE tos_block tos_crypto)
+  add_executable(test-controller-auth
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/controller-auth-test.cpp")
+  set_target_properties(test-controller-auth PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-controller-auth PRIVATE tos_block tos_crypto tos_mldsa44)
+  target_compile_definitions(test-controller-auth PRIVATE
+    CONTROLLER_AUTH_VECTORS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/controller-auth-vectors.tsv")
+  add_test(NAME controller-auth-vectors COMMAND test-controller-auth)
   # The one routine the node and the operator tool both call to sign a stake.
-  add_executable(test-n3-stake-auth "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-stake-auth-test.cpp")
-  set_target_properties(test-n3-stake-auth PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(test-n3-stake-auth PRIVATE tos_block tos_crypto tos_mldsa44
+  add_executable(test-stake-authorisation "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/stake-authorisation-test.cpp")
+  set_target_properties(test-stake-authorisation PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-stake-authorisation PRIVATE tos_block tos_crypto tos_mldsa44
     tos_pq_consensus_signer tos_pq_consensus)
-  add_test(NAME n3-stake-auth COMMAND test-n3-stake-auth)
-  # N4.0 — what a post-quantum Simplex vote and certificate cost on the wire and the CPU,
+  add_test(NAME stake-authorisation COMMAND test-stake-authorisation)
+  # What a post-quantum Simplex vote and certificate cost on the wire and the CPU,
   # measured on the real signer and the real consensus TL before consensus is converted.
-  add_executable(n4-0-carrier-measure "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n4-0-carrier-measure.cpp")
-  set_target_properties(n4-0-carrier-measure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(n4-0-carrier-measure PRIVATE tos_block tos_crypto tos_mldsa44
+  add_executable(simplex-carrier-measure "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/simplex-carrier-measure.cpp")
+  set_target_properties(simplex-carrier-measure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(simplex-carrier-measure PRIVATE tos_block tos_crypto tos_mldsa44
     tos_pq_consensus_signer tos_pq_consensus tl_api tl-utils)
   # The frozen Simplex carrier hard bound and its max/max+1 gate.
-  add_executable(test-n4-0-carrier "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n4-0-carrier-test.cpp")
-  set_target_properties(test-n4-0-carrier PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(test-n4-0-carrier PRIVATE tos_block tos_crypto tos_mldsa44 tl_api tl-utils)
-  add_test(NAME n4-0-carrier COMMAND test-n4-0-carrier)
+  add_executable(test-simplex-carrier-bound "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/simplex-carrier-bound-test.cpp")
+  set_target_properties(test-simplex-carrier-bound PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(test-simplex-carrier-bound PRIVATE tos_block tos_crypto tos_mldsa44 tl_api tl-utils)
+  add_test(NAME simplex-carrier-bound COMMAND test-simplex-carrier-bound)
   # Configuration parameter 43 encodings both implementations must read identically.
   add_executable(config43-vectors-gen "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/config43-vectors-gen.cpp")
   set_target_properties(config43-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(config43-vectors-gen PRIVATE tos_block tos_crypto)
   # What a post-quantum validator set and elector cost in masterchain account state,
   # measured before contract storage is designed around a shape that may not fit.
-  add_executable(n3-state-measure "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/n3-state-measure.cpp")
-  set_target_properties(n3-state-measure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-  target_link_libraries(n3-state-measure PRIVATE tos_block tos_crypto keys)
+  add_executable(validator-state-measure "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-state-measure.cpp")
+  set_target_properties(validator-state-measure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_link_libraries(validator-state-measure PRIVATE tos_block tos_crypto keys)
   add_executable(test-validator-identity "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-identity-test.cpp")
   set_target_properties(test-validator-identity PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
   target_link_libraries(test-validator-identity PRIVATE tos_block tos_crypto keys tl-utils)

@@ -5,7 +5,7 @@
 
 //! The Rust half of the vote-carrier lock.
 //!
-//! The C++ half produces `test/pq-native/n3-carrier-vectors.tsv` and reads it back; the
+//! The C++ half produces `test/pq-native/vote-carrier-vectors.tsv` and reads it back; the
 //! contracts parse what it describes. A vote built to a layout the contract does not read
 //! is refused after the sender has paid for the message, so the three sides are held to
 //! one recorded set of bytes rather than to each other's source.
@@ -28,7 +28,7 @@ fn fill(byte: u8) -> [u8; 32] {
 
 fn recorded() -> HashMap<String, (String, String)> {
     let path =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/pq-native/n3-carrier-vectors.tsv");
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/pq-native/vote-carrier-vectors.tsv");
     let text = std::fs::read_to_string(path).expect("the shared carrier vectors");
     let mut cases = HashMap::new();
     for line in text.lines() {
@@ -120,7 +120,7 @@ fn built() -> Vec<(&'static str, Cell)> {
 /// Regenerated with `TOS_WRITE_CARRIER_TOOLING=1`, and otherwise compared.
 const TOOLING_FILE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../test/pq-native/n3-carrier-vectors-tooling.tsv"
+    "/../../../../test/pq-native/vote-carrier-vectors-tooling.tsv"
 );
 
 #[test]
@@ -169,7 +169,7 @@ fn builds_exactly_the_carriers_the_other_implementation_builds() {
         "# The same carriers, serialised by the operator tooling rather than by the node.\n\
          #\n\
          # The two libraries frame a bag of cells differently, so these bytes are not the\n\
-         # ones beside them in n3-carrier-vectors.tsv. They are here so the node's reader is\n\
+         # ones beside them in vote-carrier-vectors.tsv. They are here so the node's reader is\n\
          # held to what the tooling actually sends: a test that only read back its own\n\
          # output would pass two changes that suited each other and nothing else.\n\
          #\n\

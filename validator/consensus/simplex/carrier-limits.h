@@ -12,15 +12,15 @@
 // exceeds the current direct-message carrier: `Overlays::max_message_size() ==
 // adnl::Adnl::get_mtu() - 36`, and `adnl::Adnl::get_mtu()` is 1024 (adnl/adnl.h), so the
 // limit is 988 bytes. (This is not `AdnlNetworkManager::get_mtu()`, a different 1440-byte
-// network-datagram constant.) N4 raises the consensus peer stream allowance to carry
+// network-datagram constant.) The post-quantum conversion raises the consensus peer stream allowance to carry
 // these; this header is the one place the ceiling is written, so the transport guard, the
 // inbound size check and the tests cannot silently disagree.
 //
-// This is a HARD STRUCTURAL bound, not the launch policy. N6 may choose a smaller
+// This is a HARD STRUCTURAL bound, not the launch policy. Launch policy may choose a smaller
 // `max_certificate_bytes` / validator count inside it, but nothing may exceed this
 // envelope without a protocol change. Measured exactly by
-// `test/pq-native/n4-0-carrier-measure.cpp` (cert400 = 972856 B) and derived below from
-// the N1 structural signer ceiling so it cannot drift from the encoding.
+// `test/pq-native/simplex-carrier-measure.cpp` (cert400 = 972856 B) and derived below from
+// the structural signer ceiling so it cannot drift from the encoding.
 
 #include <cstddef>
 
@@ -40,8 +40,8 @@ namespace tos::validator::consensus::simplex {
 inline constexpr std::size_t kVoteSignatureMaxBytes = 4 + 4 + 4 + tos::pq::mldsa44_signature_bytes;  // 2432
 inline constexpr std::size_t kCertificateFrameBytes = 4 + 44 + 4 + 4;                                // 56
 
-// The N1 structural signer ceiling, taken directly from the N1 limits so the two cannot
-// drift: raising the N1 field raises this, and once the raised value no longer fits the
+// The structural signer ceiling, taken directly from the frozen limits so the two cannot
+// drift: raising that field raises this, and once the raised value no longer fits the
 // frozen envelope the static_assert below fails and forces a deliberate re-measure and
 // peer-MTU resize. (A rise that still fits the envelope is carried without change; the
 // first ceiling that fails the assert against a 1,000,000-byte envelope is 412 signers.)
@@ -54,7 +54,7 @@ inline constexpr std::size_t simplex_protocol_hard_max_bytes = 1'000'000;
 
 static_assert(kCertificateFrameBytes + kMaxCertificateSigners * kVoteSignatureMaxBytes <=
                   simplex_protocol_hard_max_bytes,
-              "the frozen Simplex carrier hard max no longer covers a certificate at the N1 signer ceiling; "
+              "the frozen Simplex carrier hard max no longer covers a certificate at the structural signer ceiling; "
               "re-measure and raise it deliberately, and re-size the peer-MTU allowance");
 
 // Framing added below the inner message on the direct path, each layer read from source

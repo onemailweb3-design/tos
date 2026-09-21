@@ -29,7 +29,7 @@ const ERROR_INDEX_DISAGREES: i32 = 69;
 const ERROR_OWNER_CHANGED: i32 = 70;
 
 /// What the same state cost when the storage shape was approved, from
-/// `build/crypto/pq/n3-state-measure`: members plus the reverse index, in cells.
+/// `build/crypto/pq/validator-state-measure`: members plus the reverse index, in cells.
 const APPROVED_CELLS_AT_100: u64 = 1698;
 const APPROVED_CELLS_AT_400: u64 = 6798;
 

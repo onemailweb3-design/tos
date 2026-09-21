@@ -12,7 +12,7 @@ mldsa44_signature_bytes	2420
 mldsa44_algorithm_id	1
 validator_descr_pq_tag	179
 validator_set_hash_magic_v2	2041471698
-# The N3 operation and signed-domain tags. Frozen here before anything is written
+# The operation and signed-domain tags. Frozen here before anything is written
 # against them, because this is the last point at which changing one is cheap.
 elector_pq_stake_op	1347515252
 elector_pq_stake_sign_tag	1347507028

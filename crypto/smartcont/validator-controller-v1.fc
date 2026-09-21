@@ -18,7 +18,7 @@
 #include "pq-bytes.fc";
 
 ;; ---------------------------------------------------------------------------
-;; The frozen authorization wire. `test/pq-native/n3-controller-auth-vectors.tsv`
+;; The frozen authorization wire. `test/pq-native/controller-auth-vectors.tsv`
 ;; holds these bytes, and the node and the tooling are held to the same file.
 ;; ---------------------------------------------------------------------------
 

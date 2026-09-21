@@ -13,7 +13,7 @@
 //! rather than registering something bad, and a contract that refuses what the node
 //! accepts cannot elect anyone.
 //!
-//! The verdicts in `test/pq-native/n3-descriptor-vectors.tsv` are produced by running the
+//! The verdicts in `test/pq-native/descriptor-verdict-vectors.tsv` are produced by running the
 //! node's decoder over each descriptor, not by restating its rules.
 
 use chain_block::{
@@ -120,7 +120,7 @@ fn deploy(chain: &mut Blockchain) -> MsgAddressInt {
 }
 
 fn vectors() -> Vec<(String, String, Cell)> {
-    let path = repo_root().join("test/pq-native/n3-descriptor-vectors.tsv");
+    let path = repo_root().join("test/pq-native/descriptor-verdict-vectors.tsv");
     let text = std::fs::read_to_string(path).expect("the shared descriptor vectors");
     let mut cases = Vec::new();
     for line in text.lines() {
@@ -423,7 +423,7 @@ fn a_descriptor_the_library_packs_is_one_the_node_accepts() {
 
 /// The bytes the contract signs are the bytes the node and the tooling sign.
 ///
-/// `test/pq-native/n3-preimage-vectors.tsv` is the shared lock: the node's C++ builders
+/// `test/pq-native/authorisation-preimage-vectors.tsv` is the shared lock: the node's C++ builders
 /// and the Rust tooling are both held to it. The contract said in a comment that it was
 /// held to it too, and nothing checked that. A contract that built a different preimage
 /// would refuse every correctly signed request, and the failure would look like a bad
@@ -439,7 +439,7 @@ fn the_contract_builds_the_bytes_the_vectors_freeze() {
     let probe = deploy(&mut chain);
 
     let vectors =
-        std::fs::read_to_string(repo_root().join("test/pq-native/n3-preimage-vectors.tsv"))
+        std::fs::read_to_string(repo_root().join("test/pq-native/authorisation-preimage-vectors.tsv"))
             .expect("the shared preimage vectors");
     let expected = |name: &str| -> String {
         vectors

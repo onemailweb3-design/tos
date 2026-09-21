@@ -4,7 +4,7 @@
 // A validator controller's root key, on disk, in the offline operator domain.
 //
 // This file and the signer it builds are deliberately not part of anything a validator
-// host links. The boundary N3.3A created is between two machines, not between two
+// host links. The boundary the offline-root split created is between two machines, not
 // functions: a validator holds the key it can rotate, and the authority that rotates it
 // lives where an operator keeps it. A node that could load this would be a node whose
 // compromise costs the authority rather than the key, so the separation is a link-time

@@ -149,7 +149,7 @@ def check(transcript_text, mldsa):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("binary", type=Path, help="test-n4-certificate-conformance")
+    parser.add_argument("binary", type=Path, help="test-certificate-conformance")
     parser.add_argument("--openssl-mldsa", action="store_true")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()

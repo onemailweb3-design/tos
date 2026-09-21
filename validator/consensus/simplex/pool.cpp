@@ -389,7 +389,7 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
   }
 
   template <>
-  void handle(BusHandle, std::shared_ptr<const N5BoundaryReached>) {
+  void handle(BusHandle, std::shared_ptr<const BlockSignatureCarrierMissing>) {
     quiescent_ = true;
   }
 
@@ -1212,7 +1212,7 @@ class PoolImpl : public td::actor::SpawnsWith<Bus>, public td::actor::ConnectsTo
   // is a terminal condition for the group: casting a fresh vote would create a second
   // signature for a vote that may already be in a peer's certificate.
   std::string vote_journal_failure_;
-  // Set once this group reaches the N4/N5 carrier boundary.
+  // Set once this group reaches the block-signature carrier boundary.
   bool quiescent_ = false;
   // Set while more agreed certificates are waiting to be finalized than the resolver will
   // hold. Producing more would add to a pile nothing is draining.

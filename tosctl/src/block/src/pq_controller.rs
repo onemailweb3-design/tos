@@ -9,7 +9,7 @@
 //!
 //! A controller is the root of a validator's authority: it owns the stake, it is the
 //! stable validator identity, and it is what replaces an operational consensus key. Its
-//! root key signs under a domain of its own, and `test/pq-native/n3-controller-auth-vectors.tsv`
+//! root key signs under a domain of its own, and `test/pq-native/controller-auth-vectors.tsv`
 //! holds what this produces so the other implementation is held to the same bytes.
 
 use crate::UInt256;

@@ -11,10 +11,10 @@ target_link_libraries(test-consensus PRIVATE
     validator
 )
 
-# N4.2/N4.3 — the live sign->verify round through PeerValidator::check_signature.
-add_executable(test-n4-consensus-verify test-n4-consensus-verify.cpp)
-set_target_properties(test-n4-consensus-verify PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-target_link_libraries(test-n4-consensus-verify PRIVATE
+# The live sign->verify round through PeerValidator::check_signature.
+add_executable(test-consensus-verify test-consensus-verify.cpp)
+set_target_properties(test-consensus-verify PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(test-consensus-verify PRIVATE
     validator
     tos_validator
     adnl
@@ -29,14 +29,14 @@ target_link_libraries(test-n4-consensus-verify PRIVATE
     tdactor
     tdutils
 )
-add_test(NAME n4-consensus-verify COMMAND test-n4-consensus-verify)
+add_test(NAME consensus-verify COMMAND test-consensus-verify)
 
-# N4 — the structural and cryptographic guards on the live Simplex entrypoints, under
+# The structural and cryptographic guards on the live Simplex entrypoints, under
 # post-quantum keys. It links the production sources through `validator`; nothing here
 # re-implements quorum arithmetic or signature checking.
-add_executable(test-n4-certificate-conformance test-n4-certificate-conformance.cpp)
-set_target_properties(test-n4-certificate-conformance PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-target_link_libraries(test-n4-certificate-conformance PRIVATE
+add_executable(test-certificate-conformance test-certificate-conformance.cpp)
+set_target_properties(test-certificate-conformance PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(test-certificate-conformance PRIVATE
     validator
     tos_validator
     tos_block
@@ -52,16 +52,16 @@ target_link_libraries(test-n4-certificate-conformance PRIVATE
     tdactor
     tdutils
 )
-add_test(NAME n4-certificate-conformance COMMAND test-n4-certificate-conformance)
+add_test(NAME certificate-conformance COMMAND test-certificate-conformance)
 
 # The same binary emits one transcript per signing domain. This rebuilds each preimage from
 # the TL constructor schemas in Python and requires an exact match, so the C++ serializer
 # cannot agree with itself about a change to what a validator signs.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
-    add_test(NAME n4-simplex-preimages
+    add_test(NAME simplex-preimages
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check-simplex-preimages.py
-                     $<TARGET_FILE:test-n4-certificate-conformance>)
+                     $<TARGET_FILE:test-certificate-conformance>)
 endif()
 
 add_executable(test-validator-manager-resource-policy test-validator-manager-resource-policy.cpp)
@@ -174,7 +174,7 @@ set_tests_properties(
     PROPERTIES ENVIRONMENT
         "TOS_SIMPLEX_STATE_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_FINALIZED_CACHE_MAX_ENTRIES=8;TOS_SIMPLEX_CANDIDATE_RETENTION_SLOTS=8"
 )
-# N4.5 — the post-quantum round end to end, and the boundary it stops at. A slot finalized
+# The post-quantum round end to end, and the boundary it stops at. A slot finalized
 # by every node, every signature in its certificate verified independently, a restart that
 # rebuilds that certificate from persisted records with signatures matching their signers'
 # journals, that slot latched at the carrier boundary, and then nothing: no accepted block
@@ -197,9 +197,9 @@ add_test(
     COMMAND test-consensus --duration 40 --n-nodes 4 --target-rate-ms 100
             --net-ping 0.005:0.02 --pq-finality-e2e-test
 )
-# The structural scales N4.5 asks for, at the two this harness can carry. Measured on one
+# The structural scales the end-to-end gate asks for, at the two this harness can carry. Measured on one
 # developer machine: 21 nodes in 0.4s, 100 in 2.5s. The measurements and the boundary above
-# them are recorded in the plan document; N6 runs the launch measurement set on real hosts.
+# them are recorded in the plan document; the launch measurement set runs on real hosts.
 add_test(
     NAME test-consensus-simplex2-pq-finality-e2e-21
     COMMAND test-consensus --duration 120 --n-nodes 21 --target-rate-ms 100
@@ -213,8 +213,8 @@ add_test(
 # The same gate with the finalization concurrency limit set to one, which is what lets the
 # retry probe build the pressure it needs: a finalization refused before its attempt begins,
 # and one that fails inside it. Both have to come back rather than disappear -- a certificate
-# dropped with nothing left to ask for it again costs nothing in an N4-only build, where the
-# chain does not advance either way, and is a stuck chain in N5.
+# dropped with nothing left to ask for it again costs nothing in a build with no carrier, where the
+# chain does not advance either way, and is a stuck chain once blocks are accepted.
 add_test(
     NAME test-consensus-simplex2-pq-finality-retry
     COMMAND test-consensus --duration 40 --n-nodes 4 --target-rate-ms 100
@@ -278,8 +278,8 @@ set_tests_properties(
     PROPERTIES ENVIRONMENT "TOS_SIMPLEX_INJECT_PERMANENT_FINALIZATION_FAILURE=1"
 )
 # The same gate, with the adversarial scenarios turned on. Their attack machinery was never
-# the part that needed N5 -- only their `--min-finalized-blocks` assertion was -- so running
-# them against the post-quantum gate restores the end-to-end half of N4.5's checklist: that
+# the part that needed the carrier -- only their `--min-finalized-blocks` assertion was -- so running
+# them against the post-quantum gate restores the end-to-end half of the checklist: that
 # traffic from outside the validator set does not become authority, that certificate gossip
 # deduplicates, that an adaptive Byzantine membership does not stop the round, and that an
 # agreed certificate is still reached under packet loss, node churn and partition. Each
@@ -289,9 +289,9 @@ set_tests_properties(
 # attributed to the wrong signer index is refused. The malicious observer sends a
 # classical-length signature from outside the set, so a rejection here could be for the
 # length rather than for the attribution. That property is proven where the inputs can be
-# built exactly -- n4-certificate-conformance, with real post-quantum signatures, covers a
+# built exactly -- certificate-conformance, with real post-quantum signatures, covers a
 # vote signed by one validator presented as another, an out-of-range index and a repeated
-# signer; and n4-consensus-verify covers a genuine transport-key signature carrying no
+# signer; and consensus-verify covers a genuine transport-key signature carrying no
 # consensus authority.
 add_test(
     NAME test-consensus-simplex2-pq-malicious-observer
@@ -352,11 +352,11 @@ add_test(
 # a legacy carrier built and thrown away, and a keyring signature produced and discarded.
 # They are checked where they exist, in the code.
 if(Python3_Interpreter_FOUND)
-    add_test(NAME n4-no-fallback
+    add_test(NAME consensus-no-fallback
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check-no-fallback.py)
 endif()
 
-# N4.4 — the two-phase own-vote journal: signed records replay byte for byte, an
+# The two-phase own-vote journal: signed records replay byte for byte, an
 # intent-only record is signed once, and a record this node cannot verify as its own
 # stops the group instead of producing a second signature.
 add_test(
@@ -388,20 +388,20 @@ add_test(
             -s ${CMAKE_CURRENT_SOURCE_DIR}/simplex2-genesis-config.fif
 )
 
-# These scenarios assert that blocks are finalized and accepted, which an N4-only build
-# cannot do: the N4/N5 seam refuses to turn a post-quantum finality certificate into a
+# These scenarios assert that blocks are finalized and accepted, which a build with no carrier
+# cannot do: the carrier seam refuses to turn a post-quantum finality certificate into a
 # block signature set, so no block is ever accepted. They are legacy regression tests for
-# behaviour that only exists once N5 provides the post-quantum carrier.
+# behaviour that only exists once a post-quantum block-signature carrier exists.
 #
 # Eight of the ten originally disabled here have come back as pq- variants above: their
-# attack machinery never needed N5, only their `--min-finalized-blocks` assertion did, and
+# attack machinery never needed the carrier, only their `--min-finalized-blocks` assertion did, and
 # the post-quantum gate gives them a liveness floor in its place. What is left are the two
 # whose subject really is the accepted chain -- catching up to a finalized height, and
 # rebuilding after thousands of empty blocks.
 #
 # They are disabled rather than deleted, and disabled rather than left failing: ctest
 # reports a disabled test as disabled, so the gap stays visible instead of turning the
-# suite red for a reason nobody reads, or green for a reason nobody checked. N5 removes
+# suite red for a reason nobody reads, or green for a reason nobody checked. Restoring the carrier removes
 # this block and they must pass again.
 set_tests_properties(
     test-consensus-simplex2-loss

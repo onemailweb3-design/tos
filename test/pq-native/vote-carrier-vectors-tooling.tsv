@@ -1,7 +1,7 @@
 # The same carriers, serialised by the operator tooling rather than by the node.
 #
 # The two libraries frame a bag of cells differently, so these bytes are not the
-# ones beside them in n3-carrier-vectors.tsv. They are here so the node's reader is
+# ones beside them in vote-carrier-vectors.tsv. They are here so the node's reader is
 # held to what the tooling actually sends: a test that only read back its own
 # output would pass two changes that suited each other and nothing else.
 #

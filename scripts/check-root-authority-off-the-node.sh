@@ -3,7 +3,7 @@ set -euo pipefail
 
 # A validator node must not be able to authorise a controller action.
 #
-# N3.3A separated two secrets so that compromising the machine that validates costs an
+# The offline-root split separated two secrets so that compromising the machine that validates costs an
 # operator the key it can rotate and not the authority that rotates it. That separation
 # is only real while the node cannot sign a controller authorisation -- not "does not",
 # but cannot, because the code that would is not in it.

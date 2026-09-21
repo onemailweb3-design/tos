@@ -4,7 +4,7 @@
  * Licensed under the GNU General Public License v3.0.
  */
 
-//! The first gate of N3.3A: can a contract recover an account's address from a proof of
+//! The first gate of the controller-proof design: can a contract recover an account's address from a proof of
 //! its state init with both children pruned?
 //!
 //! The validator controller design rests on this. An account can only be initialized with

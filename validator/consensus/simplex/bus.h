@@ -133,15 +133,15 @@ struct QueryResolverTrackedStateCount {
   std::string contents_to_string() const;
 };
 
-// Read-only observability of the N4/N5 boundary: the finalized slots this node agreed on
+// Read-only observability of the carrier boundary: the finalized slots this node agreed on
 // and then could not carry into block finality, because the post-quantum block-signature
-// carrier is N5's. A validator that is advancing normally reports none; an N4-only build
+// carrier does not exist yet. A validator that is advancing normally reports none; a build with no carrier
 // reports what it has latched. It is what lets an operator, or the end-to-end gate, see
 // the refusal as a state rather than as a log line.
 //
 // The named slot is answered separately from the total on purpose: a count alone cannot
 // say that *this* certificate stopped at the boundary, only that something did.
-struct QueryN5Boundary {
+struct QueryFinalizationState {
   struct Result {
     size_t blocked_slots = 0;
     bool slot_is_blocked = false;
@@ -261,7 +261,7 @@ class Bus : public consensus::Bus {
   using Events = td::TypeList<BroadcastVote, PersistOwnVoteIntent, PersistOwnSignedVote, NotarizationObserved,
                               FinalizationObserved, LeaderWindowObserved, WaitForParent, ResolveCandidate,
                               StoreCandidate, ResolveState, SaveCertificate, QueryValidatorGroupInfo, QuerySlotSkipped,
-                              QueryResolverTrackedStateCount, QueryN5Boundary, QueryVoteIngress>;
+                              QueryResolverTrackedStateCount, QueryFinalizationState, QueryVoteIngress>;
 
   Bus() = default;
 

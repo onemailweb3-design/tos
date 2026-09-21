@@ -183,6 +183,6 @@ int main() {
     assert(unpack_pq_bytes(root_cell(12, 32, {odd.finalize()}), 2420).is_error());
   }
 
-  printf("PQ_BYTES_N1_OK roundtrips+hard-max+canonicality-battery+shared-vectors\n");
+  printf("PQ_BYTES_OK roundtrips+hard-max+canonicality-battery+shared-vectors\n");
   return 0;
 }

@@ -4393,7 +4393,7 @@ fn pq_stake_body_owned(
 }
 
 /// The post-quantum instruction is gated on global version 16, and the zerostate declares
-/// 14. Raising it here is what N3 assumes and the activation gate will make true; the
+/// 14. Raising it here is what the design assumes and the activation gate will make true; the
 /// classical tests above stay on the zerostate's version, which is what keeps them
 /// evidence about the chain as it is.
 fn raise_to_post_quantum_version(chain: &mut Chain) {
@@ -6256,7 +6256,7 @@ fn a_post_quantum_stake_without_a_transport_address_is_returned() {
 }
 
 // ---------------------------------------------------------------------------
-// N3.9 — the sequence an operator actually runs
+// The sequence an operator actually runs
 //
 // Everything above proves the contracts. This proves the path: two real seed files in
 // two separate custody domains, the two real tools built from this repository, and the

@@ -57,7 +57,7 @@ struct Recorded {
 int main() {
   std::map<std::string, Recorded> recorded;
   {
-    std::ifstream file(N3_CARRIER_VECTORS_FILE);
+    std::ifstream file(VOTE_CARRIER_VECTORS_FILE);
     assert(file);
     for (std::string line; std::getline(file, line);) {
       if (line.empty() || line[0] == '#') {
@@ -130,7 +130,7 @@ int main() {
   // direction nothing tries.
   {
     std::map<std::string, std::string> from_tooling;
-    std::ifstream file(N3_CARRIER_TOOLING_FILE);
+    std::ifstream file(VOTE_CARRIER_TOOLING_FILE);
     assert(file);
     for (std::string line; std::getline(file, line);) {
       if (line.empty() || line[0] == '#') {
@@ -208,7 +208,7 @@ int main() {
   }
 
   std::printf(
-      "N3_CARRIER_OK %zu vote carriers match the recorded bytes, are readable as the tooling writes "
+      "VOTE_CARRIER_OK %zu vote carriers match the recorded bytes, are readable as the tooling writes "
       "them, and no two are the same\n",
       built.size());
   return 0;

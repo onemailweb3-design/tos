@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: LGPL-2.0-or-later
  */
-// N4 — the structural and cryptographic guards on the live Simplex entrypoints, exercised
+// The structural and cryptographic guards on the live Simplex entrypoints, exercised
 // with real post-quantum consensus keys.
 //
 // This runs the production parsers themselves: Signed<Vote>::from_tl, Certificate<T>::from_tl
@@ -244,22 +244,24 @@ void certificates(Fixture& f) {
          "certificate-weight-two-signers-below-quorum", "Not enough");
 }
 
-// A finality certificate cannot become a block signature set in an N4-only build: the only
-// carrier that exists is the legacy fixed-width Ed25519 one, and N5 replaces it. The refusal
+// A finality certificate cannot become a block signature set in a build with no carrier: the only
+// carrier that exists is the legacy fixed-width Ed25519 one, and the post-quantum carrier replaces it. The refusal
 // is tagged so the finalization sequencer can tell it apart from "try again".
-void n5_seam(Fixture& f) {
+void carrier_seam(Fixture& f) {
   auto candidate = td::make_ref<c::Candidate>(f.candidate_id, f.candidate_data.parent, c::PeerValidatorId{0},
                                               f.block_id, td::BufferSlice());
   sx::FinalizeVote final_vote{f.candidate_id};
   auto final_cert =
       sx::FinalCert::from_tl(std::move(*f.signatures(final_vote, {0, 1})), final_vote, f.bus).move_as_ok();
   auto refused_final = final_cert->to_signature_set(candidate, f.bus);
-  expect(refused_final.is_error() && sx::is_n5_carrier_required(refused_final.error()), "final-cert-refused-until-n5");
+  expect(refused_final.is_error() && sx::is_carrier_missing(refused_final.error()),
+         "final-cert-refused-until-the-carrier-exists");
 
   sx::NotarizeVote notar_vote{f.candidate_id};
   auto notar = sx::NotarCert::from_tl(std::move(*f.signatures(notar_vote, {0, 1})), notar_vote, f.bus).move_as_ok();
   auto refused_notar = notar->to_signature_set(candidate, f.bus);
-  expect(refused_notar.is_error() && sx::is_n5_carrier_required(refused_notar.error()), "notar-cert-refused-until-n5");
+  expect(refused_notar.is_error() && sx::is_carrier_missing(refused_notar.error()),
+         "notar-cert-refused-until-the-carrier-exists");
 }
 
 void empty_candidate(Fixture& f) {
@@ -319,9 +321,9 @@ int main() {
   Fixture f;
   votes(f);
   certificates(f);
-  n5_seam(f);
+  carrier_seam(f);
   empty_candidate(f);
   candidate_producer_identity(f);
-  std::printf("N4_CERTIFICATE_CONFORMANCE_OK %u checks over the live post-quantum Simplex entrypoints\n", checks);
+  std::printf("CERTIFICATE_CONFORMANCE_OK %u checks over the live post-quantum Simplex entrypoints\n", checks);
   return 0;
 }

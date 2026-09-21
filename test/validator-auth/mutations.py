@@ -12,7 +12,7 @@ EXPERIMENTAL = "test-validator-auth-experimental"
 # Only the isolated candidate-authentication experiment is mutated here.
 #
 # The live Simplex guards -- peer verification, duplicate signer, quorum boundary and the
-# producer identity -- moved to test/validator/consensus/test-n4-certificate-conformance.cpp
+# producer identity -- moved to test/validator/consensus/test-certificate-conformance.cpp
 # when the Ed25519 conformance test was retired. That test is not built by this directory's
 # workflow, which configures a deliberately minimal tree; it is built and run by the
 # repository-wide ctest job. Its mutations were killed by hand, not by this script, so

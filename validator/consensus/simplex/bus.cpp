@@ -60,7 +60,7 @@ std::string QuerySlotSkipped::contents_to_string() const {
   return PSTRING() << "{id=" << id << "}";
 }
 
-std::string QueryN5Boundary::contents_to_string() const {
+std::string QueryFinalizationState::contents_to_string() const {
   return PSTRING() << "{slot=" << slot << "}";
 }
 

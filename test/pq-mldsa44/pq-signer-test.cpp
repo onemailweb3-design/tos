@@ -60,7 +60,7 @@ int main() {
   assert(simplex_sign_context != validator_election_context &&
          validator_election_context != validator_config_vote_context &&
          validator_config_vote_context != config_admin_context && simplex_sign_context != config_admin_context);
-  // The two authority surfaces N3 gave a signer. Each verifies under its own context and
+  // The two authority surfaces a signer has. Each verifies under its own context and
   // under no other, which is what stops a validator's vote on a configuration proposal
   // being replayed as a vote on a complaint, or as a finality signature.
   {

@@ -242,8 +242,8 @@ cell pq::config_vote_context() inline {
 ;; ---------------------------------------------------------------------------
 ;; Authorisation: the frozen tags, and the exact bytes a stake request signs
 ;;
-;; The layout is frozen in test/pq-native/n3-preimage-vectors.tsv, which the node's and
-;; the tooling's builders are also held to. A contract that built a different preimage
+;; The layout is frozen in test/pq-native/authorisation-preimage-vectors.tsv, which
+;; the node's and the tooling's builders are also held to. A contract that built a different preimage
 ;; would reject every correctly signed request, and the failure would look like a bad key.
 ;; ---------------------------------------------------------------------------
 

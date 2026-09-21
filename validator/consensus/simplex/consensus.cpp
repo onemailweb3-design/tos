@@ -105,7 +105,7 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
   }
 
   template <>
-  void handle(BusHandle, std::shared_ptr<const N5BoundaryReached> event) {
+  void handle(BusHandle, std::shared_ptr<const BlockSignatureCarrierMissing> event) {
     if (quiescent_) {
       return;
     }
@@ -114,9 +114,10 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
     // a healthy entry; what stops is new work, because a vote or a candidate now is work on
     // a chain that cannot take it. Latching only the slot left this actor voting and
     // collating past a boundary it had no way to learn about.
-    LOG(ERROR) << "Simplex consensus is quiescent: slot " << event->slot
-               << " reached the N4/N5 carrier boundary, so this group produces no further votes or candidates "
-                  "until N5 supplies the post-quantum carrier.";
+    LOG(ERROR)
+        << "Simplex consensus is quiescent: slot " << event->slot
+        << " reached the block-signature carrier boundary, so this group produces no further votes or candidates "
+           "until a post-quantum block-signature carrier exists.";
   }
 
   template <>
@@ -338,7 +339,7 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
   td::uint32 timeout_slot_ = 0;  // By alarm_timestamp(), slots < timeout_slot_ should be notarized.
   std::chrono::duration<double> first_block_timeout_;
   bool previous_window_had_skip_ = false;
-  // Set once this group reaches the N4/N5 carrier boundary. Terminal for the session.
+  // Set once this group reaches the block-signature carrier boundary. Terminal for the session.
   bool quiescent_ = false;
   // Set while more agreed certificates are waiting to be finalized than the resolver will
   // hold. Producing more would add to a pile nothing is draining.

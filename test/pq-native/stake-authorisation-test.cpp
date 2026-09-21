@@ -110,7 +110,7 @@ int main() {
       tos::pq::sign_stake_authorization(store, global_id, election, 0x10000, validator_id, adnl, owner).has_value() &&
       "a weight factor of exactly one is admitted");
 
-  std::printf("N3_STAKE_AUTH_OK signature=%zu bytes key_id derived, owner- and validator-bound\n",
+  std::printf("STAKE_AUTHORISATION_OK signature=%zu bytes key_id derived, owner- and validator-bound\n",
               auth->signature.signature.size());
   return 0;
 }

@@ -52,7 +52,7 @@ class BlockProducerImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   }
 
   template <>
-  void handle(BusHandle, std::shared_ptr<const N5BoundaryReached>) {
+  void handle(BusHandle, std::shared_ptr<const BlockSignatureCarrierMissing>) {
     quiescent_ = true;
   }
 

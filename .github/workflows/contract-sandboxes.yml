@@ -80,12 +80,12 @@ jobs:
       # by the sandbox suites below; this is the producing side.
       - name: Validator vote bodies
         run: |
-          cmake --build build --target test-pq-vote-body test-n3-carrier -j2
+          cmake --build build --target test-pq-vote-body test-vote-carrier -j2
           ./build/crypto/pq/test-pq-vote-body
           # The recorded carriers. The tooling's half of this lock is a Rust test, which
           # the sandbox step below runs; both read the same file, so a layout that drifts
           # on one side fails on that side rather than on chain.
-          ./build/crypto/pq/test-n3-carrier
+          ./build/crypto/pq/test-vote-carrier
 
       # The node's own key file, and the tool that provisions one. Both are held to the
       # same rules, because the tool linking a different copy of them is how a key that
@@ -112,8 +112,8 @@ jobs:
       # requires it to still be there.
       - name: Vector files match their generators
         run: |
-          cmake --build build --target n3-preimage-vectors-gen n3-carrier-vectors-gen \
-            n3-controller-auth-vectors-gen n3-descriptor-vectors-gen config43-vectors-gen \
+          cmake --build build --target authorisation-preimage-vectors-gen vote-carrier-vectors-gen \
+            controller-auth-vectors-gen descriptor-verdict-vectors-gen config43-vectors-gen \
             validator-descr-vectors-gen pq-bytes-vectors-gen validator-set-hash-vectors-gen \
             validator-session-vectors-gen validator-set-cases-gen -j2
           ./scripts/check-vector-files.sh . build
@@ -163,7 +163,7 @@ jobs:
       # controller work added and requires a test to go red for it; a mutation that
       # survives fails the job.
       - name: Every controller rule is held by a test
-        run: python3 test/pq-native/n3-3a-mutations.py --out mutations.json
+        run: python3 test/pq-native/contract-guard-mutations.py --out mutations.json
 
       # The cutover deleted several validator-authority paths rather than refusing them
       # by name, so nothing in the contracts announces their return. This fails if one

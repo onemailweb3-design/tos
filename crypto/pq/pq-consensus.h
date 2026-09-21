@@ -1,6 +1,6 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
 #pragma once
-// PQ-native consensus identity primitives (N1). Pure declarations: the fixed
+// PQ-native consensus identity primitives. Pure declarations: the fixed
 // ML-DSA-44 lengths, the consensus algorithm id, the consensus key/signature
 // value types, and the stable key-id derivation. Encoding to cells (PQBytes) and
 // the signer live in separate units; this header carries no backend dependency.
@@ -39,16 +39,16 @@ struct PQConsensusLimits {
   PQAlgorithmId algorithm_id = PQAlgorithmId::mldsa44;
   std::size_t public_key_bytes = mldsa44_public_key_bytes;  // 1312
   std::size_t signature_bytes = mldsa44_signature_bytes;    // 2420
-  // Provisional structural ceiling for N1 sizing only: 21 is the launch committee,
+  // Provisional structural ceiling for sizing only: 21 is the launch committee,
   // 100/400 are the provisional main/total ceilings. Not a frozen protocol maximum;
-  // the binding value comes from ConfigParam16 once N2 lands.
+  // the binding value comes from ConfigParam16 once the validator-set encoding lands.
   std::size_t max_certificate_signers = 400;
   std::size_t max_main_validators = 100;
   // Framing allowance per signer (validator_id + algorithm_id + cell overhead). This is
   // a generous guess, NOT a measurement of the final encoding.
   std::size_t framing_bytes_per_signer = 64;
   // ESTIMATE ONLY. The real consensus bound must be computed from the final
-  // TL-B/PQBytes/BOC encoding in N5/N6; nothing may treat this as the frozen bound.
+  // TL-B/PQBytes/BOC encoding of the persisted carrier; nothing may treat this as the frozen bound.
   // Saturates instead of overflowing so a hostile signer count can never wrap.
   std::size_t estimated_certificate_bytes(std::size_t signers) const noexcept {
     const std::size_t per = signature_bytes + framing_bytes_per_signer;
@@ -85,7 +85,7 @@ struct ConsensusPQSignature {
 // so a signature produced for one surface never verifies under another.
 inline constexpr std::string_view key_id_domain = "TOS-PQ-CONSENSUS-KEY-v1";
 
-// One context per authority surface. N1 freezes all four so N3/N4 cannot invent a
+// One context per authority surface. All four are frozen here so later work cannot invent a
 // new domain later; only the Simplex/finality one has a signer implementation yet.
 inline constexpr std::string_view simplex_sign_context = "TOS-CONSENSUS-SIMPLEX-v1";
 inline constexpr std::string_view validator_election_context = "TOS-VALIDATOR-ELECTION-v1";

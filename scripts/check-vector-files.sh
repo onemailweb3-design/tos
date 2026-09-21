@@ -24,10 +24,10 @@ failed=0
 
 # generator<TAB>file
 generators=$(cat <<'PAIRS'
-n3-preimage-vectors-gen	test/pq-native/n3-preimage-vectors.tsv
-n3-carrier-vectors-gen	test/pq-native/n3-carrier-vectors.tsv
-n3-controller-auth-vectors-gen	test/pq-native/n3-controller-auth-vectors.tsv
-n3-descriptor-vectors-gen	test/pq-native/n3-descriptor-vectors.tsv
+authorisation-preimage-vectors-gen	test/pq-native/authorisation-preimage-vectors.tsv
+vote-carrier-vectors-gen	test/pq-native/vote-carrier-vectors.tsv
+controller-auth-vectors-gen	test/pq-native/controller-auth-vectors.tsv
+descriptor-verdict-vectors-gen	test/pq-native/descriptor-verdict-vectors.tsv
 config43-vectors-gen	test/pq-native/config43-vectors.tsv
 validator-descr-vectors-gen	test/pq-native/validator-descr-vectors.txt
 pq-bytes-vectors-gen	test/pq-mldsa44/pq-bytes-vectors.txt
@@ -39,14 +39,14 @@ PAIRS
 
 # The rows no program in this build can produce, and why.
 pinned=$(cat <<'PINNED'
-test/pq-native/n3-controller-auth-vectors.tsv	root-public-key	a real controller root key, generated outside this build
-test/pq-native/n3-controller-auth-vectors.tsv	root-signature	signed by that key, which nothing here can hold
+test/pq-native/controller-auth-vectors.tsv	root-public-key	a real controller root key, generated outside this build
+test/pq-native/controller-auth-vectors.tsv	root-signature	signed by that key, which nothing here can hold
 PINNED
 )
 
 # Files with no generator in this build, and what produces them instead.
 elsewhere=$(cat <<'ELSEWHERE'
-test/pq-native/n3-carrier-vectors-tooling.tsv	the Rust carrier test, with TOS_WRITE_CARRIER_TOOLING=1
+test/pq-native/vote-carrier-vectors-tooling.tsv	the Rust carrier test, with TOS_WRITE_CARRIER_TOOLING=1
 ELSEWHERE
 )
 

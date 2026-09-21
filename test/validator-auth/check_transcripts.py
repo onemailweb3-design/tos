@@ -7,7 +7,7 @@ pass. The optional OpenSSL ML-DSA check is a separate, explicitly requested
 interoperability measurement.
 
 This covers the isolated experiment only. The live Simplex entrypoints are covered by
-test-n4-certificate-conformance, which runs the production parsers under real
+test-certificate-conformance, which runs the production parsers under real
 post-quantum keys, and whose signing preimages are independently reconstructed by
 test/validator/consensus/check-simplex-preimages.py.
 """

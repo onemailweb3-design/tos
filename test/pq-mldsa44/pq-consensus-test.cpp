@@ -60,7 +60,7 @@ int main() {
          std::numeric_limits<std::size_t>::max());  // saturates, never wraps
   assert(L.estimated_certificate_bytes(0) == 0);
 
-  printf("PQ_CONSENSUS_N1_FOUNDATION_OK cert100=%zu cert400=%zu key_id0=%02x\n", L.estimated_certificate_bytes(100),
+  printf("PQ_CONSENSUS_FOUNDATION_OK cert100=%zu cert400=%zu key_id0=%02x\n", L.estimated_certificate_bytes(100),
          L.estimated_certificate_bytes(400), (*a)[0]);
   return 0;
 }

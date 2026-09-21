@@ -96,11 +96,11 @@ td::Result<td::Ref<block::BlockSignatureSet>> Certificate<T>::to_signature_set(c
 {
   CHECK(candidate->id == vote.id);
 
-  // The N4/N5 seam.
+  // The carrier seam.
   //
-  // Everything up to here is N4's: the votes are post-quantum, the quorum is weighted, and
+  // Everything up to here is this build's: the votes are post-quantum, the quorum is weighted, and
   // every signature in this certificate has been verified against the key the validator set
-  // records. Turning that certificate into a block::BlockSignatureSet is where N5 begins,
+  // records. Turning that certificate into a block::BlockSignatureSet is where the carrier work begins,
   // and the only carrier that exists today is the legacy one: its serializer writes
   // `ed25519_signature#5` and takes exactly 64 bytes per signature, and its verification
   // refuses a post-quantum validator outright. A 2420-byte signature cannot enter it.
@@ -108,13 +108,14 @@ td::Result<td::Ref<block::BlockSignatureSet>> Certificate<T>::to_signature_set(c
   // So this refuses, and it refuses *here* -- before any legacy object is constructed. The
   // construction is not skipped behind a condition, it is absent: there is no branch, flag
   // or build option in this function that can produce a legacy set from a post-quantum
-  // certificate. N5 replaces this refusal with the post-quantum carrier; until then a node
-  // can agree on finality and cannot persist it, which is exactly what an N4-only build is.
+  // certificate. The post-quantum carrier replaces this refusal; until then a node
+  // can agree on finality and cannot persist it, which is exactly what a build with no carrier is.
   return td::Status::Error(
-      n5_carrier_required_error_code,
-      PSTRING() << "N5 carrier not implemented: a post-quantum Simplex certificate (session " << bus.session_id.to_hex()
-                << ", slot " << vote.id.slot
-                << ") cannot be converted into a block signature set until N5 provides the post-quantum carrier");
+      carrier_missing_error_code,
+      PSTRING()
+          << "block-signature carrier not implemented: a post-quantum Simplex certificate (session "
+          << bus.session_id.to_hex() << ", slot " << vote.id.slot
+          << ") cannot be converted into a block signature set until a post-quantum block-signature carrier exists");
 }
 
 template <ValidVote T>

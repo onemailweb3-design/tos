@@ -1,5 +1,5 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
-// N4.0 — the frozen Simplex carrier hard bound, held by a test that fails if the bound
+// The frozen Simplex carrier hard bound, held by a test that fails if the bound
 // stops covering a real certificate at the structural signer ceiling.
 //
 // The measurement program prints the numbers; this pins them. It builds the exact
@@ -66,7 +66,7 @@ int main() {
   assert(!carrier::simplex_carrier_accepts(carrier::simplex_protocol_hard_max_bytes + 1000) &&
          "the carrier must refuse a message well over the hard max");
 
-  // The real certificate at the N1 signer ceiling fits, and does so with the exact size
+  // The real certificate at the structural signer ceiling fits, and does so with the exact size
   // the derivation in carrier-limits.h predicts (a drift on either side fails here).
   const std::size_t cert_ceiling = certificate_bytes(carrier::kMaxCertificateSigners);
   const std::size_t derived =
@@ -99,7 +99,7 @@ int main() {
   assert(carrier::simplex_carrier_peer_mtu_bytes >= rldp_framed_hard_max &&
          "the peer-MTU allowance must cover the inner hard max wrapped in overlay + transport framing");
 
-  std::printf("N4_0_CARRIER_OK hard_max=%zu cert400=%zu peer_mtu=%zu\n", carrier::simplex_protocol_hard_max_bytes,
-              cert_ceiling, carrier::simplex_carrier_peer_mtu_bytes);
+  std::printf("SIMPLEX_CARRIER_BOUND_OK hard_max=%zu cert400=%zu peer_mtu=%zu\n",
+              carrier::simplex_protocol_hard_max_bytes, cert_ceiling, carrier::simplex_carrier_peer_mtu_bytes);
   return 0;
 }

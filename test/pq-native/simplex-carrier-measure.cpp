@@ -1,9 +1,9 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
-// N4.0 — measure what a post-quantum Simplex round actually costs on the wire and on
-// the CPU, on the real N1 signer and the real consensus TL objects, before any consensus
+// Measure what a post-quantum Simplex round actually costs on the wire and on
+// the CPU, on the real signer and the real consensus TL objects, before any consensus
 // authentication is converted.
 //
-// It answers the questions the N4 plan freezes into N4-0-MEASUREMENTS.md:
+// It answers the questions the plan freezes into its measurement record:
 //   - how large is one signed vote, and one 21 / 100 / 400-signer certificate, once
 //     serialized exactly as the node will send them;
 //   - how that compares to the current direct-message carrier (Adnl::get_mtu() minus the
@@ -168,7 +168,7 @@ int main() {
   const std::size_t cert100 = certificate_bytes(100, signature);
   const std::size_t cert400 = certificate_bytes(400, signature);
 
-  std::printf("=== N4.0 carrier & latency measurement (ML-DSA-44) ===\n");
+  std::printf("=== Simplex carrier & latency measurement (ML-DSA-44) ===\n");
   std::printf("suite               public_key=%zu  signature=%zu bytes\n", public_key.size(),
               tos::pq::mldsa44_signature_bytes);
   std::printf("sign_consensus      median=%.1f us over %d samples\n", median_micros(sign_us), kSignIters);

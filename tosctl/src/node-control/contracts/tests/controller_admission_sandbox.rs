@@ -263,7 +263,7 @@ fn the_admission_check_is_measured_on_the_check_itself() {
 /// What the proof adds to a stake request, measured on the carrier the design freezes.
 ///
 /// The branch asserts elsewhere that a stake request is 34 cells and 30352 bits. That
-/// figure stops being the wire freeze at N3.3A, because a first registration now carries
+/// figure stops being the original wire freeze, because a first registration now carries
 /// the proof as well, and this is the number that replaces it.
 #[test]
 fn the_first_stake_carrier_is_measured_with_its_proof() {

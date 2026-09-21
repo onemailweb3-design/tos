@@ -11,7 +11,7 @@
 // to a scale these numbers have.
 //
 // What they do say is how much state every node carries and re-serialises whenever the
-// configuration changes, which is a validator-resource question for N6. A 1312-byte
+// configuration changes, which is a validator-resource question for launch sizing. A 1312-byte
 // consensus key does not fit in a cell, so every key is a chain of them.
 #ifdef NDEBUG
 #undef NDEBUG
@@ -75,7 +75,7 @@ std::string distinct_key(std::size_t index, std::size_t length) {
   std::string key;
   key.reserve(length);
   td::Bits256 block;
-  std::string seed = "n3-measure-" + std::to_string(index);
+  std::string seed = "state-measure-" + std::to_string(index);
   while (key.size() < length) {
     td::sha256(td::Slice(seed), block.as_slice());
     key.append(reinterpret_cast<const char*>(block.data()), 32);
@@ -299,6 +299,6 @@ int main() {
                 100.0 * static_cast<double>(size.bits) / static_cast<double>(message_bit_limit), message_bit_limit);
   }
 
-  std::printf("\nN3_STATE_MEASURE_DONE\n");
+  std::printf("\VALIDATOR_STATE_MEASURE_DONE\n");
   return 0;
 }

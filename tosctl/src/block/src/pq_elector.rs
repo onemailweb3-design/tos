@@ -9,7 +9,7 @@
 //! A contract, a node and a piece of tooling each build these bytes for themselves. If
 //! their field orders drift, a signature made by one verifies for none of the others, and
 //! the failure looks like a bad key rather than a bad layout. The shared vectors in
-//! `test/pq-native/n3-preimage-vectors.tsv` hold what this produces, and the other
+//! `test/pq-native/authorisation-preimage-vectors.tsv` hold what this produces, and the other
 //! implementation is held to the same file.
 //!
 //! Every field is big-endian, which is what a contract's `store_uint` writes, and every

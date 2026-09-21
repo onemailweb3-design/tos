@@ -141,7 +141,7 @@ bool VOTE_JOURNAL_TEST = false;
 bool PQ_FINALITY_E2E_TEST = false;
 // Requires the resolver to keep, report and stop retrying a finalization that failed in a
 // way retrying cannot mend, and to stop the group rather than run ahead of it. Needs
-// TOS_SIMPLEX_INJECT_PERMANENT_FINALIZATION_FAILURE set: nothing in an N4-only build
+// TOS_SIMPLEX_INJECT_PERMANENT_FINALIZATION_FAILURE set: nothing in a build with no carrier
 // produces that class of failure on its own.
 bool PERMANENT_FINALIZATION_TEST = false;
 std::atomic<bool> EMPTY_CHAIN_MANAGER_ANCHOR_UNAVAILABLE = false;
@@ -568,12 +568,12 @@ class TestManagerFacade : public ManagerFacade {
   td::actor::ActorId<TestConsensus> test_consensus_;
 };
 
-// ===== N4.5: what the end-to-end gate observes =====
+// ===== What the end-to-end gate observes =====
 //
 // A node publishes FinalizationObserved the moment a finality certificate is agreed and
 // every signature in it has been verified against the key the validator set records. That
-// is exactly where N4 ends. Everything past it -- a block signature set, an accepted
-// block, a finalized-block marker -- belongs to N5 and must not happen in this build, so
+// is exactly where this build ends. Everything past it -- a block signature set, an accepted
+// block, a finalized-block marker -- belongs to the carrier work and must not happen in this build, so
 // the gate keeps the certificate itself rather than a count, and checks it independently.
 struct ObservedFinalization {
   size_t node_idx = 0;
@@ -649,7 +649,7 @@ class TestFinalityObserver : public td::actor::SpawnsWith<simplex::Bus>, public 
   }
 
   template <>
-  void handle(simplex::BusHandle bus, std::shared_ptr<const N5BoundaryReached>) {
+  void handle(simplex::BusHandle bus, std::shared_ptr<const BlockSignatureCarrierMissing>) {
     if (!bus->local_id.has_value()) {
       return;
     }
@@ -754,7 +754,7 @@ class TestConsensus : public td::actor::Actor {
   td::actor::Task<> on_block_accepted(size_t node_idx, size_t instance_idx, td::Ref<BlockData> block,
                                       size_t creator_idx, td::Ref<block::BlockSignatureSet> signatures) {
     // Reaching here at all means a certificate became a block signature set and was
-    // accepted. In an N4-only build that cannot happen, and the N4.5 gate says so.
+    // accepted. In a build with no carrier that cannot happen, and the end-to-end gate says so.
     ++accepted_block_count_;
     BlockIdExt block_id = block->block_id();
     if (signatures->is_final()) {
@@ -1308,7 +1308,7 @@ class TestConsensus : public td::actor::Actor {
     return result;
   }
 
-  // ===== N4.5: the post-quantum round, end to end, and the boundary it stops at =====
+  // ===== The post-quantum round, end to end, and the boundary it stops at =====
 
   size_t finalized_marker_count(const Instance& instance) const {
     std::scoped_lock lock(instance.db_inner->mutex);
@@ -1370,8 +1370,8 @@ class TestConsensus : public td::actor::Actor {
     // What waiting here does establish is that the injection really happened, and that
     // everything asserted afterwards -- no second certificate, no accepted block, no
     // finalized marker, the boundary still latched -- is asserted about a node that has
-    // taken the attack. An attack cannot push a node past the seam; that is the N4
-    // property. Each condition below is true only once the effect is in place: the node
+    // taken the attack. An attack cannot push a node past the seam; that is the
+    // property this build exists to hold. Each condition below is true only once the effect is in place: the node
     // down, the network cut, the attack message delivered.
     struct Adversity {
       bool configured;
@@ -1591,7 +1591,7 @@ class TestConsensus : public td::actor::Actor {
       }
     }  // !node_churn_active
 
-    // --- And none of it crossed into N5 ---
+    // --- And none of it crossed the carrier seam ---
     //
     // The blocked-slot count belongs to the running process, not to the chain, so the
     // restarted node starts it again from zero and reaches the boundary a second time when
@@ -1611,7 +1611,8 @@ class TestConsensus : public td::actor::Actor {
           if (instance.status != Instance::Running) {
             continue;
           }
-          auto boundary = co_await instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+          auto boundary =
+              co_await instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
           if (!boundary.slot_is_blocked) {
             every_node_reached_it = false;
             break;
@@ -1623,7 +1624,7 @@ class TestConsensus : public td::actor::Actor {
       }
       if (boundary_deadline.is_in_past()) {
         fail(PSTRING() << "a node finalized slot " << *common_slot
-                       << " without that slot stopping at the N4/N5 carrier boundary");
+                       << " without that slot stopping at the block-signature carrier boundary");
         co_return td::Unit{};
       }
       co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
@@ -1719,18 +1720,18 @@ class TestConsensus : public td::actor::Actor {
       co_await td::actor::coro_sleep(td::Timestamp::in(settle_window));
       auto after = round_activity();
       if (after.candidates != before.candidates) {
-        fail(PSTRING() << "after every node reached the N4/N5 boundary the network produced "
+        fail(PSTRING() << "after every node reached the carrier boundary the network produced "
                        << (after.candidates - before.candidates) << " further candidates in " << settle_window
                        << "s; the group has not stopped");
         co_return td::Unit{};
       }
       if (after.journalled_votes != before.journalled_votes) {
-        fail(PSTRING() << "after every node reached the N4/N5 boundary a node cast a further vote of its own in "
+        fail(PSTRING() << "after every node reached the carrier boundary a node cast a further vote of its own in "
                        << settle_window << "s; the group has not stopped");
         co_return td::Unit{};
       }
       if (after.finality_observations != before.finality_observations) {
-        fail(PSTRING() << "after every node reached the N4/N5 boundary the network agreed "
+        fail(PSTRING() << "after every node reached the carrier boundary the network agreed "
                        << (after.finality_observations - before.finality_observations)
                        << " further finality certificates in " << settle_window << "s; the group has not stopped");
         co_return td::Unit{};
@@ -1754,7 +1755,7 @@ class TestConsensus : public td::actor::Actor {
     // silence would be reported as a hang that never happened. The property is proven by the
     // variants that do not churn, the same division the journal-replay phase above makes.
     constexpr size_t repeated_finalizations = 8;
-    simplex::QueryN5Boundary::Result probed;
+    simplex::QueryFinalizationState::Result probed;
     // The resolver reads this too. Reading it here rather than passing it as a flag keeps
     // the gate and the thing it measures reading the same number, so a scenario cannot
     // configure one without the other.
@@ -1786,20 +1787,21 @@ class TestConsensus : public td::actor::Actor {
       probe_instance_idx_ = latched->instance_idx;
       auto& probe_instance = nodes_[probe_node_idx_].instances[probe_instance_idx_];
 
-      auto baseline = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+      auto baseline =
+          co_await probe_instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
       for (size_t i = 0; i < repeated_finalizations; ++i) {
         probe_instance.bus.publish<simplex::FinalizationObserved>(latched->id, latched->cert);
       }
       auto probe_deadline = td::Timestamp::in(std::max(2.0, settle_window * 2));
       while (true) {
-        probed = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+        probed = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
         if (probed.finalizations_started >= baseline.finalizations_started + repeated_finalizations &&
             probed.finalizations_settled == probed.finalizations_started) {
           break;
         }
         if (probe_deadline.is_in_past()) {
           fail(PSTRING() << "after " << repeated_finalizations
-                         << " further finalizations of a certificate already latched at the N4/N5 boundary, "
+                         << " further finalizations of a certificate already latched at the carrier boundary, "
                          << (probed.finalizations_started - probed.finalizations_settled)
                          << " were still waiting for a verdict nobody is left to deliver");
           co_return td::Unit{};
@@ -1811,7 +1813,7 @@ class TestConsensus : public td::actor::Actor {
         co_return td::Unit{};
       }
       if (probed.slot_attempts != baseline.slot_attempts) {
-        fail(PSTRING() << "a certificate already latched at the N4/N5 boundary was converted again ("
+        fail(PSTRING() << "a certificate already latched at the carrier boundary was converted again ("
                        << baseline.slot_attempts << " -> " << probed.slot_attempts << " attempts)");
         co_return td::Unit{};
       }
@@ -1832,7 +1834,7 @@ class TestConsensus : public td::actor::Actor {
         co_await td::actor::coro_sleep(td::Timestamp::in(0.02));
       }
       if (!blocked_state_resolution_answered_) {
-        fail("resolving state through a candidate latched at the N4/N5 boundary never answered");
+        fail("resolving state through a candidate latched at the carrier boundary never answered");
         co_return td::Unit{};
       }
 
@@ -1842,7 +1844,7 @@ class TestConsensus : public td::actor::Actor {
       // A concurrent-finalization limit rejects the call, the event that carried the
       // certificate is already consumed, and unless the resolver holds on to it nothing will
       // ever ask again -- measured once as slots agreed by every node that reached no
-      // boundary at all, and in N5 it would be a chain that stops.
+      // boundary at all, and once blocks are accepted it would be a chain that stops.
       //
       // Pressure like that cannot be produced by asking politely, so it is built: with the
       // limit set to one, two finalizations of candidates this resolver has never seen are
@@ -1917,7 +1919,7 @@ class TestConsensus : public td::actor::Actor {
             if (instance.status != Instance::Running) {
               continue;
             }
-            auto at = co_await instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+            auto at = co_await instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
             if (at.slot_attempts <= attempts_the_old_code_gave_up_at) {
               fail(PSTRING() << "node " << node_idx << " reached the boundary for slot " << *common_slot << " in "
                              << at.slot_attempts << " attempts, with " << injected_finalization_failures
@@ -1955,7 +1957,7 @@ class TestConsensus : public td::actor::Actor {
         }
         auto retry_deadline = td::Timestamp::in(std::max(4.0, settle_window * 4));
         while (true) {
-          probed = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(*common_slot));
+          probed = co_await probe_instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(*common_slot));
           const bool at_admission = probed.finalization_retries_at_admission > before.finalization_retries_at_admission;
           const bool inside_attempt = (probed.finalization_retries - probed.finalization_retries_at_admission) >
                                       (before.finalization_retries - before.finalization_retries_at_admission);
@@ -1984,7 +1986,7 @@ class TestConsensus : public td::actor::Actor {
       for (const auto& [instance, announcements] : boundary_announcements) {
         const size_t allowed = instance == std::pair<size_t, size_t>{0, 0} ? 2 : 1;
         if (announcements > allowed) {
-          fail(PSTRING() << "node " << instance.first << "." << instance.second << " announced the N4/N5 boundary "
+          fail(PSTRING() << "node " << instance.first << "." << instance.second << " announced the carrier boundary "
                          << announcements << " times; it is one announcement per node, whatever else meets the seam");
           co_return td::Unit{};
         }
@@ -2007,7 +2009,7 @@ class TestConsensus : public td::actor::Actor {
     // Unlike the two checks above, nothing can currently make this one fire: reaching it
     // needs a block signature set that verifies, and the legacy carrier refuses a
     // post-quantum validator outright, so a build that got past the seam would abort in
-    // the harness's own verification before arriving here. It is kept because N5 is what
+    // the harness's own verification before arriving here. It is kept because the carrier is what
     // makes acceptance possible, and this is the line that should start being able to fail
     // then -- for the right reason.
     // Deliberately not asserted: that every slot reaching an agreed certificate is latched
@@ -2033,7 +2035,7 @@ class TestConsensus : public td::actor::Actor {
 
     if (accepted_block_count_ != 0) {
       fail(PSTRING() << "the network accepted " << accepted_block_count_
-                     << " blocks; an N4-only build has no carrier to accept one with");
+                     << " blocks; a build with no carrier has no carrier to accept one with");
       co_return td::Unit{};
     }
     if (last_accepted_block_ != FIRST_PARENT) {
@@ -2049,7 +2051,7 @@ class TestConsensus : public td::actor::Actor {
                                                       "its "
                                                    << checked_against_journals
                                                    << " signatures matched their signers' journals byte for byte")
-                 << "; every node stopped at the N4/N5 boundary with no block accepted and no finalized marker "
+                 << "; every node stopped at the carrier boundary with no block accepted and no finalized marker "
                  << "written"
                  << (node_churn_active ? std::string("")
                                        : PSTRING()
@@ -2069,7 +2071,7 @@ class TestConsensus : public td::actor::Actor {
 
   // Ask node 0 to resolve chain state through a candidate that is latched at the carrier
   // boundary, and record only that an answer came back. Which answer it is does not matter:
-  // an N4-only build has no accepted chain, so either outcome is legitimate. What is being
+  // a build with no carrier has no accepted chain, so either outcome is legitimate. What is being
   // measured is that the resolver answers at all.
   td::actor::Task<> probe_blocked_state_resolution(CandidateId id) {
     auto ignored = co_await nodes_[probe_node_idx_]
@@ -2085,7 +2087,7 @@ class TestConsensus : public td::actor::Actor {
   // Everything that was not the carrier boundary used to be treated as transient, which is
   // not a policy but the absence of one: it commits a node to retrying a protocol violation
   // for as long as it lives. The resolver now classifies, and this is the branch nothing in
-  // an N4-only build can reach on its own -- so it is injected, and what is required of it
+  // a build with no carrier can reach on its own -- so it is injected, and what is required of it
   // is the three things that make the classification worth having.
   //
   // The certificate is kept, because it is still evidence a quorum agreed. It is not
@@ -2095,13 +2097,14 @@ class TestConsensus : public td::actor::Actor {
   td::actor::Task<> run_permanent_finalization_test() {
     auto fail = [&](std::string message) { permanent_finalization_error_ = std::move(message); };
 
-    auto first_stalled = [&]() -> td::actor::Task<std::optional<std::pair<size_t, simplex::QueryN5Boundary::Result>>> {
+    auto first_stalled =
+        [&]() -> td::actor::Task<std::optional<std::pair<size_t, simplex::QueryFinalizationState::Result>>> {
       for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
         for (auto& instance : nodes_[node_idx].instances) {
           if (instance.status != Instance::Running) {
             continue;
           }
-          auto seen = co_await instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(0));
+          auto seen = co_await instance.bus.publish(std::make_shared<simplex::QueryFinalizationState>(0));
           if (seen.finalizations_stalled_permanently > 0) {
             co_return std::make_pair(node_idx, seen);
           }
@@ -2111,7 +2114,7 @@ class TestConsensus : public td::actor::Actor {
     };
 
     auto deadline = td::Timestamp::in(DURATION * 0.5);
-    std::optional<std::pair<size_t, simplex::QueryN5Boundary::Result>> stalled;
+    std::optional<std::pair<size_t, simplex::QueryFinalizationState::Result>> stalled;
     while (!stalled.has_value() && !deadline.is_in_past()) {
       stalled = co_await first_stalled();
       if (!stalled.has_value()) {
@@ -2136,7 +2139,8 @@ class TestConsensus : public td::actor::Actor {
     // times, neither the attempt count nor the stalled count moves.
     auto candidates_before = CANDIDATES_GENERATED.load();
     co_await td::actor::coro_sleep(td::Timestamp::in(std::min(DURATION * 0.1, 3.0)));
-    auto later = co_await nodes_[node_idx].instances[0].bus.publish(std::make_shared<simplex::QueryN5Boundary>(0));
+    auto later =
+        co_await nodes_[node_idx].instances[0].bus.publish(std::make_shared<simplex::QueryFinalizationState>(0));
 
     if (later.finalization_retries > first.finalization_retries) {
       fail(PSTRING() << "node " << node_idx << " retried " << (later.finalization_retries - first.finalization_retries)
@@ -2157,7 +2161,7 @@ class TestConsensus : public td::actor::Actor {
     co_return td::Unit{};
   }
 
-  // ===== N4.4: this node's own vote journal =====
+  // ===== This node's own vote journal =====
   //
   // The property under test is not "the node persists its votes". It is that the first
   // signature bytes allowed to become observable are already durable, and that from then on
@@ -2299,7 +2303,7 @@ class TestConsensus : public td::actor::Actor {
     // the stop arrived is legitimately left as an intent; that is the state the journal
     // exists to express, and phase 3 shows how it recovers. What must hold here is that
     // every record the node did finish carries a signature it can prove is its own.
-    // Two, because two is all a single validator casts in an N4-only build: it notarizes
+    // Two, because two is all a single validator casts in a build with no carrier: it notarizes
     // slot 0, is its own quorum, finalizes it, and the group then reaches the carrier
     // boundary and stops taking new votes. Asking for more would be asking the round to keep
     // going past the point this build deliberately stops at. Two is still every shape the

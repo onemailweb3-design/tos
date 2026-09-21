@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: LGPL-2.0-or-later
  */
-// N4.2/N4.3 — a Simplex consensus message signed by a node's post-quantum consensus key
+// A Simplex consensus message signed by a node's post-quantum consensus key
 // verifies through PeerValidator::check_signature, and nothing else does. This pins the
 // live sign->verify round: the node signs the exact dataToSign the verifier rebuilds, under
 // the frozen simplex_sign_context, and a tamper, a wrong session, other data, another
@@ -139,7 +139,7 @@ int main() {
   static_assert(!HasClassicalConsensusKey<PeerValidator>, "PeerValidator must carry no classical consensus key");
 
   std::printf(
-      "N4_CONSENSUS_VERIFY_OK a PQ consensus message verifies; tamper/session/data/key/64-byte/empty and a "
+      "CONSENSUS_VERIFY_OK a PQ consensus message verifies; tamper/session/data/key/64-byte/empty and a "
       "genuine transport-key signature all refused\n");
   return 0;
 }
