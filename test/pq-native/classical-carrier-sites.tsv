@@ -62,7 +62,7 @@ tosctl/src/tl/api/src/tos/tos_node/signature_set/signatureset.rs	*	4	definition	
 tosctl/src/tl/api/tl/lite_api.tl	*	2	definition	Rust generator copy of the classical lite signature-set schema
 tosctl/src/tl/api/tl/tos_api.tl	*	2	definition	Rust generator copy of the classical node signature-set schema
 toslib/toslib/ToslibClient.cpp	*	3	reachable	the generated PQ node variant exists, but client conversion remains owned by the parser/API wiring unit
-validator-engine/json-rpc-server-blocks.cpp	*	4	reachable	the generated PQ lite variant exists, but JSON-RPC conversion remains owned by the parser/API wiring unit
+validator-engine/json-rpc-server-parse.cpp	cpp_lite_tl	4	reachable	the public API still emits classical history, while a PQ lite carrier is explicitly refused rather than rendered as an empty classical set
 validator/db/rootdb.cpp	*	1	historical	persisted cell parser supports #13; #11/#12 remain for historical and explicitly classical databases
 validator/downloaders/wait-block-data.cpp	*	1	historical	generic persisted serializer carries #13 too; classical output is limited to explicitly classical sets
 validator/full-node-serializer.cpp	*	2	reachable	central block and finality serializers use checked dual-carrier parsing; classical output is retained only for explicitly classical signature sets

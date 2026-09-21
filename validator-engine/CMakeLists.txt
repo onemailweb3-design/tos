@@ -6,7 +6,7 @@ add_library(json-rpc-parse STATIC
   json-rpc-server-parse.cpp
 )
 target_include_directories(json-rpc-parse PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
-target_link_libraries(json-rpc-parse PUBLIC tos_crypto tdutils)
+target_link_libraries(json-rpc-parse PUBLIC tos_crypto tdutils tl_lite_api)
 
 set(VALIDATOR_ENGINE_JSON_RPC_SOURCE
   json-rpc-server.h
