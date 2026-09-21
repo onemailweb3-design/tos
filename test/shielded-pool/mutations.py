@@ -55,18 +55,25 @@ CASES = [
          'if (level == 5) { return empty_root_6(); }',
          'the_generated_empty_root_ladder_is_what_the_permutation_produces'),
     Case('stale-slot', 'a stale frontier slot is read instead of the empty root', TREE,
-         'int c6 = digit >= 6 ? frontier_get(frontier, level, 6) : empty;',
-         'int c6 = frontier_get(frontier, level, 6);',
+         'int c6 = digit == 6 ? carry : empty;',
+         'int c6 = digit == 6 ? carry : v6;',
          'the_frontier_agrees_with_rebuilding_the_whole_tree'),
-    Case('stored-zero', 'a zero-valued slot is stored explicitly', TREE,
-         """  if (value == 0) {
-    ;; Canonical state must not carry an explicit zero.
-    (cell updated, int removed) = frontier.udict_delete?(7, key);
-    return updated;
-  }
+    Case('tail-slot', 'the seventh slot of a level is not persisted', TREE,
+         'cell third = begin_cell().store_uint(v.at(6), 256).end_cell();',
+         'cell third = begin_cell().store_uint(0, 256).end_cell();',
+         'the_frontier_agrees_with_rebuilding_the_whole_tree'),
+    Case('genesis-levels', 'the store a pool is deployed with is a level short', TREE,
+         """  cell chain = null();
+  int level = tree_depth() - 1;
+  while (level >= 0) {
+    chain = frontier_level_build(zeros, chain, level == (tree_depth() - 1));
 """,
-         '',
-         'a_zero_valued_slot_is_absent_rather_than_stored'),
+         """  cell chain = null();
+  int level = tree_depth() - 2;
+  while (level >= 0) {
+    chain = frontier_level_build(zeros, chain, level == (tree_depth() - 2));
+""",
+         'the_frontier_agrees_with_rebuilding_the_whole_tree'),
     Case('capacity', 'the exhausted-tree sentinel is not checked', TREE,
          '  throw_unless(92, index < commitment_capacity());\n', '',
          'the_capacity_sentinel_is_refused'),

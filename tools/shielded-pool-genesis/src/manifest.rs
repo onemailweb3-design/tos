@@ -101,7 +101,7 @@ pub fn render(genesis: &Genesis, provenance: &Provenance, code: Option<&Cell>) -
     out.push_str("    \"nullifier_next_index\": 1,\n");
     out.push_str(&format!("    \"last_anchor_epoch\": \"{:#010x}\",\n", crate::EPOCH_NONE));
     out.push_str("    \"native_liability\": \"0\",\n");
-    out.push_str("    \"frontier\": \"empty\",\n");
+    out.push_str("    \"frontier\": \"twelve zero levels, seven slots each\",\n");
     out.push_str("    \"anchor_rings\": \"two empty dictionaries\",\n");
     out.push_str(&format!("    \"hash\": \"{}\"\n", hex(&cell_hash(&genesis.state))));
     out.push_str("  }");

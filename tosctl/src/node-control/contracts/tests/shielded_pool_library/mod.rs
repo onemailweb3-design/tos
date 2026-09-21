@@ -33,3 +33,53 @@ pub fn pool_sources() -> Vec<PathBuf> {
     .map(|name| PathBuf::from(format!("{library}/{name}")))
     .collect()
 }
+
+/// The frontier store section 13.2 deploys a pool with, in the §13.1 shape:
+/// twelve level nodes, level 0 first, each three cells holding 3 + 3 + 1 zero
+/// field elements, the last level carrying no successor.
+///
+/// Three suites build a genesis state by hand. While the store was a HashmapE
+/// they could each write an absent maybe-ref and be right; a chain has to be
+/// built, and a fixture that builds it slightly differently is a fixture that
+/// agrees with itself and with nothing else. So it is built once, here.
+pub fn frontier_genesis() -> chain_block::Cell {
+    use chain_block::{BuilderData, IBitstring};
+
+    let zero = [0u8; 32];
+    let mut chain: Option<chain_block::Cell> = None;
+    for level in (0..12usize).rev() {
+        let mut third = BuilderData::new();
+        third.append_raw(&zero, 256).expect("a third cell");
+        let third = third.into_cell().expect("a third cell");
+
+        let mut second = BuilderData::new();
+        for _ in 0..3 {
+            second.append_raw(&zero, 256).expect("a second cell");
+        }
+        second.checked_append_reference(third).expect("the third reference");
+        let second = second.into_cell().expect("a second cell");
+
+        let mut node = BuilderData::new();
+        for _ in 0..3 {
+            node.append_raw(&zero, 256).expect("a level node");
+        }
+        node.checked_append_reference(second).expect("the second reference");
+        if level != 11 {
+            let next = chain.take().expect("the level below has been built");
+            node.checked_append_reference(next).expect("the next reference");
+        }
+        chain = Some(node.into_cell().expect("a level node"));
+    }
+    chain.expect("a frontier chain")
+}
+
+/// The same store inside section 13's `Maybe ^Cell` holder, which is the
+/// reference the state root carries.
+pub fn frontier_holder() -> chain_block::Cell {
+    use chain_block::{BuilderData, IBitstring};
+
+    let mut holder = BuilderData::new();
+    holder.append_bit_one().expect("the maybe bit");
+    holder.checked_append_reference(frontier_genesis()).expect("the frontier reference");
+    holder.into_cell().expect("the frontier holder")
+}

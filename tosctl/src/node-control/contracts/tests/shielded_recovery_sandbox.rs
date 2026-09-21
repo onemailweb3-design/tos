@@ -383,7 +383,7 @@ fn genesis_state(liability: u64) -> Cell {
     builder.append_u32(EPOCH_NONE).unwrap();
     store_coins(&mut builder, u128::from(liability));
     store_coins(&mut builder, u128::from(RESERVE_FLOOR));
-    builder.checked_append_reference(empty_ring_holder()).unwrap();
+    builder.checked_append_reference(shielded_pool_library::frontier_holder()).unwrap();
     let mut anchors = BuilderData::new();
     anchors.checked_append_reference(empty_ring_holder()).unwrap();
     anchors.checked_append_reference(empty_ring_holder()).unwrap();

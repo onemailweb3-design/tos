@@ -85,6 +85,7 @@ int p_empty_root(int level) method_id { return empty_root_at(level); }
 int p_commit_node(int c0, int c1, int c2, int c3, int c4, int c5, int c6) method_id {
   return commit_node(c0, c1, c2, c3, c4, c5, c6);
 }
+cell p_frontier_genesis() method_id { return frontier_genesis(); }
 (cell, int) p_append(cell frontier, int index, int leaf) method_id {
   return frontier_append(frontier, index, leaf);
 }
@@ -193,18 +194,34 @@ impl Probe {
         Ok(integer.to_string())
     }
 
+    /// The store a pool is deployed with, which is where a sequence of
+    /// appends starts. It is a built cell rather than an absent one: the
+    /// level chain has no encoding for "empty", and an append refuses a store
+    /// it cannot read rather than inventing one.
+    pub fn frontier_genesis(&self) -> Result<Cell> {
+        let result = self
+            .bc
+            .run_get_method(&self.addr, "p_frontier_genesis", vec![])
+            .map_err(|error| CrossCheckError::Vm(format!("p_frontier_genesis: {error}")))?;
+        if result.exit_code != 0 {
+            return Err(CrossCheckError::Vm(format!(
+                "p_frontier_genesis exited {}",
+                result.exit_code
+            )));
+        }
+        result
+            .stack
+            .last()
+            .ok_or_else(|| CrossCheckError::Vm("no genesis frontier".to_string()))?
+            .as_cell()
+            .map(Clone::clone)
+            .map_err(|error| CrossCheckError::Vm(format!("genesis frontier: {error}")))
+    }
+
     /// Calls `frontier_append` and returns the new store and the new root.
-    pub fn append(
-        &self,
-        frontier: Option<Cell>,
-        index: u64,
-        leaf: &str,
-    ) -> Result<(Option<Cell>, String)> {
+    pub fn append(&self, frontier: Cell, index: u64, leaf: &str) -> Result<(Cell, String)> {
         let stack = vec![
-            match frontier {
-                Some(cell) => StackItem::Cell(cell),
-                None => StackItem::None,
-            },
+            StackItem::Cell(frontier),
             Self::arg(&index.to_string())?,
             Self::arg(leaf)?,
         ];
@@ -222,7 +239,10 @@ impl Probe {
             .as_integer()
             .map_err(|error| CrossCheckError::Vm(format!("p_append root: {error}")))?
             .to_string();
-        let store = result.stack[0].as_cell().ok().cloned();
+        let store = result.stack[0]
+            .as_cell()
+            .map(Clone::clone)
+            .map_err(|error| CrossCheckError::Vm(format!("p_append store: {error}")))?;
         Ok((store, root))
     }
 }

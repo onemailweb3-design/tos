@@ -32,6 +32,7 @@ COUNTER_TEST = 'a_counter_above_the_sentinel_is_not_a_state'
 CONFIG_TEST = 'the_config_is_revalidated_rather_than_trusted'
 VK_TEST = 'the_verifying_key_chain_is_the_frozen_shape'
 REFUSE_TEST = 'genesis_refuses_a_configuration_it_would_have_to_live_with'
+FRONTIER_TEST = 'a_state_without_a_frontier_is_refused'
 
 
 @dataclass
@@ -54,6 +55,14 @@ CASES = [
          '(int, int, int, int, int, cell) config_parse(cell config) impure inline_ref {',
          '(int, int, int, int, int, cell) config_parse(cell config) inline_ref {',
          REFUSE_TEST),
+
+    # A level chain always has a root cell, so an absent frontier is not a
+    # state this contract can have written. Without the refusal it is read as
+    # a null and the failure moves to whatever touches it first.
+    Case('frontier-absent', 'a state with no frontier is parsed anyway', STATE,
+         '  throw_if(181, cell_null?(frontier));\n',
+         '',
+         FRONTIER_TEST),
 
     # Section 13: the state root.
     Case('magic', 'any magic is accepted', STATE,

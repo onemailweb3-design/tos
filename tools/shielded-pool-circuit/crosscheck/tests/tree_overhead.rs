@@ -33,7 +33,7 @@ const APPEND_PERMUTATIONS: i64 = 12;
 
 /// Measured when the ceilings were set: a whole withdrawal, and the
 /// permutations it executes.
-const WITHDRAWAL_GAS: i64 = 1_288_016;
+const WITHDRAWAL_GAS: i64 = 1_167_157;
 const WITHDRAWAL_PERMUTATIONS: i64 = 142;
 
 fn poseidon2_price() -> i64 {

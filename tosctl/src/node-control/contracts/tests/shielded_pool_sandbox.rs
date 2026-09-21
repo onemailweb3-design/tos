@@ -50,16 +50,17 @@ const OP_RESERVE_TOPUP: u32 = 0x5348_5003;
 /// not have before it parses anything that follows it.
 const OP_UNKNOWN: u32 = 0x5348_50ff;
 
-/// Section 14.1, frozen by the production rule at the 3,500 Poseidon2
-/// tariff: a deposit measures 224,043 and the rule gives 290,000.
+/// Section 14.1, frozen by the production rule
+/// C = max(10,000, round_up_10,000(ceil(M * 5 / 4))).
 ///
-/// The maximum is measured at the worst leaf index a pool can reach with both
-/// anchor rings full, not against a pool that has just been deployed. A fresh
-/// pool costs 147,595; the growth is the frontier slots an append reads and
-/// the ring a mutation writes into, and it is what
-/// `deposit_in_a_mature_pool.rs` in the crosscheck crate measures.
-const DEPOSIT_GAS_CEILING: i64 = 270_000;
-const DEPOSIT_MEASURED_MAX_GAS: i64 = 214_343;
+/// The maximum is measured with both anchor rings full, not against a pool
+/// that has just been deployed: a pool whose rings are still empty costs
+/// 154,940 for the same deposit. The frontier no longer contributes any
+/// growth -- the store is a level chain rather than a dictionary, and its
+/// dearest append is a pool's first -- so the rings are the whole of it.
+/// `deposit_in_a_mature_pool.rs` in the crosscheck crate is what measures it.
+const DEPOSIT_GAS_CEILING: i64 = 220_000;
+const DEPOSIT_MEASURED_MAX_GAS: i64 = 169_015;
 /// ConfigParam 21 of this chain's zero state, which
 /// `chain_gas_envelope_sandbox.rs` generates and holds against the
 /// executor's table.
@@ -69,7 +70,7 @@ const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
 const TOPUP_GAS_CEILING: i64 = 10_000;
 /// Measured on the deployed configuration. The ceiling has to stay above it
 /// with the ruled 25% headroom.
-const TOPUP_MEASURED_MAX_GAS: i64 = 2_480;
+const TOPUP_MEASURED_MAX_GAS: i64 = 2_380;
 /// ConfigParam 21 of this chain's zero state, beyond the flat segment.
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
 /// flat 6,667 for the first hundred gas, then 4,369,067 per 65,536 gas with
@@ -298,7 +299,7 @@ fn genesis_state() -> Cell {
     builder.append_u32(EPOCH_NONE).unwrap();
     store_coins(&mut builder, 0);
     store_coins(&mut builder, RESERVE_FLOOR as u128);
-    builder.checked_append_reference(empty_ring_holder()).unwrap();
+    builder.checked_append_reference(shielded_pool_library::frontier_holder()).unwrap();
     let mut anchors = BuilderData::new();
     anchors.checked_append_reference(empty_ring_holder()).unwrap();
     anchors.checked_append_reference(empty_ring_holder()).unwrap();
@@ -471,13 +472,17 @@ fn a_message_that_cannot_pay_for_its_own_gas_never_reaches_the_pools_balance() {
     let before = pool.balance();
     let (payload, _) = output_data(0);
 
-    // Well formed, and carrying a thousand gas against a path that needs
-    // 127,425. Note where the harm would be: a message that passes the funding
-    // rule has necessarily bought enough gas for the whole ceiling, so no
-    // accepted deposit can run out. The only thing an ACCEPT buys an attacker
-    // is carrying a message that CANNOT pay past the point where it would have
-    // stopped -- so the case has to be a message that never gets that far.
-    let result = pool.send(1_000 * 400, deposit_body(TOS, &[3u8; 32], payload));
+    // Well formed, and carrying exactly a thousand gas against a path that
+    // needs six figures. The value is derived from this chain's price rather
+    // than written down, because a price change would otherwise turn this
+    // into a message that can afford the path and the test would pass for the
+    // wrong reason. Note where the harm would be: a message that passes the
+    // funding rule has necessarily bought enough gas for the whole ceiling, so
+    // no accepted deposit can run out. The only thing an ACCEPT buys an
+    // attacker is carrying a message that CANNOT pay past the point where it
+    // would have stopped -- so the case has to be a message that never gets
+    // that far.
+    let result = pool.send(compute_fee(1_000), deposit_body(TOS, &[3u8; 32], payload));
     let vm = compute_phase(&result);
     let used: i64 = vm.gas_used.to_string().parse().expect("gas used");
     assert!(used > 0, "instrument check: the VM must have executed something");
@@ -662,7 +667,19 @@ fn a_reserve_top_up_adds_balance_and_nothing_else() {
     body.append_u32(OP_RESERVE_TOPUP).unwrap();
     body.append_u64(7).unwrap();
     let top_up = body.into_cell().unwrap();
-    pool.send(4 * TOS, top_up.clone()).expect_success();
+    let result = pool.send(4 * TOS, top_up.clone());
+    result.expect_success();
+    // The measurement the top-up ceiling's rule is applied to. The rule's
+    // floor is far above it, so this does not move the ceiling -- it is
+    // printed and checked so that the number in the contract's comment is one
+    // something still produces.
+    let used: i64 =
+        compute_phase(&result).gas_used.to_string().parse().expect("gas used");
+    eprintln!("a reserve top-up: {used} gas");
+    assert_eq!(
+        used, TOPUP_MEASURED_MAX_GAS,
+        "a top-up costs {used} gas, not the {TOPUP_MEASURED_MAX_GAS} the ceiling was ruled from"
+    );
 
     assert!(pool.balance() > before + 3 * TOS, "the top-up did not become balance");
     assert_eq!(pool.get("native_liability"), liability, "a top-up became liability");

@@ -202,7 +202,10 @@ fn section_5_tree_agrees_with_the_vm() {
     }
 
     for case in fixture.appends.iter() {
-        let mut store = None;
+        let mut store = match probe.frontier_genesis() {
+            Ok(cell) => cell,
+            Err(error) => panic!("genesis frontier: {error}"),
+        };
         for (index, leaf) in case.leaves.iter().enumerate() {
             let (next, root) = match probe.append(store, index as u64, leaf) {
                 Ok(result) => result,

@@ -99,19 +99,21 @@ CASES = [
          '    msg_value >= deposit_amount + get_compute_fee(0, deposit_gas_ceiling()));',
          '    msg_value >= get_compute_fee(0, deposit_gas_ceiling()));', FUNDING_TEST),
     Case('gas-ceiling-live', 'the ceiling is below what the path needs', POOL,
-         'int deposit_gas_ceiling() asm "270000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "220000 PUSHINT";',
          'int deposit_gas_ceiling() asm "5000 PUSHINT";', LEDGER_TEST),
-    # The ceilings the first measurement gave, which a pool with any history
-    # refuses. A deposit ceiling of 170,000 stops a pool at its thirty-fifth
-    # note; a bounce ceiling of 210,000 leaves a payout that has already come
-    # back with no recovery note to replace it.
+    # A ceiling that covers a pool with empty anchor rings and refuses one
+    # whose rings are full. The rings are worth about 14,000 gas a mutation
+    # and they fill once and stay full, so this is the age a harness that
+    # deploys and sends three messages cannot see. The frontier used to be a
+    # second such age; it is not any more, because the store is no longer a
+    # dictionary whose reads grow with the leaf index.
     Case('gas-ceiling-fresh-pool', 'the deposit ceiling covers only a new pool', POOL,
-         'int deposit_gas_ceiling() asm "270000 PUSHINT";',
-         'int deposit_gas_ceiling() asm "170000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "220000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "160000 PUSHINT";',
          MATURE_DEPOSIT_TEST, MATURE_DEPOSIT_SUITE, CROSSCHECK),
     Case('bounce-ceiling-fresh-pool', 'the bounce ceiling covers only a new pool', POOL,
-         'int bounce_gas_ceiling() asm "280000 PUSHINT";',
-         'int bounce_gas_ceiling() asm "210000 PUSHINT";',
+         'int bounce_gas_ceiling() asm "220000 PUSHINT";',
+         'int bounce_gas_ceiling() asm "170000 PUSHINT";',
          MATURE_TRANSACT_TEST, MATURE_TRANSACT_SUITE, CROSSCHECK),
 
     # Section 19 gate 17, over runs rather than single messages. These four
@@ -250,7 +252,7 @@ CASES = [
          '  groth16_require_valid(vk, proof_a, proof_b, proof_c, inputs);\n', '',
          PROOF_TEST, TRANSACT_SUITE),
     Case('transact-gas-ceiling', 'the ceiling is below what the path needs', POOL,
-         'int transact_gas_ceiling() asm "1620000 PUSHINT";',
+         'int transact_gas_ceiling() asm "1460000 PUSHINT";',
          'int transact_gas_ceiling() asm "5000 PUSHINT";', ORDER_TEST, TRANSACT_SUITE),
 
     # A message with no operation must not be mistaken for one.

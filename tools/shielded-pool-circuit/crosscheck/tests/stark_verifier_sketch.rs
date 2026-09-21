@@ -21,8 +21,8 @@ use shielded_pool_circuit_crosscheck::stark_sketch_probe::StarkSketch;
 
 /// What a withdrawal costs today, and the ceiling frozen above it.
 const GROTH16_VERIFY_GAS: i64 = 204_493;
-const WITHDRAWAL_GAS: i64 = 1_288_016;
-const TRANSACT_CEILING: i64 = 1_620_000;
+const WITHDRAWAL_GAS: i64 = 1_167_157;
+const TRANSACT_CEILING: i64 = 1_460_000;
 /// What this workchain grants one transaction.
 const WORKCHAIN_GAS_LIMIT: i64 = 30_000_000;
 

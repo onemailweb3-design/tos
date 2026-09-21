@@ -382,8 +382,8 @@ impl Pool {
             .and_then(|b| b.append_raw(&tail, tail_bits))
             .map_err(|error| CrossCheckError::Sandbox(format!("aged state bits: {error}")))?;
 
-        // The frontier store is section 13's maybe-ref holder, not the
-        // dictionary itself.
+        // The frontier store is section 13's maybe-ref holder, not the level
+        // chain itself.
         let mut holder = BuilderData::new();
         holder
             .append_bit_one()

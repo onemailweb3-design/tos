@@ -6,15 +6,19 @@
  */
 //! What one commitment-tree append costs as the tree fills up.
 //!
-//! `frontier_append` hashes a fixed twelve nodes whatever the index, but it
-//! reads `digit + 1` frontier slots per level, and the digits come from the
-//! leaf index in base seven. An append near genesis therefore reads the
-//! smallest number of slots the function can ever read, and every gas figure
-//! measured against a fresh pool understates a mature one.
+//! `frontier_append` hashes a fixed twelve nodes whatever the index. What
+//! changes with the index is the store work around the hashing, and how it
+//! changes depends on the container: the level chain the contract uses now
+//! reads and rebuilds all seven slots of every level whatever the digits are,
+//! so its cost is flat, while the HashmapE it replaced touched `digit + 1`
+//! slots per level and so grew with the leaf index.
 //!
-//! This probe calls the function directly so the growth can be measured
-//! without minting two billion notes: `fill` builds the frontier store a pool
-//! at `index` would hold, and `append_gas` reports what appending there costs.
+//! This probe calls the function directly so both shapes can be measured
+//! without minting two billion notes: `fill` builds the store a pool at
+//! `index` would hold and `append_gas` reports what appending there costs.
+//! The `dict_*` family is the old container, kept here in full and no longer
+//! referenced by the contract, because the argument for the change was a
+//! comparison and a comparison with one side deleted cannot be rerun.
 
 use chain_block::{Cell, MsgAddressInt, Serializable, StateInit};
 use tos_sandbox::{compile_func, Blockchain, MessageBuilder};
@@ -24,25 +28,55 @@ use tos_vm::stack::StackItem;
 use crate::{library_dir, stdlib_path, CrossCheckError, Result, ACTIVE_VERSION, TOS};
 
 const PROBE: &str = r#"
-;; The frontier store a pool that has appended `index` leaves would hold: at
-;; every level, the slots below and including that level's digit are occupied.
-;; The values are arbitrary because only their presence costs anything; what
-;; they are changes no dictionary work.
+;; --- the store the contract uses -------------------------------------------
+
+;; The frontier a pool that has appended `index` leaves would hold: at every
+;; level the slots up to that level's digit carry values and the rest carry
+;; that level's empty root, which is what an append leaves behind. The values
+;; are arbitrary -- a 256-bit slot costs what it costs whatever is in it --
+;; but they are laid out this way so the store is one a real pool can be in.
 cell f_fill(int index) method_id {
-  cell frontier = new_dict();
-  int stride = 1;
-  int level = 0;
-  while (level < tree_depth()) {
+  cell chain = null();
+  int level = tree_depth() - 1;
+  while (level >= 0) {
+    int stride = 1;
+    int i = 0;
+    while (i < level) { stride = stride * tree_arity(); i = i + 1; }
     int digit = (index / stride) % tree_arity();
-    int position = 0;
-    while (position <= digit) {
-      frontier = frontier_set(frontier, level, position, 0x51ed0000 + (level * 7) + position);
-      position = position + 1;
+    int empty = empty_root_at(level);
+    tuple v = empty_tuple();
+    int slot = 0;
+    while (slot < tree_arity()) {
+      v = v.tpush(slot <= digit ? 0x51ed0000 + (level * 7) + slot : empty);
+      slot = slot + 1;
     }
-    stride = stride * tree_arity();
-    level = level + 1;
+    chain = frontier_level_build(v, chain, level == (tree_depth() - 1));
+    level = level - 1;
   }
-  return frontier;
+  return chain;
+}
+
+;; The store a pool is deployed with, for the tests that start at genesis.
+cell f_genesis() method_id {
+  return frontier_genesis();
+}
+
+;; The same shape as `f_fill`, with every slot zero. It is the same number of
+;; cells and the same number of bits as a filled store, so the only thing it
+;; can cost differently is what the VM charges for loading a cell it has
+;; already loaded: all twelve levels' tail cells are byte-identical here and
+;; distinct in a filled store.
+cell f_fill_zeros(int index) method_id {
+  tuple zeros = empty_tuple();
+  int slot = 0;
+  while (slot < tree_arity()) { zeros = zeros.tpush(0); slot = slot + 1; }
+  cell chain = null();
+  int level = tree_depth() - 1;
+  while (level >= 0) {
+    chain = frontier_level_build(zeros, chain, level == (tree_depth() - 1));
+    level = level - 1;
+  }
+  return chain;
 }
 
 ;; The measured call. The returned root is discarded by the caller, but it is
@@ -51,33 +85,109 @@ cell f_fill(int index) method_id {
   return frontier_append(frontier, index, leaf);
 }
 
-;; --- what the dictionary itself costs -------------------------------------
-;; The frontier's key space is exactly 0..83, dense and known at compile time,
-;; yet it is stored in a sparse HashmapE. These three price the operations an
-;; append is made of, so the question "is a second instruction needed, or is
-;; the container wrong" can be answered with numbers.
+;; The digit sum, which is what decided how many slots the dictionary read.
+int f_digit_sum(int index) method_id {
+  int total = 0;
+  int stride = 1;
+  int level = 0;
+  while (level < tree_depth()) {
+    total = total + ((index / stride) % tree_arity());
+    stride = stride * tree_arity();
+    level = level + 1;
+  }
+  return total;
+}
 
-int f_reads(cell frontier, int rounds) method_id {
+;; --- the container that was replaced ---------------------------------------
+;; A HashmapE 7 keyed by `level * 7 + position`, 0..83, absence meaning field
+;; zero. This is the store the contract carried until 2026-09-21, reproduced
+;; here verbatim so the two can still be measured against each other.
+
+int d_key(int level, int position) inline {
+  return (level * tree_arity()) + position;
+}
+
+int d_get(cell frontier, int level, int position) inline {
+  (slice value, int found) = frontier.udict_get?(7, d_key(level, position));
+  if (~ found) { return 0; }
+  return value~load_uint(256);
+}
+
+cell d_set(cell frontier, int level, int position, int value) inline {
+  int key = d_key(level, position);
+  if (value == 0) {
+    (cell updated, int removed) = frontier.udict_delete?(7, key);
+    return updated;
+  }
+  return frontier.udict_set_builder(7, key, begin_cell().store_uint(value, 256));
+}
+
+(cell, int) d_append_impl(cell frontier, int index, int leaf) impure {
+  int carry = leaf;
+  int stride = 1;
+  int level = 0;
+  while (level < tree_depth()) {
+    int digit = (index / stride) % tree_arity();
+    frontier = d_set(frontier, level, digit, carry);
+    int empty = empty_root_at(level);
+    int c0 = digit >= 0 ? d_get(frontier, level, 0) : empty;
+    int c1 = digit >= 1 ? d_get(frontier, level, 1) : empty;
+    int c2 = digit >= 2 ? d_get(frontier, level, 2) : empty;
+    int c3 = digit >= 3 ? d_get(frontier, level, 3) : empty;
+    int c4 = digit >= 4 ? d_get(frontier, level, 4) : empty;
+    int c5 = digit >= 5 ? d_get(frontier, level, 5) : empty;
+    int c6 = digit >= 6 ? d_get(frontier, level, 6) : empty;
+    carry = commit_node(c0, c1, c2, c3, c4, c5, c6);
+    stride = stride * tree_arity();
+    level = level + 1;
+  }
+  return (frontier, carry);
+}
+
+(cell, int) d_append(cell frontier, int index, int leaf) method_id {
+  return d_append_impl(frontier, index, leaf);
+}
+
+cell d_fill(int index) method_id {
+  cell frontier = new_dict();
+  int stride = 1;
+  int level = 0;
+  while (level < tree_depth()) {
+    int digit = (index / stride) % tree_arity();
+    int position = 0;
+    while (position <= digit) {
+      frontier = d_set(frontier, level, position, 0x51ed0000 + (level * 7) + position);
+      position = position + 1;
+    }
+    stride = stride * tree_arity();
+    level = level + 1;
+  }
+  return frontier;
+}
+
+int d_reads(cell frontier, int rounds) method_id {
   int acc = 0;
   int i = 0;
   while (i < rounds) {
-    acc = acc + frontier_get(frontier, i % tree_depth(), i % tree_arity());
+    acc = acc + d_get(frontier, i % tree_depth(), i % tree_arity());
     i = i + 1;
   }
   return acc;
 }
 
-cell f_writes(cell frontier, int rounds) method_id {
+cell d_writes(cell frontier, int rounds) method_id {
   int i = 0;
   while (i < rounds) {
-    frontier = frontier_set(frontier, i % tree_depth(), i % tree_arity(), 0x1234 + i);
+    frontier = d_set(frontier, i % tree_depth(), i % tree_arity(), 0x1234 + i);
     i = i + 1;
   }
   return frontier;
 }
 
+;; --- what a dense container costs to read ----------------------------------
 ;; The same eighty-four values as a flat chain of cells, three to a cell, read
-;; by walking rather than by key. This is what a dense container costs.
+;; by walking rather than by key.
+
 cell f_flat_build() method_id {
   cell chain = begin_cell().end_cell();
   int i = 0;
@@ -102,123 +212,6 @@ int f_flat_reads(cell chain, int rounds) method_id {
     i = i + 1;
   }
   return acc;
-}
-
-
-;; --- the same fold against a flat, level-ordered layout ---------------------
-;; A level is three cells because a cell holds 1023 bits and a field element
-;; is 256: values 0-2, then 3-5, then 6. The level cells carry a reference to
-;; the next level, so the whole store is walked in the order an append walks
-;; it and nothing is addressed by key.
-;;
-;; This is a prototype for measurement. It is not the contract's layout.
-
-(int, int, int, int, int, int, int, cell) flat_read(cell node, int last) inline_ref {
-  slice a = node.begin_parse();
-  int v0 = a~load_uint(256);
-  int v1 = a~load_uint(256);
-  int v2 = a~load_uint(256);
-  cell b = a~load_ref();
-  cell next = last ? null() : a~load_ref();
-  slice bs = b.begin_parse();
-  int v3 = bs~load_uint(256);
-  int v4 = bs~load_uint(256);
-  int v5 = bs~load_uint(256);
-  slice cs = bs~load_ref().begin_parse();
-  int v6 = cs~load_uint(256);
-  return (v0, v1, v2, v3, v4, v5, v6, next);
-}
-
-cell flat_build_level(tuple v, cell next, int last) inline_ref {
-  cell c = begin_cell().store_uint(v.at(6), 256).end_cell();
-  cell b = begin_cell()
-    .store_uint(v.at(3), 256).store_uint(v.at(4), 256).store_uint(v.at(5), 256)
-    .store_ref(c).end_cell();
-  builder a = begin_cell()
-    .store_uint(v.at(0), 256).store_uint(v.at(1), 256).store_uint(v.at(2), 256)
-    .store_ref(b);
-  ifnot (last) { a = a.store_ref(next); }
-  return a.end_cell();
-}
-
-;; Level `l` of a pool at `index`, filled the way the dictionary version fills
-;; it: slots up to that level's digit hold values, the rest are zero.
-cell flat_fill(int index) method_id {
-  cell next = null();
-  int level = tree_depth() - 1;
-  while (level >= 0) {
-    int stride = 1;
-    int i = 0;
-    while (i < level) { stride = stride * tree_arity(); i = i + 1; }
-    int digit = (index / stride) % tree_arity();
-    tuple v = empty_tuple();
-    int slot = 0;
-    while (slot < tree_arity()) {
-      v = v.tpush(slot <= digit ? 0x51ed0000 + (level * 7) + slot : 0);
-      slot = slot + 1;
-    }
-    next = flat_build_level(v, next, level == (tree_depth() - 1));
-    level = level - 1;
-  }
-  return next;
-}
-
-;; The measured call: the same twelve-level fold, reading and rebuilding the
-;; flat store instead of a dictionary.
-(cell, int) flat_append(cell frontier, int index, int leaf) impure {
-  ;; Down: read every level, place the carry, hash, and keep the new values.
-  tuple levels = empty_tuple();
-  int carry = leaf;
-  int stride = 1;
-  int level = 0;
-  cell node = frontier;
-  while (level < tree_depth()) {
-    (int v0, int v1, int v2, int v3, int v4, int v5, int v6, cell next) =
-      flat_read(node, level == (tree_depth() - 1));
-    int digit = (index / stride) % tree_arity();
-    int empty = empty_root_at(level);
-    int c0 = digit == 0 ? carry : (digit >= 0 ? v0 : empty);
-    int c1 = digit == 1 ? carry : (digit >= 1 ? v1 : empty);
-    int c2 = digit == 2 ? carry : (digit >= 2 ? v2 : empty);
-    int c3 = digit == 3 ? carry : (digit >= 3 ? v3 : empty);
-    int c4 = digit == 4 ? carry : (digit >= 4 ? v4 : empty);
-    int c5 = digit == 5 ? carry : (digit >= 5 ? v5 : empty);
-    int c6 = digit == 6 ? carry : (digit >= 6 ? v6 : empty);
-    tuple v = empty_tuple();
-    v = v.tpush(c0); v = v.tpush(c1); v = v.tpush(c2); v = v.tpush(c3);
-    v = v.tpush(c4); v = v.tpush(c5); v = v.tpush(c6);
-    levels = levels.tpush(v);
-    carry = commit_node(c0, c1, c2, c3, c4, c5, c6);
-    stride = stride * tree_arity();
-    node = next;
-    level = level + 1;
-  }
-  ;; Up: the store is rebuilt from the deepest level, because each level holds
-  ;; a reference to the next.
-  cell rebuilt = null();
-  level = tree_depth() - 1;
-  while (level >= 0) {
-    rebuilt = flat_build_level(levels.at(level), rebuilt, level == (tree_depth() - 1));
-    level = level - 1;
-  }
-  return (rebuilt, carry);
-}
-
-(cell, int) f_flat_append(cell frontier, int index, int leaf) method_id {
-  return flat_append(frontier, index, leaf);
-}
-
-;; The digit sum, which is what decides how many slots the append reads.
-int f_digit_sum(int index) method_id {
-  int total = 0;
-  int stride = 1;
-  int level = 0;
-  while (level < tree_depth()) {
-    total = total + ((index / stride) % tree_arity());
-    stride = stride * tree_arity();
-    level = level + 1;
-  }
-  return total;
 }
 
 () recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure { }
@@ -283,17 +276,31 @@ impl FrontierProbe {
         Ok((result.stack, result.gas_used))
     }
 
+    fn cell_of(stack: &[StackItem], what: &str) -> Result<Cell> {
+        stack
+            .last()
+            .ok_or_else(|| CrossCheckError::Vm(format!("no {what}")))?
+            .as_cell()
+            .map(Clone::clone)
+            .map_err(|error| CrossCheckError::Vm(format!("{what}: {error}")))
+    }
+
     /// The frontier store of a pool holding `index` notes.
     pub fn fill(&self, index: u64) -> Result<Cell> {
         let (stack, _) = self.call("f_fill", vec![Self::integer(&index.to_string())?])?;
-        let top = stack.last().ok_or_else(|| CrossCheckError::Vm("no frontier".to_string()))?;
-        top.as_cell()
-            .map(Clone::clone)
-            .map_err(|error| CrossCheckError::Vm(format!("frontier: {error}")))
+        Self::cell_of(&stack, "frontier")
     }
 
-    /// The digit sum of `index` in base seven, which is the count the append's
-    /// dictionary work is proportional to.
+    /// The store section 13.2 deploys a pool with.
+    pub fn genesis(&self) -> Result<Cell> {
+        let (stack, _) = self.call("f_genesis", vec![])?;
+        Self::cell_of(&stack, "genesis frontier")
+    }
+
+    /// The digit sum of `index` in base seven. It no longer decides what an
+    /// append costs -- that is the point of the change -- but it is what the
+    /// dictionary's cost was proportional to, so the tests that assert the
+    /// cost no longer follows it need it.
     pub fn digit_sum(&self, index: u64) -> Result<u64> {
         let (stack, _) = self.call("f_digit_sum", vec![Self::integer(&index.to_string())?])?;
         let top = stack.last().ok_or_else(|| CrossCheckError::Vm("no sum".to_string()))?;
@@ -302,67 +309,6 @@ impl FrontierProbe {
             .to_string()
             .parse()
             .map_err(|error| CrossCheckError::Vm(format!("sum: {error}")))
-    }
-
-    /// The gas `rounds` dictionary reads cost against a frontier of that age.
-    pub fn dict_read_gas(&self, index: u64, rounds: u64) -> Result<i64> {
-        let frontier = self.fill(index)?;
-        let (_, gas) = self.call(
-            "f_reads",
-            vec![StackItem::cell(frontier), Self::integer(&rounds.to_string())?],
-        )?;
-        Ok(gas)
-    }
-
-    /// The same for writes.
-    pub fn dict_write_gas(&self, index: u64, rounds: u64) -> Result<i64> {
-        let frontier = self.fill(index)?;
-        let (_, gas) = self.call(
-            "f_writes",
-            vec![StackItem::cell(frontier), Self::integer(&rounds.to_string())?],
-        )?;
-        Ok(gas)
-    }
-
-    /// What the same values cost to read from a flat cell chain.
-    pub fn flat_read_gas(&self, rounds: u64) -> Result<i64> {
-        let (stack, _) = self.call("f_flat_build", vec![])?;
-        let chain = stack
-            .last()
-            .ok_or_else(|| CrossCheckError::Vm("no chain".to_string()))?
-            .as_cell()
-            .map(Clone::clone)
-            .map_err(|error| CrossCheckError::Vm(format!("chain: {error}")))?;
-        let (_, gas) = self.call(
-            "f_flat_reads",
-            vec![StackItem::cell(chain), Self::integer(&rounds.to_string())?],
-        )?;
-        Ok(gas)
-    }
-
-    /// The flat store for a pool at `index`.
-    pub fn flat_fill(&self, index: u64) -> Result<Cell> {
-        let (stack, _) = self.call("flat_fill", vec![Self::integer(&index.to_string())?])?;
-        stack
-            .last()
-            .ok_or_else(|| CrossCheckError::Vm("no store".to_string()))?
-            .as_cell()
-            .map(Clone::clone)
-            .map_err(|error| CrossCheckError::Vm(format!("store: {error}")))
-    }
-
-    /// The gas the same fold costs against the flat store.
-    pub fn flat_append_gas(&self, index: u64) -> Result<i64> {
-        let frontier = self.flat_fill(index)?;
-        let (_, gas) = self.call(
-            "f_flat_append",
-            vec![
-                StackItem::cell(frontier),
-                Self::integer(&index.to_string())?,
-                Self::integer("12345678901234567890")?,
-            ],
-        )?;
-        Ok(gas)
     }
 
     /// The gas one append at `index` costs against that pool's frontier.
@@ -375,6 +321,85 @@ impl FrontierProbe {
                 Self::integer(&index.to_string())?,
                 Self::integer("12345678901234567890")?,
             ],
+        )?;
+        Ok(gas)
+    }
+
+    /// The first append a deployed pool ever does, against the store the
+    /// contract deploys with rather than one the probe built.
+    pub fn genesis_append_gas(&self) -> Result<i64> {
+        let frontier = self.genesis()?;
+        self.append_against(frontier, 0)
+    }
+
+    /// The same append against a store of the same shape whose every slot is
+    /// zero. It isolates one thing: what the VM charges for re-loading a cell
+    /// it has already loaded in this transaction.
+    pub fn zeroed_append_gas(&self, index: u64) -> Result<i64> {
+        let (stack, _) = self.call("f_fill_zeros", vec![Self::integer(&index.to_string())?])?;
+        let frontier = Self::cell_of(&stack, "zeroed frontier")?;
+        self.append_against(frontier, index)
+    }
+
+    fn append_against(&self, frontier: Cell, index: u64) -> Result<i64> {
+        let (_, gas) = self.call(
+            "f_append",
+            vec![
+                StackItem::cell(frontier),
+                Self::integer(&index.to_string())?,
+                Self::integer("12345678901234567890")?,
+            ],
+        )?;
+        Ok(gas)
+    }
+
+    /// The dictionary store for a pool at `index`.
+    pub fn dict_fill(&self, index: u64) -> Result<Cell> {
+        let (stack, _) = self.call("d_fill", vec![Self::integer(&index.to_string())?])?;
+        Self::cell_of(&stack, "dictionary frontier")
+    }
+
+    /// The same append, against the container that was replaced.
+    pub fn dict_append_gas(&self, index: u64) -> Result<i64> {
+        let frontier = self.dict_fill(index)?;
+        let (_, gas) = self.call(
+            "d_append",
+            vec![
+                StackItem::cell(frontier),
+                Self::integer(&index.to_string())?,
+                Self::integer("12345678901234567890")?,
+            ],
+        )?;
+        Ok(gas)
+    }
+
+    /// The gas `rounds` dictionary reads cost against a frontier of that age.
+    pub fn dict_read_gas(&self, index: u64, rounds: u64) -> Result<i64> {
+        let frontier = self.dict_fill(index)?;
+        let (_, gas) = self.call(
+            "d_reads",
+            vec![StackItem::cell(frontier), Self::integer(&rounds.to_string())?],
+        )?;
+        Ok(gas)
+    }
+
+    /// The same for writes.
+    pub fn dict_write_gas(&self, index: u64, rounds: u64) -> Result<i64> {
+        let frontier = self.dict_fill(index)?;
+        let (_, gas) = self.call(
+            "d_writes",
+            vec![StackItem::cell(frontier), Self::integer(&rounds.to_string())?],
+        )?;
+        Ok(gas)
+    }
+
+    /// What the same values cost to read from a flat cell chain.
+    pub fn flat_read_gas(&self, rounds: u64) -> Result<i64> {
+        let (stack, _) = self.call("f_flat_build", vec![])?;
+        let chain = Self::cell_of(&stack, "chain")?;
+        let (_, gas) = self.call(
+            "f_flat_reads",
+            vec![StackItem::cell(chain), Self::integer(&rounds.to_string())?],
         )?;
         Ok(gas)
     }

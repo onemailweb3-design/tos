@@ -23,8 +23,8 @@ mod support;
 use support::{Age, Withdrawal};
 
 /// The ceilings frozen into the contract.
-const TRANSACT_GAS_CEILING: i64 = 1_620_000;
-const BOUNCE_GAS_CEILING: i64 = 280_000;
+const TRANSACT_GAS_CEILING: i64 = 1_460_000;
+const BOUNCE_GAS_CEILING: i64 = 220_000;
 
 /// Out of gas.
 const OUT_OF_GAS: i32 = -14;

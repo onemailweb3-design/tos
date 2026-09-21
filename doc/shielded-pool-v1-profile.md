@@ -591,7 +591,7 @@ H7("COMMIT-NODE", child0, child1, ... child6)
 
 ### 5.1 Frontier
 
-Persistent frontier is a logical array `frontier[12][7]` and **MUST use the canonical `frontier_store` HashmapE-7 encoding from §13.1**. There is no alternate array/cell encoding in V1.
+Persistent frontier is a logical array `frontier[12][7]` and **MUST use the canonical `frontier_store` level-chain encoding from §13.1**. There is no alternate encoding in V1.
 
 Append leaf at index `i`:
 
@@ -600,11 +600,13 @@ carry = leaf
 
 for level in 0..11:
     d = floor(i / 7^level) mod 7
-    frontier[level][d] = carry
 
     children[j] =
-       frontier[level][j]  if j <= d
+       frontier[level][j]  if j < d
+       carry               if j == d
        EMPTY_ROOT[level]   if j > d
+
+    frontier[level][j] = children[j]   for every j in 0..6
 
     carry = H7("COMMIT-NODE", children[0..6])
 
@@ -612,7 +614,7 @@ commitment_root = carry
 commitment_next_index += 1
 ```
 
-Values in stale frontier slots `j>d` are ignored.
+Slots `j>d` hold whatever an earlier append left there and their contents are never read, but they are **rewritten to `EMPTY_ROOT[level]` on every append**: the store is a fixed-shape chain, so what is persisted is part of the state hash and is fixed here rather than left to the implementation.
 
 Three transact outputs append sequentially at indices `next, next+1, next+2`.
 
@@ -1368,14 +1370,37 @@ Both `*_next_index` counters are uint64 **only to represent the exhausted sentin
 
 #### frontier_store
 
-`HashmapE 7`, logical key:
+A chain of twelve level nodes, level 0 first, each holding that level's seven
+slots as canonical `Fr` values. A cell holds 1023 bits and a field element
+needs 256, so a level is three cells:
 
 ```text
-key = level * 7 + child_position   // 0..83
-value = canonical Fr
+level node   v0 v1 v2  (768 bits)   ^second   ^next
+second       v3 v4 v5  (768 bits)   ^third
+third        v6        (256 bits)
 ```
 
-Missing entry means field zero. **Canonical V1 state MUST omit every zero-valued entry and MUST NOT store an explicit zero value.** A non-zero logical value MUST be present exactly once under its key. No other key is valid.
+`^next` points at the node for level + 1 and is **absent at level 11**, which
+is the only level whose node has one reference rather than two. Every node
+has exactly 768 data bits, every `second` exactly 768 and one reference, every
+`third` exactly 256 and none. A store whose shape differs anywhere is invalid
+and MUST be refused rather than read.
+
+Every slot is always present. There is no encoding for an absent slot and no
+canonicalisation rule about zero: a zero slot is 256 zero bits like any other
+value. At genesis every one of the eighty-four slots is zero (§13.2), and none
+of them is read before it is written, because at index zero every digit is
+zero and §5.1 takes `EMPTY_ROOT[level]` for every slot above the digit.
+
+This replaced a `HashmapE 7` keyed by `level * 7 + child_position` on
+2026-09-21. The access pattern is a sequential walk over a dense, contiguous,
+compile-time-known key space, which is not what a sparse dictionary is for,
+but the reason for the change is the cost *shape*: a dictionary append ran
+from 108,544 gas at genesis up to 172,192 at the worst reachable leaf index,
+while the chain runs from 127,412 down to 123,544. A sender pre-pays the
+ceiling of §14 and a ceiling has to cover the worst age the pool can reach, so
+under the dictionary every sender paid for a maturity most pools will never
+have.
 
 #### anchors_store
 
@@ -1491,6 +1516,8 @@ Zerostate generator MUST initialize:
 - nullifier root = the IMT genesis root containing only the head sentinel;
 - `nullifier_next_index:uint64 = 1`;
 - `last_anchor_epoch = 0xffffffff`;
+- a frontier store of twelve levels in the §13.1 shape, every one of the
+  eighty-four slots zero;
 - empty recent-root and epoch-root dictionaries;
 - `native_liability = 0`;
 - configured positive reserve floor;

@@ -8,11 +8,15 @@
 //!
 //! The ceilings were first set from measurements taken against a pool that
 //! had just been deployed, and that is the cheapest the contract will ever
-//! be. Three of its costs grow with history:
+//! be. Three of its costs grew with history:
 //!
-//!   * `frontier_append` reads `digit + 1` slots at level `l`, and the digits
+//!   * `frontier_append` read `digit + 1` slots at level `l`, and the digits
 //!     are the leaf index in base seven -- twelve reads in total near
-//!     genesis, seventy-nine at the worst index;
+//!     genesis, seventy-nine at the worst index. This one is gone: since
+//!     2026-09-21 the store is a level chain that reads all seven slots of
+//!     every level whatever the index, and costs slightly *less* as the index
+//!     grows. The term is still measured below, because a term that has gone
+//!     to zero is a claim like any other;
 //!   * `anchors_preserve` writes into a 4,096-slot ring that is empty at
 //!     genesis and full after an hour of traffic;
 //!   * a proof against a recent root reads that ring, which a harness proving
@@ -29,7 +33,7 @@ use shielded_pool_circuit_crosscheck::frontier_probe::FrontierProbe;
 use shielded_pool_circuit_crosscheck::pool::{Pool, DENOMINATION};
 
 /// The ceiling frozen into the contract for a deposit.
-const DEPOSIT_GAS_CEILING: i64 = 270_000;
+const DEPOSIT_GAS_CEILING: i64 = 220_000;
 
 /// Far more than the deposit may spend, so the ceiling is what stops it and
 /// not the message's own gas credit.
@@ -103,10 +107,13 @@ fn a_deposit_fits_its_ceiling_at_every_age() {
 
 /// No pool size refuses a deposit.
 ///
-/// The cost follows the base-seven digit sum of the leaf index, which is not
-/// monotone, so this scans rather than bisects. It is the test that went red
-/// first when the ceilings were set from a fresh pool: the thirty-fifth
-/// deposit was refused.
+/// The cost used to follow the base-seven digit sum of the leaf index, which
+/// is not monotone, so this scans rather than bisects. It is the test that
+/// went red first when the ceilings were set from a fresh pool: the
+/// thirty-fifth deposit was refused. The scan is kept now that the store no
+/// longer grows, because what it asserts -- that no reachable size is
+/// refused -- is the claim, and the shape of the cost curve is an argument
+/// about why, not a substitute for it.
 #[test]
 fn no_pool_size_refuses_a_deposit() {
     let frontier_probe = FrontierProbe::deploy().expect("frontier probe");

@@ -165,8 +165,56 @@ pub fn config_store(parameters: &Parameters) -> Result<Cell> {
     finish(builder)
 }
 
-/// A `Maybe ^Cell` holding nothing, which is how an empty frontier and an
-/// empty anchor dictionary are stored.
+/// Section 5.3's frontier store at genesis: twelve levels in order, seven
+/// slots each, every slot zero, three field elements to a cell.
+///
+/// This was an absent `Maybe ^Cell` until 2026-09-21, when the store stopped
+/// being a dictionary. Nothing reads a zero here: an append takes the level's
+/// empty root for every slot above its digit, and at index zero every digit
+/// is zero.
+fn frontier_genesis() -> Result<Cell> {
+    let zero = [0u8; 32];
+    let mut chain: Option<Cell> = None;
+    for level in (0..12usize).rev() {
+        let last = level == 11;
+        let mut third = BuilderData::new();
+        third.append_raw(&zero, 256).map_err(encoding)?;
+        let third = finish(third)?;
+
+        let mut second = BuilderData::new();
+        for _ in 0..3 {
+            second.append_raw(&zero, 256).map_err(encoding)?;
+        }
+        second.checked_append_reference(third).map_err(encoding)?;
+        let second = finish(second)?;
+
+        let mut node = BuilderData::new();
+        for _ in 0..3 {
+            node.append_raw(&zero, 256).map_err(encoding)?;
+        }
+        node.checked_append_reference(second).map_err(encoding)?;
+        if !last {
+            let next = chain.take().ok_or_else(|| {
+                Error::Encoding("a frontier level below the last has no successor".to_string())
+            })?;
+            node.checked_append_reference(next).map_err(encoding)?;
+        }
+        chain = Some(finish(node)?);
+    }
+    chain.ok_or_else(|| Error::Encoding("an empty frontier chain".to_string()))
+}
+
+/// Section 13's holder for the frontier reference: a `Maybe ^Cell` that is
+/// present and points at the level chain. The holder is still a maybe because
+/// a state cell can arrive from outside with the frontier absent, and the
+/// contract has to be able to read that in order to refuse it.
+fn frontier_store(frontier: Cell) -> Result<Cell> {
+    let mut builder = BuilderData::new();
+    builder.append_bit_one().map_err(encoding)?;
+    builder.checked_append_reference(frontier).map_err(encoding)?;
+    finish(builder)
+}
+
 fn empty_holder() -> Result<Cell> {
     let mut builder = BuilderData::new();
     builder.append_bit_zero().map_err(encoding)?;
@@ -251,7 +299,7 @@ pub fn build(parameters: Parameters) -> Result<Genesis> {
     store_coins(&mut builder, 0)?;
     store_coins(&mut builder, parameters.reserve_floor)?;
     builder
-        .checked_append_reference(empty_holder()?)
+        .checked_append_reference(frontier_store(frontier_genesis()?)?)
         .and_then(|b| b.checked_append_reference(anchors_empty()?))
         .and_then(|b| b.checked_append_reference(config_store(&parameters)?))
         .and_then(|b| b.checked_append_reference(byte_chain(&parameters.verifying_key)?))

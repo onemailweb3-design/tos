@@ -62,10 +62,13 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   would have paid. The gate was asserted but not tested.
 
   Closing it needed a message in the window where the difference is visible.
-  Measured on this executor at 400 nanotos per gas unit: below roughly 20,000
-  nanotos the compute phase is skipped outright (`NoGas`) and the VM never runs,
-  and at 520,000 the message buys the whole 1,259-gas path. A deposit carrying
-  400,000 buys 1,000 gas and therefore dies halfway:
+  The window is derived from this chain's ConfigParam 21 rather than written
+  down -- a flat 6,667 for the first hundred gas, then 4,369,067 per 65,536
+  gas -- because a price change would otherwise turn the starved message into
+  one that can afford the path, and the test would pass for the wrong reason.
+  Below roughly 20,000 nanotos the compute phase is skipped outright (`NoGas`)
+  and the VM never runs. A deposit carrying what a thousand gas costs buys a
+  thousand gas, and therefore dies halfway:
 
   | | exit code | gas used | pool balance |
   |---|---|---|---|
@@ -98,10 +101,12 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   digest is the only thing standing behind that table; and running one fewer
   partial round leaves the manifest intact, so only the vectors catch it.
 
-  The gas price is a **development tariff** of 3,000. It is not a measurement
+  The gas price is a **development tariff** of 2,800. It is not a measurement
   and not a production claim: benchmarking the pinned implementation on target
   CPUs and choosing a price with a stated margin still has to happen before
-  activation, in both VMs at once.
+  activation, in both VMs at once. It came down from 3,500 when the Rust
+  permutation was made proportionate to the C++ one, which moved the bracket
+  the tariff is the top of.
 
 **Note commitments and the commitment tree**
 
@@ -118,10 +123,20 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   the same one written twice. And the ladder is recomputed from the permutation
   and required to match the generated table.
 
-  Canonical state must not store an explicit zero. A commitment is never zero,
-  so that rule had no path to reach it until the suite appends a zero leaf: the
-  slot must be absent rather than stored, the root must stay the empty root, and
-  a later non-zero append must bring the slot back.
+  The frontier store is a chain of twelve level nodes, not a dictionary. It
+  was a `HashmapE 7` keyed by `level * 7 + position` until 2026-09-21; the key
+  space is 0..83, dense and known at compile time, and the access is a
+  sequential walk, so nothing about it wanted a sparse container. What decided
+  the change was the cost *shape* rather than the constant: a dictionary
+  append ran from 108,544 gas at genesis up to 172,192 at the worst reachable
+  leaf index, while the chain runs from 127,412 down to 123,544. A sender
+  pre-pays the ceiling and a ceiling has to cover the worst age the pool can
+  reach, so under the dictionary every sender paid for a maturity most pools
+  will never have. The transact ceiling fell from 1,620,000 to 1,460,000.
+
+  `frontier_store_shape.rs` keeps both containers and fails if they stop
+  differing that way; `frontier_cost_is_flat.rs` holds the property the
+  ceiling rests on.
 
   Eight mutations (`test/shielded-pool/mutations.py`), each killed by the test
   it was aimed at.
@@ -381,39 +396,48 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
 
   | cumulative gas | step |
   |---:|---|
-  | 10,437 | parse and the validity window |
-  | 63,818 | + the anchor |
-  | 497,031 | + one whole nullifier insertion, the second rejected |
-  | 846,470 | + both insertions and the first authorization |
-  | **1,117,121** | + the second authorization and the proof |
+  | 10,439 | parse and the validity window |
+  | 64,031 | + the anchor |
+  | 65,670 | + the first insertion, rejected at its witness |
+  | 270,038 | + one whole insertion, the second rejected |
+  | 483,502 | + both insertions and the first authorization |
+  | **753,513** | + the second authorization and the proof |
 
   **The proof is not what costs.** The two nullifier insertions account for
-  about 716,000 of that, roughly 239 Poseidon2 hashes, against 204,493 for the
-  whole Groth16 verification measured on its own.
+  about 418,000 of that, against 204,493 for the whole Groth16 verification
+  measured on its own.
 
-  The network's default per-transaction limit is **1,000,000**, so this path
-  does not run to completion on an ordinary account, and the profile's
-  `TRANSACT_GAS_CEILING` of 2,000,000 can never take effect: `SETGASLIMIT`
-  cannot raise a transaction above the network's own limit. The measurement was
-  taken with the sandbox's limit raised to 10,000,000, which is a measuring
-  instrument and not a claim. Both facts are asserted by tests rather than left
-  in a comment. The decision this forces is registered as D1 in
-  `privacy/TOS_SHIELDED_POOL_V1_OPEN_RULINGS_2.md`; the short version is that
-  the Poseidon2 gas price those insertions are billed at is still a placeholder,
-  so pricing it against measured cost decides whether V1 fits.
+  A whole successful withdrawal — which this table does not reach, because
+  every row is a *refusal* — measures 1,167,157 with both anchor rings full,
+  and the frozen `TRANSACT_GAS_CEILING` is 1,460,000 by the production rule
+  C = max(10,000, round_up_10,000(ceil(M × 5 / 4))). The basechain grants a
+  transaction 30,000,000, so the contract's own ceiling is the binding one,
+  which is the point of having it. Both halves of
+  `MEASURED_MAX < ceiling <= chain limit` are asserted by tests rather than
+  left in a comment.
 
-**The whole mutation set**, run end to end on 2026-09-20 at this branch's tip:
-185 mutations across nine batteries — 8 notes and tree, 34 IMT, 23
-authorization, 23 anchors, 20 state, 22 transact wire, 12 Groth16, 26 pool
-contract, 17 Poseidon2 across both VMs — and every one of them was killed by
-the test or assertion it was aimed at. The log is in
-`privacy/measurements/transact-in-tvm-20260920/all-mutations.out`.
+  These figures are three reductions below where they started: 342,976 when
+  the nullifier inserts stopped walking their paths in FunC and started
+  calling `POSEIDON2_PATH7`, 99,950 when the Poseidon2 tariff came down from
+  3,500 to 2,800, and 120,859 when the frontier changed container.
 
-**Still not built**: section 15's withdrawal payout and its bounce recovery
-(step 16 of 16.2 refuses with code 206 today), section 16.3, the wallet, and
-the zerostate generator. There is no production prover, so **no proof that
-verifies has ever been produced** — every transact in the suite stops at the
-pairing, and the cost of a *successful* transact is therefore still unmeasured.
+**The whole mutation set**, re-run end to end on 2026-09-21 at this branch's tip:
+221 mutations across ten batteries — 9 notes and tree, 34 IMT, 23
+authorization, 23 anchors, 21 state, 22 transact wire, 12 Groth16, 38 pool
+contract, 17 payout, 22 recovery — and every one of them was killed by the
+test it was aimed at. The 17 Poseidon2 mutations across both VMs were not
+re-run in that pass, because nothing under `crypto/vm` changed in it.
+
+**Still not built**: the production Groth16 ceremony. Everything this
+paragraph used to list is built — section 15's withdrawal payout and its
+bounce recovery, section 16.3, the wallet and the zerostate generator — and a
+withdrawal now runs end to end in the sandbox, is refused, bounces, and comes
+back as a recovery note, with every figure above measured on that path. What
+is not built is a verifying key anyone should trust with money: the
+development key comes from a single-party setup, so **no proof under a
+production key has ever been produced**, and nothing here is evidence about
+one. The phase-1 transcript can be taken from an existing BLS12-381 ceremony;
+the phase-2 circuit-specific contribution has to be ours.
 
 ## What gates this branch
 

@@ -315,7 +315,7 @@ fn a_private_transfer_with_a_proof_that_verifies() {
     /// Section 14.1. The contract sets this on itself, and a sender prepays
     /// `get_compute_fee(ceiling)` rather than what the path costs, so the
     /// headroom is not free -- it is what every sender overpays.
-    const TRANSACT_GAS_CEILING: i64 = 1_620_000;
+    const TRANSACT_GAS_CEILING: i64 = 1_460_000;
     eprintln!(
         "a successful private transfer: {used} gas, {}% of the {TRANSACT_GAS_CEILING} ceiling, \
          {} to spare",

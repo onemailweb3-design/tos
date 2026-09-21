@@ -47,17 +47,16 @@ const VERSION: u16 = 1;
 const EPOCH_NONE: u32 = 0xffff_ffff;
 const OP_TRANSACT: u32 = 0x5348_5002;
 const RESERVE_FLOOR: u64 = 5 * TOS;
-/// 2,000,000 gas at the sandbox's 400 nanotos per unit.
-/// Section 14.1, frozen by the production rule at the 3,500 Poseidon2
-/// tariff: the worst legal transact is a withdrawal at 1,730,942 and the rule
-/// gives 2,170,000. A sender funds the ceiling, not what the path will use.
+/// Section 14.1, frozen by the production rule
+/// C = max(10,000, round_up_10,000(ceil(M * 5 / 4))). A sender funds the
+/// ceiling, not what the path will use.
 ///
-/// The maximum is measured at the worst leaf index a pool can reach with both
-/// anchor rings full. A withdrawal appends three leaves, so it carries three
-/// times the frontier growth a deposit does; against a fresh pool the same
-/// path measures 1,565,609.
-const TRANSACT_GAS_CEILING: i64 = 1_620_000;
-const TRANSACT_MEASURED_MAX_GAS: i64 = 1_288_016;
+/// The maximum is measured with both anchor rings full. A withdrawal appends
+/// three leaves, and since 2026-09-21 an append costs the same at every leaf
+/// index, so the three no longer carry an age margin: the worst measured
+/// withdrawal is 1,167,157 against 1,167,157 in a pool with nothing in it.
+const TRANSACT_GAS_CEILING: i64 = 1_460_000;
+const TRANSACT_MEASURED_MAX_GAS: i64 = 1_167_157;
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
 /// flat 6,667 for the first hundred gas, then 4,369,067 per 65,536 gas with
 /// the division rounded up.
@@ -591,7 +590,7 @@ fn genesis_state(nullifier_root: Field) -> Cell {
     builder.append_u32(EPOCH_NONE).unwrap();
     store_coins(&mut builder, 0);
     store_coins(&mut builder, RESERVE_FLOOR as u128);
-    builder.checked_append_reference(empty_ring_holder()).unwrap();
+    builder.checked_append_reference(shielded_pool_library::frontier_holder()).unwrap();
     builder
         .checked_append_reference(refs_only(&[empty_ring_holder(), empty_ring_holder()]))
         .unwrap();
@@ -1087,7 +1086,7 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
     /// Section 14.1. Unlike the network limit, this one the contract sets on
     /// itself, and it is the binding one: it is far below what the chain
     /// grants, which is the point of having it.
-    const TRANSACT_GAS_CEILING: i64 = 1_620_000;
+    const TRANSACT_GAS_CEILING: i64 = 1_460_000;
     /// ConfigParam 21 of this chain's zero state.
     const BASECHAIN_GAS_LIMIT: i64 = 30_000_000;
 

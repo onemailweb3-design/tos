@@ -20,12 +20,10 @@
 //! section 4, so a misreading of the profile would be reproduced in both. The
 //! cross-check that settles it is the circuit (WP-C), which does not exist yet.
 
-use std::collections::BTreeMap;
-
 use chain_block::poseidon2::permute;
 use chain_block::poseidon2_kat::{DOMAINS, EMPTY_ROOTS};
 use chain_block::{
-    BuilderData, Cell, HashmapE, HashmapType, IBitstring, MsgAddressInt, Serializable, StateInit,
+    BuilderData, Cell, IBitstring, MsgAddressInt, Serializable, SliceData, StateInit,
 };
 use tos_sandbox::{Blockchain, MessageBuilder, compile_func_with_stdlib};
 use tos_vm::stack::StackItem;
@@ -131,10 +129,14 @@ fn naive_root(leaves: &[Field], empty: &[Field]) -> Field {
     level_nodes[0]
 }
 
-/// The incremental algorithm of section 5.1, over a plain map so that the
-/// contract's dictionary encoding is not part of the reference.
+/// The frontier as section 5.1 describes it: twelve levels of seven slots,
+/// every slot always present. The contract's cell encoding is not part of the
+/// reference -- `read_frontier` is what turns one into the other.
+type ReferenceFrontier = [[Field; ARITY]; DEPTH];
+
+/// The incremental algorithm of section 5.1, over a plain array.
 fn reference_append(
-    frontier: &mut BTreeMap<(usize, usize), Field>,
+    frontier: &mut ReferenceFrontier,
     index: u64,
     leaf: Field,
     empty: &[Field],
@@ -143,17 +145,13 @@ fn reference_append(
     let mut stride = 1u64;
     for level in 0..DEPTH {
         let digit = ((index / stride) % ARITY as u64) as usize;
-        if carry == ZERO {
-            frontier.remove(&(level, digit));
-        } else {
-            frontier.insert((level, digit), carry);
-        }
         let mut children = [empty[level]; 7];
-        for (position, slot) in children.iter_mut().enumerate() {
-            if position <= digit {
-                *slot = frontier.get(&(level, position)).copied().unwrap_or(ZERO);
-            }
-        }
+        children[..digit].copy_from_slice(&frontier[level][..digit]);
+        children[digit] = carry;
+        // Positions above the digit keep the level's empty root, and the
+        // whole level is rewritten: what sits in the store above the digit is
+        // never read, but it is part of the state hash.
+        frontier[level] = children;
         carry = commit_node(children);
         stride *= ARITY as u64;
     }
@@ -190,6 +188,7 @@ int p_empty_root(int level) method_id { return empty_root_at(level); }
 int p_commit_node(int c0, int c1, int c2, int c3, int c4, int c5, int c6) method_id {
   return commit_node(c0, c1, c2, c3, c4, c5, c6);
 }
+cell p_frontier_genesis() method_id { return frontier_genesis(); }
 (cell, int) p_append(cell frontier, int index, int leaf) method_id {
   return frontier_append(frontier, index, leaf);
 }
@@ -270,12 +269,20 @@ impl Probe {
         value
     }
 
+    /// The store section 13.2 deploys a pool with, which is where a sequence
+    /// of appends starts.
+    fn frontier_genesis(&self) -> Cell {
+        let result = self
+            .bc
+            .run_get_method(&self.addr, "p_frontier_genesis", vec![])
+            .expect("p_frontier_genesis should run");
+        assert_eq!(result.exit_code, 0, "p_frontier_genesis exited {}", result.exit_code);
+        result.stack.last().expect("a store").as_cell().expect("a cell").clone()
+    }
+
     /// Returns the updated frontier store and the new root.
-    fn append(&self, frontier: Option<Cell>, index: u64, leaf: Field) -> (Option<Cell>, Field) {
-        let mut args = vec![match frontier {
-            Some(cell) => StackItem::Cell(cell),
-            None => StackItem::None,
-        }];
+    fn append(&self, frontier: Cell, index: u64, leaf: Field) -> (Cell, Field) {
+        let mut args = vec![StackItem::Cell(frontier)];
         args.push(StackItem::int(index as i64));
         args.extend(Self::field_args(&[leaf]));
         let result =
@@ -283,13 +290,13 @@ impl Probe {
         assert_eq!(result.exit_code, 0, "p_append exited {}", result.exit_code);
         assert_eq!(result.stack.len(), 2, "p_append must return a store and a root");
         let root = from_dec(&result.stack[1].as_integer().expect("root is an integer").to_string());
-        let store = result.stack[0].as_cell().ok().cloned();
+        let store = result.stack[0].as_cell().expect("a store cell").clone();
         (store, root)
     }
 
     fn append_exit_code(&self, index_bits: &str, leaf: Field) -> i32 {
         let args = vec![
-            StackItem::None,
+            StackItem::Cell(self.frontier_genesis()),
             StackItem::integer(IntegerData::from_str_radix(index_bits, 10).expect("index")),
             Self::field_args(&[leaf]).remove(0),
         ];
@@ -311,28 +318,53 @@ fn from_dec(text: &str) -> Field {
     out
 }
 
-/// Every stored entry, as (level, position) -> value, with the encoding checked
-/// rather than assumed.
-fn read_frontier(store: &Option<Cell>) -> BTreeMap<(usize, usize), Field> {
-    let mut out = BTreeMap::new();
-    let Some(cell) = store else { return out };
-    let dict = HashmapE::with_hashmap(7, Some(cell.clone()));
-    HashmapType::iterate_slices(&dict, |mut key, mut value| {
-        assert_eq!(key.remaining_bits(), 7, "a frontier key is not seven bits");
-        let index = key.get_next_int(7).expect("key bits") as usize;
-        assert!(index < DEPTH * ARITY, "frontier key {index} is outside 0..83");
-        assert_eq!(value.remaining_bits(), 256, "a frontier value is not 256 bits");
-        assert_eq!(value.remaining_references(), 0, "a frontier value carries a reference");
-        let mut bytes = [0u8; 32];
-        for byte in bytes.iter_mut() {
-            *byte = value.get_next_byte().expect("value byte");
+/// Every slot of the store, with the §13.1 encoding checked rather than
+/// assumed: twelve level nodes in order, each three cells holding 3 + 3 + 1
+/// field elements, the last level carrying no successor.
+fn read_frontier(store: &Cell) -> ReferenceFrontier {
+    let mut out = [[ZERO; ARITY]; DEPTH];
+    let mut node = Some(store.clone());
+    for (level, slots) in out.iter_mut().enumerate() {
+        let last = level == DEPTH - 1;
+        let cell = node.take().expect("a level node");
+        let mut a = SliceData::load_cell(cell).expect("load a level node");
+        assert_eq!(a.remaining_bits(), 768, "level {level} does not hold three field elements");
+        assert_eq!(
+            a.remaining_references(),
+            if last { 1 } else { 2 },
+            "level {level} does not have the references section 13.1 fixes"
+        );
+        for slot in slots.iter_mut().take(3) {
+            *slot = read_field(&mut a);
         }
-        assert_ne!(bytes, ZERO, "canonical state must not store an explicit zero");
-        out.insert((index / ARITY, index % ARITY), bytes);
-        Ok(true)
-    })
-    .expect("iterate the frontier store");
+        let second = a.checked_drain_reference().expect("the second cell");
+        if !last {
+            node = Some(a.checked_drain_reference().expect("the next level"));
+        }
+
+        let mut b = SliceData::load_cell(second).expect("load the second cell");
+        assert_eq!(b.remaining_bits(), 768, "level {level}'s second cell is not three elements");
+        assert_eq!(b.remaining_references(), 1, "level {level}'s second cell is not one reference");
+        for slot in slots.iter_mut().skip(3).take(3) {
+            *slot = read_field(&mut b);
+        }
+
+        let mut c = SliceData::load_cell(b.checked_drain_reference().expect("the third cell"))
+            .expect("load the third cell");
+        assert_eq!(c.remaining_bits(), 256, "level {level}'s third cell is not one element");
+        assert_eq!(c.remaining_references(), 0, "level {level}'s third cell carries a reference");
+        slots[6] = read_field(&mut c);
+    }
+    assert!(node.is_none(), "the chain does not end at level {}", DEPTH - 1);
     out
+}
+
+fn read_field(slice: &mut SliceData) -> Field {
+    let mut bytes = [0u8; 32];
+    for byte in bytes.iter_mut() {
+        *byte = slice.get_next_byte().expect("a slot byte");
+    }
+    bytes
 }
 
 // ---------------------------------------------------------------------------
@@ -452,8 +484,13 @@ fn the_frontier_agrees_with_rebuilding_the_whole_tree() {
     // The empty tree's root is the ladder's top, before anything is appended.
     assert_eq!(naive_root(&[], &empty), empty[DEPTH], "an empty tree is not the empty root");
 
-    let mut store: Option<Cell> = None;
-    let mut reference_frontier: BTreeMap<(usize, usize), Field> = BTreeMap::new();
+    let mut store = probe.frontier_genesis();
+    let mut reference_frontier: ReferenceFrontier = [[ZERO; ARITY]; DEPTH];
+    assert_eq!(
+        read_frontier(&store),
+        reference_frontier,
+        "the store a pool is deployed with is not twelve levels of zeros"
+    );
     let mut leaves: Vec<Field> = Vec::new();
 
     // Fifty leaves crosses the first group boundary at 7 and the second at 49.
@@ -489,35 +526,45 @@ fn the_frontier_agrees_with_rebuilding_the_whole_tree() {
     assert_eq!(leaves.len(), 50);
 }
 
-/// The one path that reaches the "store no explicit zero" rule. A commitment is
-/// never zero in practice, so without this the rule would be written down and
-/// never executed.
+/// A zero slot is stored like any other value.
+///
+/// This test used to assert the opposite. Under the dictionary the store was
+/// canonical only if it omitted every zero, and a zero leaf -- which is the
+/// empty leaf, and so a legal thing to append -- was the one path that
+/// reached the rule. The level chain has no encoding for an absent slot, so
+/// the rule is gone, and what has to be shown instead is that the append does
+/// not invent one: the store still has the fixed shape, and the zero is in it.
 #[test]
-fn a_zero_valued_slot_is_absent_rather_than_stored() {
+fn a_zero_valued_slot_is_stored_like_any_other() {
     let probe = Probe::deploy();
     let empty = recomputed_empty_roots();
 
-    let (store, root) = probe.append(None, 0, ZERO);
+    let (store, root) = probe.append(probe.frontier_genesis(), 0, ZERO);
     assert_eq!(
         root, empty[DEPTH],
         "a zero leaf is the empty leaf, so the root must still be the empty root"
     );
+    // `read_frontier` checks the shape of every cell on the way through, so
+    // reaching this line is itself the assertion that the zero did not change
+    // the encoding.
     let stored = read_frontier(&store);
-    assert!(
-        !stored.contains_key(&(0, 0)),
-        "the zero carry was stored explicitly; canonical state must omit it"
-    );
+    assert_eq!(stored[0][0], ZERO, "the zero carry did not survive into slot (0, 0)");
     // Every level above the leaf carries a real value, so the store is not
-    // simply empty and the assertion above is not vacuous.
-    assert_eq!(stored.len(), DEPTH - 1, "levels above the leaf should each hold one entry");
+    // simply the zeros it was deployed with.
+    for level in 1..DEPTH {
+        assert_ne!(
+            stored[level][0], ZERO,
+            "level {level} slot 0 is still zero, so nothing was carried upwards"
+        );
+    }
 
-    // And a later non-zero append at the same slot must bring the entry back.
+    // And a later non-zero append at the same slot must overwrite it.
     let (store, root) = probe.append(store, 0, small(5));
     assert_ne!(root, empty[DEPTH], "overwriting the zero leaf did not change the root");
     assert_eq!(
-        read_frontier(&store).get(&(0, 0)),
-        Some(&small(5)),
-        "the slot did not come back when a non-zero value was written"
+        read_frontier(&store)[0][0],
+        small(5),
+        "the slot did not take the value that was written over the zero"
     );
 }
 

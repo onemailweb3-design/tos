@@ -35,20 +35,25 @@ int vk_final_bytes() asm "105 PUSHINT";
 
 ;; --- the frontier store -----------------------------------------------------
 
-;; The same reading as the anchor store, and for the same reason: section 13
-;; asks for a reference to the frontier store and 13.2 asks for it to be empty
-;; at genesis, and an empty HashmapE has no root cell to point at. The
-;; reference therefore holds a cell carrying the HashmapE in its own encoding.
-;; Recorded as ruling A3; if a different shape was meant, this moves the state
-;; manifest.
+;; Section 13 asks for a reference to the frontier store. The store is the
+;; level chain built in tree.fc and a chain always has a root cell to point
+;; at, so the maybe-ref wrapper no longer carries the weight it did when this
+;; held a HashmapE that has no root cell while it is empty. It is kept because
+;; removing it would move the state hash without buying anything, and because
+;; an absent frontier then has an encoding -- which is what lets the parser
+;; refuse it explicitly rather than fail somewhere further in.
 cell frontier_store_build(cell frontier) inline {
   return begin_cell().store_maybe_ref(frontier).end_cell();
 }
 
-cell frontier_store_parse(cell store) inline {
+cell frontier_store_parse(cell store) impure inline {
   slice s = store.begin_parse();
   cell frontier = s~load_maybe_ref();
   throw_unless(181, s.slice_empty?());
+  ;; A chain always has a root cell, so an absent frontier is not a state
+  ;; this contract can have written. It is refused here rather than at the
+  ;; first append, so that a malformed state cannot be read at all.
+  throw_if(181, cell_null?(frontier));
   return frontier;
 }
 
@@ -210,5 +215,5 @@ cell state_genesis(int commitment_empty_root, int nullifier_genesis_root,
     commitment_empty_root, 0,
     nullifier_genesis_root, 1,
     anchor_epoch_none(), 0, reserve_floor,
-    null(), anchors_empty(), config, vk);
+    frontier_genesis(), anchors_empty(), config, vk);
 }

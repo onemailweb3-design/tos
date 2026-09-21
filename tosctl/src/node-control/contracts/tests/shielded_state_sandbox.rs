@@ -18,6 +18,8 @@ use tos_sandbox::{Blockchain, MessageBuilder, compile_func_with_stdlib};
 use tos_vm::stack::StackItem;
 use tos_vm::stack::integer::IntegerData;
 
+mod shielded_pool_library;
+
 const TOS: u64 = 1_000_000_000;
 const ACTIVE_VERSION: u32 = 18;
 const MAGIC: u32 = 0x5350_5631;
@@ -144,9 +146,27 @@ cell p_genesis(int commit_root, int nullifier_root, int reserve, cell config, ce
    cell f, cell a, cell c, cell v) = state_parse(state);
   return (cr, cn, nr, nn, epoch, liability, reserve);
 }
-int p_frontier_is_empty(cell state) method_id {
+;; Every slot of the frontier the state carries, summed. At genesis they are
+;; all zero, and reading them at all is the assertion: `frontier_level_read`
+;; refuses a store whose shape is not the one section 13.1 fixes.
+int p_frontier_sum(cell state) method_id {
   (_, _, _, _, _, _, _, cell frontier, _, _, _) = state_parse(state);
-  return cell_null?(frontier);
+  int total = 0;
+  int level = 0;
+  cell node = frontier;
+  while (level < tree_depth()) {
+    int last = level == (tree_depth() - 1);
+    (int v0, int v1, int v2, int v3, int v4, int v5, int v6, cell next) =
+      frontier_level_read(node, last);
+    total = total + v0 + v1 + v2 + v3 + v4 + v5 + v6;
+    node = next;
+    level = level + 1;
+  }
+  return total;
+}
+int p_parse_exit(cell state) method_id {
+  state_parse(state);
+  return 0;
 }
 cell p_rebuild(cell state) method_id {
   (int cr, int cn, int nr, int nn, int epoch, int liability, int reserve,
@@ -182,6 +202,7 @@ impl Probe {
             format!("{library}/domains.fc").into(),
             format!("{library}/empty-roots.fc").into(),
             format!("{library}/notes.fc").into(),
+            format!("{library}/tree.fc").into(),
             format!("{library}/anchors.fc").into(),
             format!("{library}/state.fc").into(),
             probe_path,
@@ -262,14 +283,14 @@ fn genesis_is_the_state_section_13_2_describes() {
     assert_eq!(scalars[5], "0", "liability does not start at zero");
     assert_eq!(scalars[6], (5 * TOS).to_string(), "the reserve floor was not carried through");
 
-    // Both rings and the frontier are present and empty, which is the shape
-    // 13.2 asks for and the one an empty HashmapE cannot express as a bare ref.
-    let empty =
-        probe.call("p_frontier_is_empty", vec![StackItem::Cell(state.clone())]).expect("call");
-    assert_ne!(
-        empty.last().expect("a result").as_integer().expect("integer").to_string(),
+    // Both rings are present and empty, and the frontier is twelve levels of
+    // zeros -- which is a shape, not an absence, so it is read rather than
+    // asked about: `frontier_level_read` throws on anything else.
+    let sum = probe.call("p_frontier_sum", vec![StackItem::Cell(state.clone())]).expect("call");
+    assert_eq!(
+        sum.last().expect("a result").as_integer().expect("integer").to_string(),
         "0",
-        "the genesis frontier is not empty"
+        "the genesis frontier is not eighty-four zeros"
     );
 
     // Parsing and rebuilding must be the identity, or the state a transaction
@@ -306,9 +327,10 @@ fn a_state_root_that_is_not_the_frozen_shape_is_refused() {
         }
         for index in 0..refs {
             let child = if index == 0 {
-                let mut holder = BuilderData::new();
-                holder.append_bit_zero().unwrap();
-                holder.into_cell().unwrap()
+                // The real store, so that a state which is wrong in the way
+                // this case names is not also wrong in a way that throws the
+                // same code first.
+                shielded_pool_library::frontier_holder()
             } else if index == 2 {
                 config.clone()
             } else if index == 3 {
@@ -354,6 +376,63 @@ fn a_state_root_that_is_not_the_frozen_shape_is_refused() {
     );
 }
 
+/// A state whose frontier reference is an absent maybe is refused.
+///
+/// The holder can express absence and the store cannot: a level chain always
+/// has a root cell, so there is no frontier a pool could have written that
+/// this state is. Refusing it in the parser rather than at the first append
+/// is what keeps a malformed state from being read at all, and this is the
+/// only input that reaches that line.
+#[test]
+fn a_state_without_a_frontier_is_refused() {
+    let probe = Probe::deploy();
+    let config = Config::sample().cell();
+    let vk = vk_chain();
+
+    let state = |frontier: Cell| -> Cell {
+        let mut builder = BuilderData::new();
+        builder.append_u32(MAGIC).unwrap();
+        builder.append_u16(VERSION).unwrap();
+        builder.append_raw(&field(0xaa), 256).unwrap();
+        builder.append_u64(0).unwrap();
+        builder.append_raw(&field(0xbb), 256).unwrap();
+        builder.append_u64(1).unwrap();
+        builder.append_u32(EPOCH_NONE).unwrap();
+        store_coins(&mut builder, 0);
+        store_coins(&mut builder, 5 * TOS as u128);
+        builder.checked_append_reference(frontier).unwrap();
+        let mut anchors = BuilderData::new();
+        for _ in 0..2 {
+            let mut ring = BuilderData::new();
+            ring.append_bit_zero().unwrap();
+            anchors.checked_append_reference(ring.into_cell().unwrap()).unwrap();
+        }
+        builder.checked_append_reference(anchors.into_cell().unwrap()).unwrap();
+        builder.checked_append_reference(config.clone()).unwrap();
+        builder.checked_append_reference(vk.clone()).unwrap();
+        builder.into_cell().expect("a state root")
+    };
+
+    let mut absent = BuilderData::new();
+    absent.append_bit_zero().unwrap();
+    let absent = absent.into_cell().unwrap();
+
+    // The same state with a real store parses, so the refusal below is about
+    // the frontier and not about anything else in the cell.
+    assert_eq!(
+        probe.exit("p_parse_exit", vec![StackItem::Cell(state(
+            shielded_pool_library::frontier_holder()
+        ))]),
+        0,
+        "a state carrying the deployed frontier was refused"
+    );
+    assert_eq!(
+        probe.exit("p_parse_exit", vec![StackItem::Cell(state(absent))]),
+        181,
+        "a state whose frontier reference holds nothing was accepted"
+    );
+}
+
 #[test]
 fn a_counter_above_the_sentinel_is_not_a_state() {
     let probe = Probe::deploy();
@@ -370,9 +449,7 @@ fn a_counter_above_the_sentinel_is_not_a_state() {
         builder.append_u32(EPOCH_NONE).unwrap();
         store_coins(&mut builder, 0);
         store_coins(&mut builder, 5 * TOS as u128);
-        let mut frontier = BuilderData::new();
-        frontier.append_bit_zero().unwrap();
-        builder.checked_append_reference(frontier.into_cell().unwrap()).unwrap();
+        builder.checked_append_reference(shielded_pool_library::frontier_holder()).unwrap();
         let mut anchors = BuilderData::new();
         for _ in 0..2 {
             let mut ring = BuilderData::new();
