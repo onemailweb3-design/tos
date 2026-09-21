@@ -242,6 +242,41 @@ set_tests_properties(
     test-consensus-simplex2-pq-finality-transient-recovery
     PROPERTIES ENVIRONMENT "TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES=12"
 )
+# Keeping every certificate and retrying it for as long as the group lives is what stops one
+# being lost. It is also how a failure that does not clear turns into unbounded work: the
+# pool advances the round the moment a quorum finalizes a slot, so every later slot adds
+# another certificate to hold and another retry, while the one at the front never completes.
+#
+# Nothing is dropped to bound that. Production stops instead. With the hold set to one and
+# failures injected past it, the group has to report the backlog, produce no candidate while
+# it is over, and then -- once the injected failures run out -- drain it and reach the seam
+# with the certificate it started with.
+add_test(
+    NAME test-consensus-simplex2-pq-finality-backpressure
+    COMMAND test-consensus --duration 80 --n-nodes 4 --target-rate-ms 100
+            --net-ping 0.005:0.02 --pq-finality-e2e-test
+)
+set_tests_properties(
+    test-consensus-simplex2-pq-finality-backpressure
+    PROPERTIES ENVIRONMENT
+        "TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES=12;TOS_SIMPLEX_PENDING_FINALIZATIONS_MAX=1"
+)
+# The other half of the same policy: a failure retrying cannot mend. Nothing before the
+# carrier seam produces one in this build, so it is injected -- and without that, the branch
+# that handles it would be a guard no input can reach, which is the same as not having
+# written it. The certificate is kept, because it is still evidence a quorum agreed; it is
+# not retried, because that is what the classification says is pointless here; and one of
+# them stops the group on its own, whatever the backlog limit says, because a chain that
+# cannot pass this slot gains nothing from producing the next.
+add_test(
+    NAME test-consensus-simplex2-pq-finality-permanent
+    COMMAND test-consensus --duration 40 --n-nodes 4 --target-rate-ms 100
+            --net-ping 0.005:0.02 --permanent-finalization-test
+)
+set_tests_properties(
+    test-consensus-simplex2-pq-finality-permanent
+    PROPERTIES ENVIRONMENT "TOS_SIMPLEX_INJECT_PERMANENT_FINALIZATION_FAILURE=1"
+)
 # The same gate, with the adversarial scenarios turned on. Their attack machinery was never
 # the part that needed N5 -- only their `--min-finalized-blocks` assertion was -- so running
 # them against the post-quantum gate restores the end-to-end half of N4.5's checklist: that

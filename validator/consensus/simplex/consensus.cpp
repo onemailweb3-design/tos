@@ -88,12 +88,20 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
       auto end_slot = window * slots_per_leader_window_;
       for (td::uint32 i = start_slot; i < end_slot; ++i) {
         auto slot = state_->slot_at(i);
-        if (slot.has_value() && !slot->state->voted_final && !quiescent_) {
+        if (slot.has_value() && !slot->state->voted_final && !quiescent_ && !finality_behind_) {
           slot->state->voted_skip = true;
           owning_bus().publish<BroadcastVote>(SkipVote{i}).start().detach();
         }
       }
     }
+  }
+
+  template <>
+  void handle(BusHandle, std::shared_ptr<const FinalizationBacklog> event) {
+    // Reversible, unlike the carrier boundary: finality can catch up, and when it does this
+    // group produces again. Held separately from quiescence for that reason -- one is a
+    // condition of this build and the other is a condition of this moment.
+    finality_behind_ = event->over_limit;
   }
 
   template <>
@@ -166,7 +174,7 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
     td::uint32 window_end = window_start + slots_per_leader_window_;
     for (td::uint32 i = range_start; i < window_end; ++i) {
       auto slot = state_->slot_at(i);
-      if (slot && !slot->state->voted_final && !quiescent_) {
+      if (slot && !slot->state->voted_final && !quiescent_ && !finality_behind_) {
         owning_bus().publish<BroadcastVote>(SkipVote{i}).start().detach();
         slot->state->voted_skip = true;
         previous_window_had_skip_ = true;
@@ -232,7 +240,7 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
       start_time = std::min(start_time, td::Timestamp::in(params_.target_rate));
     }
 
-    if (current_window_ != start_slot / slots_per_leader_window_ || quiescent_) {
+    if (current_window_ != start_slot / slots_per_leader_window_ || quiescent_ || finality_behind_) {
       co_return td::Unit{};
     }
 
@@ -274,7 +282,7 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
     }
     co_await std::move(store_candidate);
 
-    if (quiescent_) {
+    if (quiescent_ || finality_behind_) {
       co_return td::Unit{};
     }
     slot.state->voted_notar = candidate->id;
@@ -317,7 +325,7 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
     CHECK(slot.state->voted_notar || slot.state->notar_cert);
 
     if (!slot.state->voted_skip && !slot.state->voted_final && slot.state->voted_notar == slot.state->notar_cert &&
-        !quiescent_) {
+        !quiescent_ && !finality_behind_) {
       owning_bus().publish<BroadcastVote>(FinalizeVote{*slot.state->voted_notar}).start().detach();
       slot.state->voted_final = true;
     }
@@ -332,6 +340,9 @@ class ConsensusImpl : public td::actor::SpawnsWith<Bus>, public td::actor::Conne
   bool previous_window_had_skip_ = false;
   // Set once this group reaches the N4/N5 carrier boundary. Terminal for the session.
   bool quiescent_ = false;
+  // Set while more agreed certificates are waiting to be finalized than the resolver will
+  // hold. Producing more would add to a pile nothing is draining.
+  bool finality_behind_ = false;
   std::optional<State> state_;
   td::uint32 current_window_ = 0;
 };

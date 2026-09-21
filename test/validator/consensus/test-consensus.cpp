@@ -139,6 +139,11 @@ bool FINALIZATION_RETRY_PROBE = false;
 bool EMPTY_CHAIN_RESTART_TEST = false;
 bool VOTE_JOURNAL_TEST = false;
 bool PQ_FINALITY_E2E_TEST = false;
+// Requires the resolver to keep, report and stop retrying a finalization that failed in a
+// way retrying cannot mend, and to stop the group rather than run ahead of it. Needs
+// TOS_SIMPLEX_INJECT_PERMANENT_FINALIZATION_FAILURE set: nothing in an N4-only build
+// produces that class of failure on its own.
+bool PERMANENT_FINALIZATION_TEST = false;
 std::atomic<bool> EMPTY_CHAIN_MANAGER_ANCHOR_UNAVAILABLE = false;
 
 // Adversity that was configured but never fired turns a scenario into a quiet no-op: the
@@ -152,6 +157,11 @@ std::atomic<size_t> EMPTY_CHAIN_MANAGER_ANCHOR_FAILURES = 0;
 // whether collation has actually stopped.
 std::atomic<size_t> CANDIDATES_GENERATED = 0;
 std::atomic<size_t> BYZANTINE_RELAYS_SENT = 0;
+// Times a node reported that more agreed certificates were waiting to be finalized than its
+// resolver will hold, and candidates produced by a node while it was in that state. The
+// second is the backpressure itself: a node that is behind on finality must not add to it.
+std::atomic<size_t> BACKLOG_OVER_LIMIT_REPORTS = 0;
+std::atomic<size_t> CANDIDATES_WHILE_BACKLOGGED = 0;
 double CATCH_UP_DOWNTIME = -1.0;
 
 std::pair<double, double> DB_DELAY = {0.0, 0.0};
@@ -623,6 +633,19 @@ class TestFinalityObserver : public td::actor::SpawnsWith<simplex::Bus>, public 
   template <>
   void handle(simplex::BusHandle, std::shared_ptr<const CandidateGenerated>) {
     ++CANDIDATES_GENERATED;
+    if (backlogged_) {
+      ++CANDIDATES_WHILE_BACKLOGGED;
+    }
+  }
+
+  // Whether this node is currently holding more agreed certificates than it will, which is
+  // the state in which it is supposed to stop producing.
+  template <>
+  void handle(simplex::BusHandle, std::shared_ptr<const FinalizationBacklog> event) {
+    backlogged_ = event->over_limit;
+    if (event->over_limit) {
+      ++BACKLOG_OVER_LIMIT_REPORTS;
+    }
   }
 
   template <>
@@ -636,6 +659,7 @@ class TestFinalityObserver : public td::actor::SpawnsWith<simplex::Bus>, public 
 
  private:
   size_t instance_idx_ = 0;
+  bool backlogged_ = false;
 };
 
 class TestDbImpl : public consensus::Db {
@@ -896,6 +920,9 @@ class TestConsensus : public td::actor::Actor {
     }
     if (PQ_FINALITY_E2E_TEST) {
       run_pq_finality_e2e_test().start().detach();
+    }
+    if (PERMANENT_FINALIZATION_TEST) {
+      run_permanent_finalization_test().start().detach();
     }
 
     if (!EMPTY_CHAIN_RESTART_TEST && !VOTE_JOURNAL_TEST && !PQ_FINALITY_E2E_TEST) {
@@ -1731,6 +1758,10 @@ class TestConsensus : public td::actor::Actor {
     // The resolver reads this too. Reading it here rather than passing it as a flag keeps
     // the gate and the thing it measures reading the same number, so a scenario cannot
     // configure one without the other.
+    const size_t pending_finalizations_max = [] {
+      const char* value = std::getenv("TOS_SIMPLEX_PENDING_FINALIZATIONS_MAX");
+      return value == nullptr ? 0u : static_cast<size_t>(std::max(0, td::to_integer<int>(td::Slice(value))));
+    }();
     const size_t injected_finalization_failures = [] {
       const char* value = std::getenv("TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES");
       return value == nullptr ? 0u : static_cast<size_t>(std::max(0, td::to_integer<int>(td::Slice(value))));
@@ -1819,6 +1850,43 @@ class TestConsensus : public td::actor::Actor {
       // will never arrive, which is what holds the limit closed; the second is refused at
       // the door, and has to come back rather than disappear. It is deliberately last in the
       // gate, because it leaves that first finalization outstanding on purpose.
+
+      // --- A failure that does not clear must stop the group, not pile up behind it ---
+      //
+      // Consensus does not wait for a certificate to be converted: the pool advances the
+      // round as soon as a quorum finalizes a slot. While conversion keeps up that is right,
+      // and it is also how one certificate that cannot be converted becomes an unbounded
+      // problem -- every later slot adds another the resolver must hold, each with its own
+      // retry, while the one at the front never completes. Certificates are never dropped to
+      // make room, so what gives is production.
+      //
+      // Three things are required, and the first is that the pressure was real: with the
+      // hold set low and failures injected for long enough to reach it, some node must
+      // actually report a backlog over its limit. Then no node may produce a candidate while
+      // it is in that state, which is the backpressure. And what is held at the end must be
+      // near the limit rather than tracking however far the round got.
+      if (pending_finalizations_max > 0) {
+        if (BACKLOG_OVER_LIMIT_REPORTS.load() == 0) {
+          fail(PSTRING() << "the finalization hold was set to " << pending_finalizations_max << " and "
+                         << injected_finalization_failures
+                         << " conversions were injected to fail, but no node ever reported a backlog over that "
+                         << "limit; the pressure this gate needs was never applied");
+          co_return td::Unit{};
+        }
+        if (CANDIDATES_WHILE_BACKLOGGED.load() != 0) {
+          fail(PSTRING() << "nodes produced " << CANDIDATES_WHILE_BACKLOGGED.load()
+                         << " candidates while holding more agreed certificates than they will; a round that "
+                         << "keeps producing there is piling up work nothing is draining");
+          co_return td::Unit{};
+        }
+        if (probed.pending_finalizations > pending_finalizations_max + N_NODES) {
+          fail(PSTRING() << probed.pending_finalizations << " certificates are being held against a limit of "
+                         << pending_finalizations_max
+                         << "; the hold is meant to bound what accumulates, not to be a number in a log");
+          co_return td::Unit{};
+        }
+      }
+
       // --- A failure that outlasts the retries still ends at the seam ---
       //
       // The property the retry exists for, and the one a count of retries does not show: a
@@ -1988,7 +2056,13 @@ class TestConsensus : public td::actor::Actor {
                                              << "; node " << probe_node_idx_ << " answered " << repeated_finalizations
                                              << " further finalizations of that certificate from the latch, "
                                              << "resolved state through it, and retried " << probed.finalization_retries
-                                             << " finalization(s) that had failed transiently");
+                                             << " finalization(s) that had failed transiently")
+                 << (pending_finalizations_max == 0
+                         ? std::string("")
+                         : PSTRING() << "; the finalization hold of " << pending_finalizations_max
+                                     << " was reported over " << BACKLOG_OVER_LIMIT_REPORTS.load()
+                                     << " time(s), no candidate was produced while it was, and "
+                                     << probed.pending_finalizations << " certificate(s) are still held");
     pq_finality_completed_ = true;
     co_return td::Unit{};
   }
@@ -2003,6 +2077,83 @@ class TestConsensus : public td::actor::Actor {
                        .bus.publish(std::make_shared<simplex::ResolveState>(ParentId{id}))
                        .wrap();
     blocked_state_resolution_answered_ = true;
+    co_return td::Unit{};
+  }
+
+  // ===== A failure retrying cannot mend =====
+  //
+  // Everything that was not the carrier boundary used to be treated as transient, which is
+  // not a policy but the absence of one: it commits a node to retrying a protocol violation
+  // for as long as it lives. The resolver now classifies, and this is the branch nothing in
+  // an N4-only build can reach on its own -- so it is injected, and what is required of it
+  // is the three things that make the classification worth having.
+  //
+  // The certificate is kept, because it is still evidence a quorum agreed. It is not
+  // retried, because retrying is what the classification says is pointless here. And the
+  // group stops producing, because a chain must not run ahead of a finality that is not
+  // coming.
+  td::actor::Task<> run_permanent_finalization_test() {
+    auto fail = [&](std::string message) { permanent_finalization_error_ = std::move(message); };
+
+    auto first_stalled = [&]() -> td::actor::Task<std::optional<std::pair<size_t, simplex::QueryN5Boundary::Result>>> {
+      for (size_t node_idx = 0; node_idx < N_NODES; ++node_idx) {
+        for (auto& instance : nodes_[node_idx].instances) {
+          if (instance.status != Instance::Running) {
+            continue;
+          }
+          auto seen = co_await instance.bus.publish(std::make_shared<simplex::QueryN5Boundary>(0));
+          if (seen.finalizations_stalled_permanently > 0) {
+            co_return std::make_pair(node_idx, seen);
+          }
+        }
+      }
+      co_return std::nullopt;
+    };
+
+    auto deadline = td::Timestamp::in(DURATION * 0.5);
+    std::optional<std::pair<size_t, simplex::QueryN5Boundary::Result>> stalled;
+    while (!stalled.has_value() && !deadline.is_in_past()) {
+      stalled = co_await first_stalled();
+      if (!stalled.has_value()) {
+        co_await td::actor::coro_sleep(td::Timestamp::in(0.05));
+      }
+    }
+    if (!stalled.has_value()) {
+      fail("no node reported a finalization it cannot retry, so the injected failure never reached the seam");
+      co_return td::Unit{};
+    }
+    const size_t node_idx = stalled->first;
+    const auto first = stalled->second;
+
+    if (first.pending_finalizations == 0) {
+      fail(PSTRING() << "node " << node_idx
+                     << " reported a finalization it cannot retry but is holding none; a certificate a quorum "
+                     << "agreed on must be kept even when converting it cannot be retried");
+      co_return td::Unit{};
+    }
+
+    // Not retried: over a window in which a retryable failure would have been tried several
+    // times, neither the attempt count nor the stalled count moves.
+    auto candidates_before = CANDIDATES_GENERATED.load();
+    co_await td::actor::coro_sleep(td::Timestamp::in(std::min(DURATION * 0.1, 3.0)));
+    auto later = co_await nodes_[node_idx].instances[0].bus.publish(std::make_shared<simplex::QueryN5Boundary>(0));
+
+    if (later.finalization_retries > first.finalization_retries) {
+      fail(PSTRING() << "node " << node_idx << " retried " << (later.finalization_retries - first.finalization_retries)
+                     << " finalization(s) after classifying one as beyond retrying");
+      co_return td::Unit{};
+    }
+    if (CANDIDATES_GENERATED.load() != candidates_before) {
+      fail(PSTRING() << "the network produced " << (CANDIDATES_GENERATED.load() - candidates_before)
+                     << " candidates while a node held a certificate it cannot finalize; the group has to stop "
+                     << "rather than run further ahead of a finality that is not coming");
+      co_return td::Unit{};
+    }
+
+    LOG(WARNING) << "Permanent finalization: node " << node_idx << " is holding " << later.pending_finalizations
+                 << " certificate(s) it cannot convert, has not retried them, and the network produced no further "
+                 << "candidate while it held them";
+    permanent_finalization_completed_ = true;
     co_return td::Unit{};
   }
 
@@ -2728,6 +2879,14 @@ class TestConsensus : public td::actor::Actor {
         co_return td::Status::Error("the post-quantum finality end-to-end test did not complete");
       }
     }
+    if (PERMANENT_FINALIZATION_TEST) {
+      if (!permanent_finalization_error_.empty()) {
+        co_return td::Status::Error(permanent_finalization_error_);
+      }
+      if (!permanent_finalization_completed_) {
+        co_return td::Status::Error("the permanent-finalization test did not complete");
+      }
+    }
     co_return td::Unit{};
   }
 
@@ -2787,6 +2946,8 @@ class TestConsensus : public td::actor::Actor {
   std::string vote_journal_error_;
   bool pq_finality_completed_ = false;
   std::string pq_finality_error_;
+  bool permanent_finalization_completed_ = false;
+  std::string permanent_finalization_error_;
   bool blocked_state_resolution_answered_ = false;
   size_t probe_node_idx_ = 0;
   size_t probe_instance_idx_ = 0;
@@ -3759,6 +3920,9 @@ int main(int argc, char* argv[]) {
                [&]() { EMPTY_CHAIN_RESTART_TEST = true; });
   p.add_option('\0', "vote-journal-test", "restart across the two-phase own-vote journal and require exact-byte replay",
                [&]() { VOTE_JOURNAL_TEST = true; });
+  p.add_option('\0', "permanent-finalization-test",
+               "require a finalization that cannot be retried to be kept, reported and to stop the group",
+               [&]() { PERMANENT_FINALIZATION_TEST = true; });
   p.add_checked_option('\0', "byzantine-relay-node",
                        "the validator that relays other validators' signed votes over its own transport",
                        [&](td::Slice arg) {

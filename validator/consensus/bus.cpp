@@ -78,6 +78,10 @@ std::string N5BoundaryReached::contents_to_string() const {
   return PSTRING() << "{slot=" << slot << "}";
 }
 
+std::string FinalizationBacklog::contents_to_string() const {
+  return PSTRING() << "{over_limit=" << over_limit << ", pending=" << pending << "}";
+}
+
 std::string FinalizeBlock::contents_to_string() const {
   return PSTRING() << "{candidate=" << candidate_to_string(candidate)
                    << ", signatures=" << block_signature_set_to_string(signatures) << "}";

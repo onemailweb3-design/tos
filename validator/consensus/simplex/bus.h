@@ -163,6 +163,14 @@ struct QueryN5Boundary {
     // still being retried. There is no counter for finalizations given up on, because none
     // is: an agreed certificate is retried for as long as the group lives.
     size_t finalizations_stalled = 0;
+    // Certificates held un-converted right now, and whether the group has been told to stop
+    // adding to them. Nothing is ever dropped to bring the first number down; the second is
+    // how it is kept from growing.
+    size_t pending_finalizations = 0;
+    bool backlog_over_limit = false;
+    // Held for a reason retrying cannot mend. Counted apart from the rest because it is the
+    // one an operator has to act on rather than wait out.
+    size_t finalizations_stalled_permanently = 0;
     // Conversion attempts made for the queried slot. A slot latched at the boundary must
     // stay at the attempt that latched it however many times it is asked for again.
     size_t slot_attempts = 0;

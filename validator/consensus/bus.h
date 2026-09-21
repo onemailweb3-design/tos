@@ -49,6 +49,24 @@ struct N5BoundaryReached {
   std::string contents_to_string() const;
 };
 
+// Finality has fallen far enough behind that this group must stop getting further ahead of
+// it, or has caught up again.
+//
+// Consensus does not wait for a certificate to be converted: the pool advances the round the
+// moment a quorum finalizes a slot. That is right while conversion keeps up, and it is how
+// an agreed certificate that cannot be converted turns into an unbounded problem -- every
+// later slot adds another certificate the resolver must hold, with its own retry, while the
+// one at the front never completes. Certificates are never dropped to make room, so the
+// group stops producing instead, and starts again when the backlog clears.
+//
+// Unlike the carrier boundary this is reversible, and it says which way it went.
+struct FinalizationBacklog {
+  bool over_limit;
+  size_t pending;
+
+  std::string contents_to_string() const;
+};
+
 struct FinalizeBlock {
   using ReturnType = td::Unit;
 
@@ -200,7 +218,7 @@ class Bus : public td::actor::Bus {
       td::TypeList<Start, StopRequested, FinalizeBlock, OurLeaderWindowStarted, CandidateGenerated, CandidateReceived,
                    ValidationRequest, IncomingProtocolMessage, OutgoingProtocolMessage, IncomingOverlayRequest,
                    OutgoingOverlayRequest, BlockFinalizedInMasterchain, MisbehaviorReport, TraceEvent,
-                   NoncriticalParamsUpdated, PrecheckCandidateBroadcast, N5BoundaryReached>;
+                   NoncriticalParamsUpdated, PrecheckCandidateBroadcast, N5BoundaryReached, FinalizationBacklog>;
 
   Bus() = default;
   ~Bus() override {

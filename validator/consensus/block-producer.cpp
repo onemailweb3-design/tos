@@ -44,6 +44,14 @@ class BlockProducerImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   }
 
   template <>
+  void handle(BusHandle, std::shared_ptr<const FinalizationBacklog> event) {
+    // Reversible, unlike the carrier boundary: finality can catch up, and when it does this
+    // group produces again. Held separately from quiescence for that reason -- one is a
+    // condition of this build and the other is a condition of this moment.
+    finality_behind_ = event->over_limit;
+  }
+
+  template <>
   void handle(BusHandle, std::shared_ptr<const N5BoundaryReached>) {
     quiescent_ = true;
   }
@@ -109,7 +117,7 @@ class BlockProducerImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     td::Timestamp slot_start = event->start_time;
 
     for (td::uint32 slot = event->start_slot; current_leader_window_ == window && slot < event->end_slot; ++slot) {
-      if (quiescent_) {
+      if (quiescent_ || finality_behind_) {
         break;
       }
       co_await td::actor::coro_sleep(slot_start - start_collate_before);
@@ -234,9 +242,10 @@ class BlockProducerImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       if (current_leader_window_ != window) {
         break;
       }
-      if (quiescent_) {
-        // Collation began before the boundary was reached. Publishing now would put a
-        // candidate into a round that has stopped taking them.
+      if (quiescent_ || finality_behind_) {
+        // Collation began before the round stopped taking candidates. Publishing now would
+        // put one into a round that has stopped, or add to a finality backlog nothing is
+        // draining.
         break;
       }
       owning_bus().publish<CandidateGenerated>(candidate, collator);
@@ -260,6 +269,9 @@ class BlockProducerImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   // Set once this group reaches the carrier boundary. Producing more candidates for a round
   // whose finality cannot be carried is work nothing can consume.
   bool quiescent_ = false;
+  // Set while more agreed certificates are waiting to be finalized than the resolver will
+  // hold. Producing more would add to a pile nothing is draining.
+  bool finality_behind_ = false;
 
   BlockSeqno last_consensus_finalized_seqno_ = 0;
   BlockSeqno last_mc_finalized_seqno_ = 0;

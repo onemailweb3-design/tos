@@ -38,6 +38,16 @@ constexpr size_t DEFAULT_FINALIZED_CACHE_MAX_ENTRIES = 4096;
 // candidate. See MEMORY_DIAGNOSTICS simplex-state-resolver "state_inflight".
 constexpr size_t DEFAULT_STATE_INFLIGHT_MAX = 4096;
 constexpr size_t DEFAULT_FINALIZED_INFLIGHT_MAX = 4096;
+// How many certificates this resolver will hold un-converted before the group is told to
+// stop producing more.
+//
+// Nothing drops a certificate to stay under it. The limit is on how far consensus may run
+// ahead of the finality it has agreed, and the way it is enforced is that the round pauses,
+// not that evidence is discarded. Small on purpose: a healthy group converts each
+// certificate long before the next few slots are agreed, so reaching this at all means
+// something below is not working, and the useful response is to stop rather than to
+// accumulate.
+constexpr size_t DEFAULT_PENDING_FINALIZATIONS_MAX = 16;
 // How a finalization that failed for a reason that may not recur is tried again. The wait
 // grows with the attempt and is capped, and there is deliberately no attempt limit.
 //
@@ -62,6 +72,19 @@ constexpr size_t finalization_attempts_before_reporting = 4;
 // value of N fails the first N conversion attempts with exactly that class of error.
 size_t injected_transient_finalization_failures() {
   const char* value = std::getenv("TOS_SIMPLEX_INJECT_TRANSIENT_FINALIZATION_FAILURES");
+  if (value == nullptr) {
+    return 0;
+  }
+  auto parsed = td::to_integer_safe<size_t>(td::Slice(value));
+  return parsed.is_error() ? 0 : parsed.move_as_ok();
+}
+
+// The same, for the class of failure retrying cannot mend. Nothing before the carrier seam
+// produces one in this build -- the candidate resolver gives up with `notready`, its limiter
+// answers `failure` -- so without this the Permanent branch above would be a guard no input
+// can reach, which is the same as not having written it.
+size_t injected_permanent_finalization_failures() {
+  const char* value = std::getenv("TOS_SIMPLEX_INJECT_PERMANENT_FINALIZATION_FAILURE");
   if (value == nullptr) {
     return 0;
   }
@@ -103,7 +126,44 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
     // Terminal for this build: the certificate reached the N4/N5 seam and the carrier
     // refused. The entry is kept precisely so the conversion is not attempted again.
     BlockedOnN5,
+    // Terminal for a different reason: the conversion failed in a way retrying cannot mend.
+    // The entry and its certificate are kept, and it is reported, because the certificate is
+    // still evidence a quorum agreed on -- what stops is the spinning, not the remembering.
+    StalledPermanently,
   };
+
+  // What to do about a finalization that did not succeed.
+  //
+  // "Everything that is not the carrier boundary is transient" was the first shape of this,
+  // and it is not a policy, it is the absence of one: it commits a node to retrying a
+  // protocol violation or a mismatched candidate for as long as it lives. The codes below
+  // are the ones this path can actually produce, read out of the code that produces them --
+  // the candidate resolver gives up with `notready`, its rate limiter answers `failure`,
+  // shutdown answers `cancelled` -- rather than guessed at.
+  enum class FailureKind {
+    // The group is stopping. Nothing to retry and nothing to report.
+    Cancelled,
+    // A dependency that was not ready, a request that timed out, a limiter that said no.
+    // These are the failures a later attempt can find gone.
+    Retryable,
+    // Anything else: a protocol violation, a candidate whose id does not match the one
+    // asked for, an error carrying no code at all. Retrying does not make a mismatched
+    // candidate match, and a node that spins on one says nothing to anybody.
+    Permanent,
+  };
+
+  static FailureKind classify_failure(const td::Status& error) {
+    switch (error.code()) {
+      case ErrorCode::cancelled:
+        return FailureKind::Cancelled;
+      case ErrorCode::notready:
+      case ErrorCode::timeout:
+      case ErrorCode::failure:
+        return FailureKind::Retryable;
+      default:
+        return FailureKind::Permanent;
+    }
+  }
 
  public:
   TOS_RUNTIME_DEFINE_EVENT_HANDLER();
@@ -178,6 +238,9 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
                                    .finalization_retries = finalization_retries_,
                                    .finalization_retries_at_admission = finalization_retries_at_admission_,
                                    .finalizations_stalled = finalizations_stalled_,
+                                   .pending_finalizations = pending_finalizations_,
+                                   .backlog_over_limit = backlog_over_limit_,
+                                   .finalizations_stalled_permanently = finalizations_stalled_permanently_,
                                    .slot_attempts = 0};
     for (const auto& [id, state] : finalized_blocks_) {
       if (id.slot != query->slot) {
@@ -443,11 +506,18 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
   // Finalizations that have been failing long enough to have been reported once. They are
   // still being retried; this is what an operator watches, not a count of what was lost.
   size_t finalizations_stalled_ = 0;
+  size_t finalizations_stalled_permanently_ = 0;
+  // Certificates held un-converted right now, and whether the group has been told to stop.
+  size_t pending_finalizations_ = 0;
+  bool backlog_over_limit_ = false;
+  const size_t pending_finalizations_max_ =
+      cache_limit_from_env("TOS_SIMPLEX_PENDING_FINALIZATIONS_MAX", DEFAULT_PENDING_FINALIZATIONS_MAX);
   bool n5_boundary_announced_ = false;
   size_t finalized_db_hits_ = 0;
   size_t finalized_db_misses_ = 0;
   size_t finalized_db_skips_ = 0;
   size_t injected_transient_failures_remaining_ = injected_transient_finalization_failures();
+  size_t injected_permanent_failures_remaining_ = injected_permanent_finalization_failures();
 
   void touch_finalized_cache(const CandidateId& id) {
     auto evicted = finalized_blocks_lru_.touch(id);
@@ -506,6 +576,8 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
                    << " n5_blocked_slots=" << n5_blocked_slots_ << " finalization_retries=" << finalization_retries_
                    << " finalization_retries_at_admission=" << finalization_retries_at_admission_
                    << " finalizations_stalled=" << finalizations_stalled_
+                   << " pending_finalizations=" << pending_finalizations_ << "/" << pending_finalizations_max_
+                   << " finalizations_stalled_permanently=" << finalizations_stalled_permanently_
                    << " finalizations_outstanding=" << (finalizations_started_ - finalizations_settled_)
                    << " finalized_db_hits=" << finalized_db_hits_ << " finalized_db_misses=" << finalized_db_misses_
                    << " finalized_db_skips=" << finalized_db_skips_;
@@ -612,22 +684,75 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
           owning_bus().publish<N5BoundaryReached>(id.slot);
         }
       } else {
-        // Transient: admission pressure, a timeout, an ancestor not ready yet. The entry
-        // goes back to Idle rather than being erased, because erasing it loses the fact
-        // that this candidate still needs finalizing -- and the FinalizationObserved that
-        // would have said so again was consumed when this attempt started. A retry is
-        // scheduled while the certificate is still in hand, and there is no count at which
-        // that stops: see the constants above.
-        state.state = Finalization::Idle;
-        ++finalization_retries_;
-        report_if_stalled(id, state, result.error().message());
-        retry_finalization(id, final_cert, final_candidate, state.attempts).start().detach();
+        switch (classify_failure(result.error())) {
+          case FailureKind::Cancelled:
+            // The group is going away. Leave the entry as it is; nothing outlives this.
+            state.state = Finalization::Idle;
+            break;
+          case FailureKind::Retryable:
+            // The entry goes back to Idle rather than being erased, because erasing it
+            // loses the fact that this candidate still needs finalizing -- and the
+            // FinalizationObserved that would have said so again was consumed when this
+            // attempt started. A retry is scheduled while the certificate is still in hand,
+            // and there is no count at which that stops: see the constants above.
+            state.state = Finalization::Idle;
+            ++finalization_retries_;
+            report_if_stalled(id, state, result.error().message());
+            retry_finalization(id, final_cert, final_candidate, state.attempts).start().detach();
+            break;
+          case FailureKind::Permanent:
+            // Kept, reported, and not retried. The certificate is still evidence a quorum
+            // agreed on, so it is not thrown away, and it still counts against the backlog
+            // below -- a chain must not run ahead of a finality that is not coming.
+            state.state = Finalization::StalledPermanently;
+            ++finalizations_stalled_permanently_;
+            LOG(ERROR) << "Simplex state-resolver: the certificate for slot " << id.slot
+                       << " cannot be finalized and retrying will not change that: " << result.error().message()
+                       << ". It is kept rather than dropped, and this group stops producing.";
+            break;
+        }
       }
+      update_finalization_backlog();
       for (auto& p : waiters) {
         p.set_result(result.clone());
       }
       co_return std::move(result);
     }
+  }
+
+  // Count what is being held, and tell the group when that crosses the limit or clears.
+  //
+  // A pending finalization is a certificate this resolver is holding because converting it
+  // has not succeeded: still being retried, or stopped for a reason retrying cannot mend.
+  // Neither is dropped, so the only lever left is to stop adding to the pile.
+  void update_finalization_backlog() {
+    size_t pending = 0;
+    size_t beyond_retrying = 0;
+    for (const auto& [_, entry] : finalized_blocks_) {
+      const bool unresolved =
+          entry.state == Finalization::StalledPermanently ||
+          ((entry.state == Finalization::Idle || entry.state == Finalization::InFlight) && entry.attempts > 0);
+      pending += unresolved ? 1 : 0;
+      beyond_retrying += entry.state == Finalization::StalledPermanently ? 1 : 0;
+    }
+    pending_finalizations_ = pending;
+    // One certificate that can never be converted is enough on its own, whatever the limit
+    // says. The limit exists to bound a queue that is still moving; a finalization beyond
+    // retrying is not a queue, it is a chain that cannot pass this slot, and producing more
+    // for it is pointless rather than merely expensive.
+    const bool over = pending > pending_finalizations_max_ || beyond_retrying > 0;
+    if (over == backlog_over_limit_) {
+      return;
+    }
+    backlog_over_limit_ = over;
+    if (over) {
+      LOG(ERROR) << "Simplex state-resolver: " << pending
+                 << " agreed certificates are waiting to be finalized, over the limit of " << pending_finalizations_max_
+                 << "; this group stops producing until they clear. Nothing is discarded.";
+    } else {
+      LOG(WARNING) << "Simplex state-resolver: the finalization backlog has cleared; this group produces again.";
+    }
+    owning_bus().publish<FinalizationBacklog>(over, pending);
   }
 
   // Say once that a finalization has been failing long enough to be worth looking at, and
@@ -666,6 +791,11 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       --injected_transient_failures_remaining_;
       co_return td::Status::Error(ErrorCode::notready,
                                   "Simplex state-resolver: injected transient finalization failure");
+    }
+    if (injected_permanent_failures_remaining_ > 0) {
+      --injected_permanent_failures_remaining_;
+      co_return td::Status::Error(ErrorCode::protoviolation,
+                                  "Simplex state-resolver: injected permanent finalization failure");
     }
 
     if (!final_cert && bus.shard.is_masterchain()) {
