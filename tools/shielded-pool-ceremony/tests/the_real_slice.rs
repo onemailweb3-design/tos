@@ -10,16 +10,15 @@
 //! which is what lets them be broken on purpose -- and means none of them has
 //! ever seen the real thing. This one has.
 //!
-//! **Ignored by default, and on purpose.** Each slice is eighteen megabytes of
-//! somebody else's ceremony, so the bytes are not in the repository -- only the
-//! 1.6 KB provenance record beside them is. A test that ran unconditionally
-//! would therefore either fail for everyone who has not fetched a slice or,
-//! worse, skip quietly and pass. A test that passes while doing nothing is the
-//! failure this repository's `CLAUDE.md` opens with. So: fetch one, then
+//! **These run by default**, which they did not until the slices were stored
+//! in `artifacts/phase1/`. While the bytes had to be fetched, the choice was
+//! between failing for everyone who had not fetched them and skipping quietly
+//! -- and a test that passes while doing nothing is the failure this
+//! repository's `CLAUDE.md` opens with, so they were `#[ignore]`d and hardly
+//! ever ran. Committing eighteen megabytes bought the strongest evidence here
+//! running on every invocation instead. It costs about twenty seconds.
 //!
-//!     cargo test --release --test the_real_slice -- --ignored
-//!
-//! Fetching:
+//! A slice can still be re-fetched, and the result must be identical:
 //!
 //!     uv run python scripts/shielded-pool-phase1-slice.py --out artifacts/phase1
 //!     # --transcript filecoin for the other ceremony
@@ -115,7 +114,6 @@ fn load() -> (Vec<u8>, slice::Provenance) {
 }
 
 #[test]
-#[ignore = "needs artifacts/phase1; see the module comment"]
 fn the_fetched_slice_is_the_one_that_was_checked() {
     let (bytes, record) = load();
     let pinned = pinned_for(&record.transcript);
@@ -134,7 +132,6 @@ fn the_fetched_slice_is_the_one_that_was_checked() {
 }
 
 #[test]
-#[ignore = "needs artifacts/phase1; see the module comment"]
 fn the_fetched_slice_is_a_powers_of_tau_string() {
     let (bytes, record) = load();
     let parsed = slice::parse(&bytes, &record, EXPONENT).expect("the real slice must parse");
@@ -153,7 +150,6 @@ fn the_fetched_slice_is_a_powers_of_tau_string() {
 /// refusing a point that is no longer on the curve, which proves the decoder
 /// rather than the mathematics.
 #[test]
-#[ignore = "needs artifacts/phase1; see the module comment"]
 fn two_real_powers_swapped_are_refused() {
     let (bytes, mut record) = load();
     let mut tampered = bytes.clone();
@@ -188,7 +184,6 @@ fn two_real_powers_swapped_are_refused() {
 /// check the result -- which is why this is a step in the ceremony rather than
 /// an artifact to store.
 #[test]
-#[ignore = "needs artifacts/phase1; see the module comment"]
 fn the_real_slice_becomes_the_lagrange_basis_it_should() {
     let (bytes, record) = load();
     let parsed = slice::parse(&bytes, &record, EXPONENT).expect("the real slice must parse");
@@ -212,7 +207,6 @@ fn the_real_slice_becomes_the_lagrange_basis_it_should() {
 /// genuine and in the right subgroup. Only going back to the powers it was
 /// built from can see it.
 #[test]
-#[ignore = "needs artifacts/phase1; see the module comment"]
 fn a_permuted_real_basis_is_refused() {
     let (bytes, record) = load();
     let parsed = slice::parse(&bytes, &record, EXPONENT).expect("the real slice must parse");

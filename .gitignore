@@ -62,14 +62,14 @@ test/integration/.toscan-*/
 # rather than stored.
 crypto/smartcont/artifacts/
 
-# The phase-1 slices: eighteen megabytes each of somebody else's ceremony,
-# fetched by scripts/shielded-pool-phase1-slice.py. The bytes are not stored
-# here -- they are public, reproducible from the published transcripts with
-# five range reads, and identified by the hashes in the provenance records
-# beside them.
+# artifacts/phase1/ is deliberately NOT ignored.
 #
-# The records themselves ARE stored, at about 1.6 KB each. They are what lets
-# somebody who obtained the bytes by any other route -- a mirror, a torrent, a
-# colleague's disk -- check them, which they could not do if the only way to
-# get a record were to re-download the thing being checked.
-artifacts/phase1/*.bin
+# The default ceremony's slice is stored -- eighteen megabytes, smaller than
+# several files this repository already carries -- because a deployment's whole
+# custody argument rests on those bytes and they otherwise existed in one
+# remaining place we do not control. Zcash's original host is already gone.
+#
+# The alternative ceremony's slice is not stored, only its 1.6 KB record.
+# Carrying a second copy was a hedge against a host disappearing, and storing
+# the default's bytes is a better hedge than a second remote host; a fetch
+# answers the contingency in twenty-five minutes.

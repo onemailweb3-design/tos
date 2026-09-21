@@ -103,53 +103,56 @@ the slice file is those ranges end to end with nothing added. The full hashes
 are in each fetch's provenance record and pinned in
 `tools/shielded-pool-ceremony/tests/the_real_slice.rs`.
 
-### Where the artifacts live, and why losing them does not matter
-
-Everything lives in **`artifacts/phase1/`**, and the two kinds of file there
-are treated differently on purpose:
+### Where the artifacts live
 
 ```
-artifacts/phase1/phase1-zcash-2m15.json         1.6 KB    committed
-artifacts/phase1/phase1-filecoin-2m15.json      1.6 KB    committed
-artifacts/phase1/phase1-zcash-2m15.bin      18,874,464    ignored    1bfd7acd…
-artifacts/phase1/phase1-filecoin-2m15.bin   18,874,464    ignored    d1616146…
+artifacts/phase1/phase1-zcash-2m15.bin      18,874,464   1bfd7acd…   ← stored
+artifacts/phase1/phase1-zcash-2m15.json          1.6 KB              ← stored
+artifacts/phase1/phase1-filecoin-2m15.json       1.6 KB              ← stored
+artifacts/phase1/phase1-filecoin-2m15.bin   18,874,464   d1616146…   fetch on demand
 ```
 
-**The bytes are not committed.** Eighteen megabytes of somebody else's ceremony
-belongs beside a build, not in a history that everyone clones for ever — and
-there is nothing to protect, because the bytes are public and the record beside
-them is what identifies them.
+**The default ceremony's bytes are in the repository.** Eighteen megabytes is a
+real cost and a smaller one than it first sounds: this repository already
+carries a 27 MB source file and two of 19.5 MB, against a history of 593 MB.
 
-**So the `.bin` files are disposable.** Delete them and nothing is lost:
-re-fetching gives the same bytes, and the hashes are what says so. Zcash's
-takes seconds; Filecoin's takes about twenty-five minutes through its IPFS
-gateway.
+What it buys is not convenience. **A deployment's entire custody argument rests
+on those bytes**, and until they were committed they existed in exactly one
+place in the world that we do not control. Zcash's original S3 host is already
+gone — both the torrents and the per-response files return 404 — so the Internet
+Archive copy is the only one left. Storing them is the difference between
+"reproducible, as long as one archive survives" and "reproducible".
 
-**The records are committed**, at about 1.6 KB each. They carry the ceremony's
-name, the ranges by offset and length, each section's SHA-256, the slice's own,
-and the custody sentence. That is what lets somebody who obtained the bytes by
-*any other route* — a mirror, a torrent, a colleague's disk — check them.
-Without the record in the repository the only way to get one would be to
-re-download the very thing being checked, which is not a check.
+**Filecoin's bytes are not stored, and that is the point of storing Zcash's.**
+The reason to carry a second ceremony was to hedge availability, and committing
+the default's slice is a better hedge than a second remote host. What is kept
+is its *descriptor and its record* — forty lines and 1.6 KB — so that
+`--transcript filecoin` still fetches and verifies, the code still has two
+ceremonies to be held to rather than one it might quietly assume, and the
+check that refuses one ceremony's slice under the other's name still has
+something to refuse. Eighteen megabytes for a contingency that a fetch answers
+in twenty-five minutes is not a trade worth making.
 
-The same reasoning keeps the reference string out: seven seconds of arithmetic
-from a slice that is itself reproducible, so a stored copy buys nothing but one
-that can go stale.
+The records are 1.6 KB each and carry the ceremony's name, the ranges by offset
+and length, each section's SHA-256, the slice's own, and the custody sentence.
+They are what lets bytes obtained by *any* route — a mirror, a torrent, a
+colleague's disk, this repository — be checked rather than trusted.
 
-There is one real cost to this arrangement, and it is worth naming rather than
-discovering. Zcash's original S3 host is already dead; only the Internet
-Archive copy survives. If that went too, the hashes would still identify the
-bytes but nobody might have them. Committing eighteen megabytes is not the
-answer to that — pinning the slice on IPFS, or keeping it in an asset store, is
-— but the risk is real and it is the reason the records are committed even
-though the bytes are not.
+A slice can still be re-fetched and the result must be identical; that is what
+the hashes are for. Zcash's takes seconds, Filecoin's about twenty-five minutes
+through its IPFS gateway.
 
-The tests that need the bytes are `#[ignore]`d rather than skipping quietly,
-because a test that passes while doing nothing is the failure this
-repository's `CLAUDE.md` opens with. They look for a record with a `.bin`
-beside it rather than the first record they find, so fetching one ceremony and
-not the other works — and when no bytes are present at all they say so, and how
-to fix it, instead of naming a missing file.
+The reference string stays out, and the reasoning is not the same. It is seven
+seconds of arithmetic from a slice that is now in the repository, so storing it
+would add a derived copy that can go stale while removing no dependency on
+anybody.
+
+**The tests against the real slices now run by default**, which is what storing
+the bytes actually bought. While they had to be fetched the choice was between
+failing for everyone who had not fetched them and skipping quietly — and a test
+that passes while doing nothing is the failure this repository's `CLAUDE.md`
+opens with — so they were `#[ignore]`d and hardly ever ran. The strongest
+evidence here now runs on every invocation, for about twenty seconds.
 
 Getting those offsets wrong is the worst error available here: the bytes would
 parse, the points would be on the curve and in the right subgroup, and
@@ -389,29 +392,30 @@ key is frozen.
 
 ## Running it
 
-```
-# the slice: five range requests, ~18 MB. Zcash by default;
-# --transcript filecoin for the other ceremony
-uv run python scripts/shielded-pool-phase1-slice.py --out artifacts/phase1
+The slices are in the repository, so nothing has to be fetched first.
 
-# what the bytes actually are, the basis change, and the reference string
-# phase 2 would start from -- one run, because a verified slice on its own is
-# not yet usable and the step between is easy to forget
+```
+# everything, including the real slices, their hashes and the basis change
+cargo test --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml
+
+# what a slice actually is, the basis change, and the reference string phase 2
+# would start from -- one run, because a verified slice on its own is not yet
+# usable and the step between is easy to forget
 cargo run --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml \
     --bin verify-phase1-slice -- \
     artifacts/phase1/phase1-zcash-2m15.bin artifacts/phase1/phase1-zcash-2m15.json
 
-# the same against the fetched artifact, with its hashes pinned
-cargo test --release --manifest-path tools/shielded-pool-ceremony/Cargo.toml \
-    --test the_real_slice -- --ignored
-
-# the gate, against the key this repository ships
+# the gate a ceremony's verifying key has to pass
 cargo test --release --manifest-path tools/shielded-pool-circuit/crosscheck/Cargo.toml \
     --test ceremony_acceptance
+
+# and, to confirm a stored slice is still what the transcript serves:
+# re-fetch and require the hashes to be identical
+uv run python scripts/shielded-pool-phase1-slice.py --out artifacts/phase1
+# --transcript filecoin for the other ceremony
 ```
 
 Fetching and judging are separate on purpose: one half needs the network and no
-cryptography, the other needs cryptography and no network.
-
-If `artifacts/phase1/` is empty, the first command fills it and the rest work.
-Nothing is lost by it being empty — see *Where the artifacts live* above.
+cryptography, the other needs cryptography and no network. That separation is
+why a re-fetch is a check rather than a refresh — the hashes it has to
+reproduce are already in git.
