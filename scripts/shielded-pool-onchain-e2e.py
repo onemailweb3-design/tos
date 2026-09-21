@@ -86,7 +86,7 @@ def log(message: str) -> None:
 # The fixture: the bytes a node needs, built by the crosscheck crate.
 
 
-def build_fixture(out: Path, build: Path) -> Path:
+def build_fixture(out: Path, build: Path, refuse: bool) -> Path:
     log("building the deployment fixture from the crosscheck crate ...")
     crate = REPO / "tools/shielded-pool-circuit/crosscheck"
     cargo = Path.home() / ".cargo/bin/cargo"
@@ -98,9 +98,12 @@ def build_fixture(out: Path, build: Path) -> Path:
     # answers `POSEIDON2_HASH7:-?` instead of assembling it.
     environment["TOS_ROOT"] = str(build.parent)
     environment["CARGO_TERM_COLOR"] = "never"
+    command = [str(cargo), "run", "--release", "--bin", "onchain_fixture", "--",
+               str(REPO), str(out)]
+    if refuse:
+        command.append("--refuse")
     result = subprocess.run(
-        [str(cargo), "run", "--release", "--bin", "onchain_fixture", "--",
-         str(REPO), str(out)],
+        command,
         cwd=crate,
         env=environment,
         capture_output=True,
@@ -114,7 +117,7 @@ def build_fixture(out: Path, build: Path) -> Path:
 def load_fixture(directory: Path) -> dict:
     fixture = json.loads((directory / "fixture.json").read_text())
     names = ["code.boc", "data.boc", fixture["destination"]["code"]]
-    names += [step["body"] for step in fixture["steps"]]
+    names += [step["body"] for step in fixture["steps"] if step["body"] is not None]
     for name in names:
         path = directory / name
         if not path.exists():
@@ -170,6 +173,21 @@ class LiteClient:
             match = re.search(r"gas_used[^0-9]{0,40}(\d+)", output)
         return int(match.group(1)) if match else None
 
+    def balance(self, address: str) -> int:
+        """What an account holds, off its state rather than the JSON-RPC.
+
+        The lite protocol answers this reliably on a node that has just
+        sealed a block, where `getAddressBalance` has been seen to hang.
+        """
+        output = self.account(address)
+        match = re.search(
+            r"balance:\(currencies\s+\w+:\(\w+\s+amount:\(var_uint\s+len:\d+\s+value:(\d+)\)",
+            output,
+        )
+        if not match:
+            raise Failed(f"the account state carries no balance the harness could read:\n{output}")
+        return int(match.group(1))
+
     def account_exists(self, address: str) -> bool:
         output = self.account(address)
         self.last_account = output
@@ -181,21 +199,34 @@ def rpc(endpoint: str, method: str, **params):
     the HTTP interface a wallet or an explorer would use, and the two agreeing
     is worth more than either alone."""
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-    request = urllib.request.Request(
-        f"http://{endpoint}/jsonRPC", data=body, headers={"Content-Type": "application/json"}
-    )
-    with urllib.request.urlopen(request, timeout=15) as response:
-        return json.loads(response.read().decode())
+    # Retried, because a node that has just sealed a block can take longer
+    # than one timeout to answer and a slow read is not a failed run.
+    last = None
+    for attempt in range(4):
+        request = urllib.request.Request(
+            f"http://{endpoint}/jsonRPC", data=body, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return json.loads(response.read().decode())
+        except Exception as error:
+            last = error
+            time.sleep(1.0 + attempt)
+    raise Failed(f"the JSON-RPC did not answer {method}: {last}")
 
 
-def describe_transaction(rpc_address: str, account: str) -> dict | None:
-    """What the chain charged for the last transaction on that account."""
-    answer = rpc(rpc_address, "getTransactions", address=account, limit=1)
-    result = answer.get("result")
-    if not result:
-        return None
-    transaction = result[0] if isinstance(result, list) else result
-    return transaction
+def describe_transaction(rpc_address: str, account: str, bounced: bool = False) -> dict | None:
+    """The chain's most recent transaction of the kind asked for.
+
+    Not simply the last one: a refused payout bounces back, so by the time the
+    withdrawal's own cost is read the account's latest transaction is the
+    recovery. Picking by kind is what keeps a step's cost the step's.
+    """
+    answer = rpc(rpc_address, "getTransactions", address=account, limit=5)
+    for transaction in answer.get("result", []):
+        if bool(transaction.get("in_msg", {}).get("bounced")) == bounced:
+            return transaction
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +276,60 @@ def compare(name: str, expected: str, produced: str, failures: list[str]) -> Non
         failures.append(f"{name}: the chain says {produced}, the circuit predicted {expected}")
 
 
-def report_cost(lite, rpc_address, account, step, workdir, failures) -> None:
+def check_recovery(lite, rpc_address, account, fixture, fixture_dir, step, build, failures) -> None:
+    """The recovery note, checked against what the chain decided to recover.
+
+    Section 15.4 mints the note for whatever the bounce actually delivered,
+    and that depends on forward fees no prover can know in advance.  So this
+    reads the bounced value off the chain and asks the circuit's own tree what
+    root it implies -- the prediction still comes from the circuit, not from
+    the pool's report of what it did.
+
+    The predictor is not taken on trust either: `onchain_fixture` runs the
+    same scenario in the sandbox, where a real bounce happens, and refuses to
+    write the fixture unless the predictor agrees with the pool there.
+    """
+    bounce = describe_transaction(rpc_address, account, bounced=True)
+    if bounce is None:
+        failures.append(
+            f"{step['name']}: no bounced message reached the pool, so nothing was recovered"
+        )
+        return None
+
+    recovered = int(bounce["in_msg"]["value"])
+    log(f"  {'recovered by the chain':<34} {recovered}")
+    sandbox = fixture.get("recovery_sandbox") or {}
+    if sandbox:
+        log(f"  {'recovered in the sandbox':<34} {sandbox.get('recovered_nanotos')}")
+
+    # What that amount implies, computed by the circuit rather than read back.
+    result = subprocess.run(
+        [str(Path.home() / ".cargo/bin/cargo"), "run", "--release", "--bin", "onchain_fixture",
+         "--", "--recovery-root", str(fixture_dir), str(recovered)],
+        cwd=REPO / "tools/shielded-pool-circuit/crosscheck",
+        env={**os.environ, "TOS_ROOT": str(build.parent), "CARGO_TERM_COLOR": "never"},
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        failures.append(f"{step['name']}: the recovery predictor failed:\n{result.stderr}")
+        return
+    predicted = json.loads(result.stdout.strip().splitlines()[-1])
+
+    compare("commitment_root", predicted["commitment_root"],
+            lite.get_method(account, "commitment_root"), failures)
+    log(f"  {'the recovery note landed at':<34} {predicted['leaf_index']}")
+
+    # And the pool owes the recovered money again: section 15.4's whole point
+    # is that a refused payout does not leave the value unaccounted for.
+    before = int(step["expect"]["liability_before_recovery"])
+    compare("native_liability", str(before + recovered),
+            lite.get_method(account, "native_liability"), failures)
+    return bounce
+
+
+def report_cost(lite, rpc_address, account, step, workdir, failures,
+                fixture_sandbox_bounce=None, transaction=None) -> None:
     """What the chain charged for the message just sent, against what the
     sandbox charged for the same bytes.
 
@@ -253,11 +337,16 @@ def report_cost(lite, rpc_address, account, step, workdir, failures) -> None:
     understanding that it is the code a validator runs. This is the one place
     the understanding is checked rather than assumed.
     """
-    transaction = describe_transaction(rpc_address, account)
+    # A step with no body is the bounce itself; every other step's own
+    # transaction is the one that did not arrive bounced. The caller may
+    # already hold it, and asking the node twice for the same thing is how
+    # this ran into a JSON-RPC that stopped answering.
+    if transaction is None:
+        transaction = describe_transaction(rpc_address, account, bounced=step["body"] is None)
     if transaction is None:
         log("  the JSON-RPC returned no transaction for the pool account")
         return
-    name = step["body"].replace(".boc", "")
+    name = (step["body"] or "bounce").replace(".boc", "")
     (workdir / f"{name}-transaction.json").write_text(json.dumps(transaction, indent=2))
 
     compute = transaction.get("compute", {})
@@ -281,7 +370,23 @@ def report_cost(lite, rpc_address, account, step, workdir, failures) -> None:
         log("  the transaction dump did not say how much gas was used")
         return
     ceiling = int(step["gas_ceiling"])
-    sandbox = int(step["sandbox_gas_used"])
+    sandbox = step.get("sandbox_gas_used")
+    if sandbox is None:
+        # The bounce: the sandbox recorded its own, but it recovered its own
+        # amount and so minted a different note. The two are printed side by
+        # side and not required to match.
+        recorded = (fixture_sandbox_bounce or {}).get("gas_used")
+        log(f"  {'gas_used, on the chain':<34} {gas}")
+        if recorded is not None:
+            log(f"  {'gas_used, in the sandbox':<34} {recorded}")
+        log(f"  {'the ceiling it ran under':<34} {ceiling}")
+        if gas > ceiling:
+            failures.append(
+                f"{step['name']}: the chain charged {gas} gas under a ceiling of {ceiling}, "
+                f"so SETGASLIMIT did not bind"
+            )
+        return
+    sandbox = int(sandbox)
     log(f"  {'gas_used, on the chain':<34} {gas}")
     log(f"  {'gas_used, in the sandbox':<34} {sandbox}")
     log(f"  {'the ceiling it ran under':<34} {ceiling}")
@@ -302,7 +407,9 @@ async def run(args) -> int:
     workdir = Path(args.workdir) if args.workdir else Path(tempfile.mkdtemp(prefix="tos-shielded-"))
     build = Path(args.build_dir)
     fixture_dir = (
-        Path(args.fixture) if args.fixture else build_fixture(workdir / "fixture", build)
+        Path(args.fixture)
+        if args.fixture
+        else build_fixture(workdir / "fixture", build, args.refuse)
     )
     fixture = load_fixture(fixture_dir)
     # Section 9's intent window is an hour, so a fixture is perishable: its
@@ -445,18 +552,34 @@ async def run(args) -> int:
 
             for step in fixture["steps"]:
                 expect = step["expect"]
-                body = cell_from(fixture_dir / step["body"])
-                value = int(step["value_nanotos"]) + args.fee_allowance
-                log(f"{step['name']}: attaching {value/TOS:.9f} TOS ...")
-                await faucet.send(
-                    internal(faucet.address, destination, value, body, None, bounce=True)
+                if step["body"] is None:
+                    # A step the chain does by itself: the payout was refused,
+                    # so it comes back and the pool mints a recovery note.
+                    # Nothing is sent here, only waited for.
+                    log(f"{step['name']}: waiting for the chain ...")
+                else:
+                    body = cell_from(fixture_dir / step["body"])
+                    value = int(step["value_nanotos"]) + args.fee_allowance
+                    log(f"{step['name']}: attaching {value/TOS:.9f} TOS ...")
+                    await faucet.send(
+                        internal(faucet.address, destination, value, body, None, bounce=True)
+                    )
+                # Whichever counter this step moves. A withdrawal whose payout
+                # is refused moves the nullifier counter now and the
+                # commitment counter again a block or two later, when the
+                # bounce lands, so it is the nullifier counter that says this
+                # step is done.
+                counter = (
+                    "commitment_next_index"
+                    if "commitment_next_index" in expect
+                    else "nullifier_next_index"
                 )
                 try:
                     await wait_for(
                         f"{step['name']} to be accepted",
-                        lambda expect=expect: lite.get_method(
-                            address_text, "commitment_next_index"
-                        ) == str(expect["commitment_next_index"]),
+                        lambda counter=counter, expect=expect: lite.get_method(
+                            address_text, counter
+                        ) == str(expect[counter]),
                         timeout=args.step_timeout,
                     )
                 except Failed:
@@ -483,16 +606,30 @@ async def run(args) -> int:
                     if field in expect:
                         compare(field, str(expect[field]),
                                 lite.get_method(address_text, field), failures)
-                report_cost(lite, rpc_address, address_text, step, workdir, failures)
+                bounce = None
+                if step["body"] is None:
+                    bounce = check_recovery(lite, rpc_address, address_text, fixture,
+                                            fixture_dir, step, Path(args.build_dir), failures)
+                report_cost(lite, rpc_address, address_text, step, workdir, failures,
+                            fixture.get("recovery_sandbox"), bounce)
 
-            # The money left the pool and arrived. A withdrawal that moved
-            # every root correctly and paid nobody would pass every check
-            # above, so the destination's balance is read as well.
+            # Where the money ended up. A withdrawal that moved every root
+            # correctly and paid nobody would pass every check above, so the
+            # destination's balance is read as well -- and when the
+            # destination refuses, the same reading says the opposite: it must
+            # *not* be holding the payout, because the payout came home.
             paid = int(fixture["destination"]["expects_nanotos"])
-            balance = rpc(rpc_address, "getAddressBalance",
-                          address=fixture["destination"]["address"]).get("result")
-            log(f"the destination holds {int(balance)/TOS:.9f} TOS")
-            if int(balance) < paid:
+            deployed = int(fixture["destination"]["deploy_value_nanotos"])
+            refuses = bool(fixture["destination"].get("refuses"))
+            balance = lite.balance(fixture["destination"]["address"])
+            log(f"the destination holds {balance/TOS:.9f} TOS")
+            if refuses and balance >= deployed:
+                failures.append(
+                    f"the destination refused the payout and still holds {balance} nanotos, "
+                    f"which is more than the {deployed} it was deployed with: the money did "
+                    f"not come back"
+                )
+            if not refuses and balance < paid:
                 failures.append(
                     f"the destination holds {balance} nanotos, which is less than the "
                     f"{paid} the withdrawal was supposed to pay it"
@@ -521,6 +658,12 @@ def main() -> int:
     parser.add_argument("--boot-timeout", type=float, default=180.0)
     parser.add_argument("--step-timeout", type=float, default=120.0)
     parser.add_argument("--fee-allowance", type=int, default=FORWARD_FEE_ALLOWANCE)
+    parser.add_argument(
+        "--refuse",
+        action="store_true",
+        help="build a fixture whose payout destination refuses the money, so the "
+             "withdrawal bounces and the pool has to mint a recovery note",
+    )
     args = parser.parse_args()
     try:
         return asyncio.run(run(args))

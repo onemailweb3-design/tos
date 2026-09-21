@@ -56,6 +56,7 @@ use tos_sandbox::{compile_func, Blockchain, MessageBuilder};
 /// contract's own constants.
 const DEPOSIT_GAS_CEILING: u64 = 220_000;
 const TRANSACT_GAS_CEILING: u64 = 1_460_000;
+const BOUNCE_GAS_CEILING: u64 = 220_000;
 
 /// Section 9's intent window is an hour. Half of it leaves room for a build,
 /// a chain to come up and three messages to land.
@@ -75,10 +76,29 @@ fn compute_fee(gas: u64) -> u64 {
 }
 
 /// A destination that takes the money, so the payout succeeds and nothing
-/// bounces. The recovery path has its own coverage in the sandbox; what a
-/// chain has never done is pay one out at all.
+/// bounces.
 const ACCEPTER: &str = r#"
 () recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure { }
+() recv_external(slice in_msg) impure { }
+"#;
+
+/// A destination that refuses a payout, so the message comes back and the
+/// pool has to mint a recovery note for whatever survived the round trip.
+///
+/// It takes a bounce (flag bit 0) and an empty body, because refusing either
+/// of those would be refusing the pool's own money coming home.
+const REFUSER: &str = r#"
+() recv_internal(int msg_value, cell in_msg_full, slice in_msg_body) impure {
+  slice header = in_msg_full.begin_parse();
+  int flags = header~load_uint(4);
+  if (flags & 1) {
+    return ();
+  }
+  if (in_msg_body.slice_empty?()) {
+    return ();
+  }
+  throw(701);
+}
 () recv_external(slice in_msg) impure { }
 "#;
 
@@ -189,6 +209,21 @@ struct Scenario {
     commitment_root_after: Fr,
     valid_until: u32,
     payout: u64,
+    /// Everything needed to predict the recovery note, except the one number
+    /// the chain decides: how much of the payout survived the round trip.
+    /// Section 15.4 mints a note for `msg_value` as the bounce delivers it,
+    /// which depends on forward fees no prover can know in advance.
+    recovery: Recovery,
+}
+
+/// The recovery note's inputs, and the tree it lands in.
+struct Recovery {
+    owner_commitment: Fr,
+    output_data_hash: Fr,
+    leaf_index: u64,
+    /// Every leaf the tree holds when the bounce arrives, in order, so the
+    /// root can be recomputed once the recovered amount is known.
+    leaves: Vec<Fr>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -219,6 +254,7 @@ fn build_scenario(
         u128::from(DENOMINATION) * 2 - u128::from(DENOMINATION) - u128::from(WITHDRAWAL_FEE);
     let recovery_owner_commitment = Fr::from(0x5eedu64);
     let recovery_payload = payload(0x77);
+    let recovery_data_hash = output_data_hash(&recovery_payload);
     let output_payloads = [payload(1), payload(2), payload(3)];
     let output_data_hashes = [
         output_data_hash(&output_payloads[0]),
@@ -242,7 +278,7 @@ fn build_scenario(
         public_recipient_hash: wire::public_recipient_hash(destination_account),
         recovery_template_hash: wire::recovery_template_hash(
             recovery_owner_commitment,
-            output_data_hash(&recovery_payload),
+            recovery_data_hash,
         ),
         is_withdrawal: None,
         input_pq_auth_key_hash: [the_notes[0].key.hash(), the_notes[1].key.hash()],
@@ -298,13 +334,17 @@ fn build_scenario(
     // Three outputs are appended after the two deposits, at indices 2, 3, 4.
     let mut after = frontier;
     let mut commitment_root_after = anchor_root;
+    let mut leaves: Vec<Fr> =
+        the_notes.iter().map(|note| note.leaf()).collect();
     let bodies = [public.note_body_0, public.note_body_1, public.note_body_2];
     for (slot, note) in bodies.iter().enumerate() {
         let index = 2 + slot as u64;
-        let (assigned, root) = after.append(notes::note_commitment(*note, Fr::from(index)))?;
+        let leaf = notes::note_commitment(*note, Fr::from(index));
+        let (assigned, root) = after.append(leaf)?;
         if assigned != index {
             return Err("an output note landed at another index".into());
         }
+        leaves.push(leaf);
         commitment_root_after = root;
     }
 
@@ -316,7 +356,36 @@ fn build_scenario(
         commitment_root_after,
         valid_until,
         payout: DENOMINATION,
+        recovery: Recovery {
+            owner_commitment: recovery_owner_commitment,
+            output_data_hash: recovery_data_hash,
+            leaf_index: leaves.len() as u64,
+            leaves,
+        },
     })
+}
+
+/// What the sandbox charged for the three messages, and for the bounce if the
+/// destination refused the payout.
+struct SandboxRun {
+    gas: [i64; 3],
+    /// The bounce is a transaction of its own, and only happens when the
+    /// destination refuses.
+    bounce: Option<BounceRun>,
+}
+
+struct BounceRun {
+    gas: i64,
+    exit: i32,
+    /// What the bounce actually delivered, which is what section 15.4 mints
+    /// the recovery note for. The chain will decide a different number --
+    /// this is the sandbox's, recorded so the two can be compared.
+    recovered: u128,
+    /// The tree the pool holds once the recovery note is in it, read back
+    /// from the sandbox. It is what the offline predictor is checked against
+    /// before the chain is asked to agree with it.
+    commitment_root: String,
+    commitment_next_index: String,
 }
 
 /// The gas the sandbox executor charges for each of the three messages.
@@ -331,7 +400,7 @@ fn sandbox_gas(
     destination_code: &Cell,
     scenario: &Scenario,
     now: u32,
-) -> Result<[i64; 3], Box<dyn std::error::Error>> {
+) -> Result<SandboxRun, Box<dyn std::error::Error>> {
     let mut bc = Blockchain::with_global_version_and_base_workchain(ACTIVE_VERSION)?;
     bc.set_workchain(0);
     bc.set_now(now);
@@ -355,6 +424,7 @@ fn sandbox_gas(
     deploy(&mut bc, destination_code, &Cell::default(), 1 * DENOMINATION)?;
 
     let mut gas = [0i64; 3];
+    let mut bounce: Option<BounceRun> = None;
     let steps: [(&Cell, u64); 3] = [
         (&scenario.deposits[0], DENOMINATION + compute_fee(DEPOSIT_GAS_CEILING)),
         (&scenario.deposits[1], DENOMINATION + compute_fee(DEPOSIT_GAS_CEILING)),
@@ -378,12 +448,155 @@ fn sandbox_gas(
                 return Err("a message skipped its compute phase".into())
             }
         };
+
+        // The transact is the last step, and it is the one whose payout can
+        // come back. A bounce is a transaction of its own; the sandbox
+        // delivers it inside the same send, so it is read out here.
+        if index == 2 {
+            for (_, transaction) in &result.transactions {
+                let Ok(Some(message)) = transaction.read_in_msg() else { continue };
+                let chain_block::CommonMsgInfo::IntMsgInfo(header) = message.header() else {
+                    continue;
+                };
+                if !header.bounced {
+                    continue;
+                }
+                let Ok(chain_block::TransactionDescr::Ordinary(description)) =
+                    transaction.read_description()
+                else {
+                    continue;
+                };
+                if let chain_block::TrComputePhase::Vm(phase) = &description.compute_ph {
+                    bounce = Some(BounceRun {
+                        gas: phase
+                            .gas_used
+                            .to_string()
+                            .parse()
+                            .map_err(|error| format!("the gas the bounce cost: {error}"))?,
+                        exit: phase.exit_code,
+                        recovered: header.value.coins.as_u128(),
+                        commitment_root: String::new(),
+                        commitment_next_index: String::new(),
+                    });
+                }
+            }
+        }
     }
-    Ok(gas)
+
+    if let Some(bounce) = bounce.as_mut() {
+        let read = |method: &str| -> Result<String, Box<dyn std::error::Error>> {
+            let result = bc.run_get_method(&pool, method, vec![])?;
+            if result.exit_code != 0 {
+                return Err(format!("{method} exited {}", result.exit_code).into());
+            }
+            Ok(result
+                .stack
+                .last()
+                .ok_or_else(|| format!("{method} returned nothing"))?
+                .as_integer()?
+                .to_string())
+        };
+        bounce.commitment_root = read("commitment_root")?;
+        bounce.commitment_next_index = read("commitment_next_index")?;
+    }
+    Ok(SandboxRun { gas, bounce })
+}
+
+/// The root the tree reaches once a recovery note is minted for `recovered`.
+///
+/// Section 15.4 mints the note for whatever the bounce delivered, which
+/// depends on forward fees and so cannot be known before the message is sent.
+/// The harness reads the amount off the chain and asks for the root here, so
+/// the prediction still comes from the circuit's own tree rather than from
+/// the pool's own report of what it did.
+fn recovery_root(fixture: &Path, recovered: u128) -> Result<(), Box<dyn std::error::Error>> {
+    let text = std::fs::read_to_string(fixture.join("fixture.json"))?;
+    let field = |name: &str| -> Result<String, Box<dyn std::error::Error>> {
+        let at = text.find(&format!("\"{name}\"")).ok_or(format!("no {name} in the fixture"))?;
+        let rest = &text[at + name.len() + 2..];
+        let open = rest.find(':').ok_or("malformed fixture")?;
+        let tail = &rest[open + 1..];
+        let start = tail.find('"').ok_or("malformed fixture")?;
+        let body = &tail[start + 1..];
+        let end = body.find('"').ok_or("malformed fixture")?;
+        Ok(body[..end].to_string())
+    };
+    let owner = dec_to_fr(&field("recovery_owner_commitment")?)?;
+    let data_hash = dec_to_fr(&field("recovery_output_data_hash")?)?;
+
+    // Every leaf the tree held when the bounce arrived, in order.
+    let list_at = text.find("\"recovery_leaves\"").ok_or("no recovery_leaves in the fixture")?;
+    let list = &text[list_at..];
+    let open = list.find('[').ok_or("malformed fixture")?;
+    let close = list.find(']').ok_or("malformed fixture")?;
+    let mut leaves = Vec::new();
+    for item in list[open + 1..close].split(',') {
+        let trimmed = item.trim().trim_matches('"');
+        if trimmed.is_empty() {
+            continue;
+        }
+        leaves.push(dec_to_fr(trimmed)?);
+    }
+
+    let (index, root) = predict_recovery(owner, data_hash, &leaves, recovered)?;
+    println!("{{\"leaf_index\": {index}, \"commitment_root\": \"{}\"}}", dec(root));
+    Ok(())
+}
+
+/// Section 15.4's recovery note, appended to the tree those leaves describe.
+///
+/// The only input not known before the payout is sent is `recovered`: the
+/// note is minted for what the bounce delivered, and that depends on forward
+/// fees. Everything else comes from the scenario, so this is still the
+/// circuit's own tree computing the answer and not the pool reporting it.
+///
+/// Checked against a real bounce before it is used: the fixture runs the
+/// scenario in the sandbox, reads the pool's root afterwards, and refuses to
+/// write itself if this disagrees.
+fn predict_recovery(
+    owner_commitment: Fr,
+    output_data_hash: Fr,
+    leaves: &[Fr],
+    recovered: u128,
+) -> Result<(u64, Fr), Box<dyn std::error::Error>> {
+    let mut frontier = tree::Frontier::new();
+    for leaf in leaves {
+        frontier.append(*leaf)?;
+    }
+    let index = leaves.len() as u64;
+    let body = notes::note_body_commitment(owner_commitment, Fr::from(recovered), output_data_hash);
+    let (assigned, root) = frontier.append(notes::note_commitment(body, Fr::from(index)))?;
+    Ok((assigned, root))
+}
+
+/// A canonical decimal field element, the way the fixture writes them.
+fn dec_to_fr(value: &str) -> Result<Fr, Box<dyn std::error::Error>> {
+    let mut out = Fr::ZERO;
+    let ten = Fr::from(10u64);
+    for byte in value.bytes() {
+        if !byte.is_ascii_digit() {
+            return Err(format!("{value} is not a decimal field element").into());
+        }
+        out = out * ten + Fr::from(u64::from(byte - b'0'));
+    }
+    Ok(out)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1);
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.first().map(String::as_str) == Some("--recovery-root") {
+        let fixture = PathBuf::from(
+            arguments.get(1).ok_or("usage: onchain-fixture --recovery-root <dir> <recovered>")?,
+        );
+        let recovered: u128 = arguments
+            .get(2)
+            .ok_or("usage: onchain-fixture --recovery-root <dir> <recovered>")?
+            .parse()?;
+        return recovery_root(&fixture, recovered);
+    }
+
+    let refuses = arguments.iter().any(|argument| argument == "--refuse");
+    let mut args = arguments.into_iter().filter(|argument| !argument.starts_with("--"));
     let root = PathBuf::from(args.next().ok_or("usage: onchain-fixture <repo root> <out dir>")?);
     let out = PathBuf::from(args.next().ok_or("usage: onchain-fixture <repo root> <out dir>")?);
     std::fs::create_dir_all(&out).map_err(|error| format!("{}: {error}", out.display()))?;
@@ -401,9 +614,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Where the withdrawal goes. A contract that takes the money, deployed by
     // the harness at the address its own code hashes to.
-    let accepter_path = std::env::temp_dir().join("tos_shielded_onchain_accepter.fc");
-    std::fs::write(&accepter_path, ACCEPTER)?;
-    let destination_code = compile_func(&[stdlib_path(), accepter_path])?;
+    let destination_path = std::env::temp_dir().join(if refuses {
+        "tos_shielded_onchain_refuser.fc"
+    } else {
+        "tos_shielded_onchain_accepter.fc"
+    });
+    std::fs::write(&destination_path, if refuses { REFUSER } else { ACCEPTER })?;
+    let destination_code = compile_func(&[stdlib_path(), destination_path])?;
     let destination_address = address_of(&destination_code, &Cell::default())?;
     let destination_account = account_of(&destination_address)?;
 
@@ -422,8 +639,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         build_scenario(global_id, &pool_account, &destination_account, &the_notes, valid_until)?;
 
     eprintln!("running the same three messages in the sandbox ...");
-    let gas = sandbox_gas(&code, &state, &destination_code, &scenario, now)?;
+    let run = sandbox_gas(&code, &state, &destination_code, &scenario, now)?;
+    let gas = run.gas;
     eprintln!("the sandbox charges {} / {} / {} gas", gas[0], gas[1], gas[2]);
+    if refuses {
+        let bounce = run
+            .bounce
+            .as_ref()
+            .ok_or("the destination refused the payout and nothing bounced back")?;
+        eprintln!(
+            "the payout bounced: {} gas, exit {}, {} nanotos recovered",
+            bounce.gas, bounce.exit, bounce.recovered
+        );
+        if bounce.exit != 0 {
+            return Err(format!("the sandbox's recovery exited {}", bounce.exit).into());
+        }
+        // The predictor, checked against a bounce that really happened. The
+        // chain's recovered amount will be its own, and the harness will ask
+        // for the root that goes with it; this is what says the asking is
+        // worth anything.
+        let (index, root) = predict_recovery(
+            scenario.recovery.owner_commitment,
+            scenario.recovery.output_data_hash,
+            &scenario.recovery.leaves,
+            bounce.recovered,
+        )?;
+        if dec(root) != bounce.commitment_root
+            || index.to_string() != bounce.commitment_next_index.parse::<u64>()
+                .map(|next| (next - 1).to_string())
+                .unwrap_or_default()
+        {
+            return Err(format!(
+                "the recovery predictor says leaf {index} and root {}, the sandbox's pool holds \
+                 root {} at next index {}. The chain would be asked to agree with a prediction \
+                 that is already wrong.",
+                dec(root),
+                bounce.commitment_root,
+                bounce.commitment_next_index
+            )
+            .into());
+        }
+        eprintln!("the recovery predictor agrees with the sandbox's own bounce");
+    } else if run.bounce.is_some() {
+        return Err("the payout bounced from a destination that was supposed to take it".into());
+    }
 
     write_cell(&out.join("code.boc"), &code)?;
     write_cell(&out.join("data.boc"), &state)?;
@@ -451,8 +710,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "    \"address\": \"0:{destination}\",\n",
             "    \"code\": \"destination-code.boc\",\n",
             "    \"deploy_value_nanotos\": {destination_deploy},\n",
+            "    \"refuses\": {refuses},\n",
             "    \"expects_nanotos\": {payout}\n",
             "  }},\n",
+            "  \"recovery_owner_commitment\": \"{recovery_owner}\",\n",
+            "  \"recovery_output_data_hash\": \"{recovery_data_hash}\",\n",
+            "  \"recovery_leaf_index\": {recovery_index},\n",
+            "  \"recovery_sandbox\": {recovery_sandbox},\n",
+            "  \"recovery_leaves\": [{recovery_leaves}],\n",
             "  \"expected_at_genesis\": {{\n",
             "    \"commitment_root\": \"{empty_root}\",\n",
             "    \"nullifier_root\": \"{nullifier_root}\",\n",
@@ -491,13 +756,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "      \"gas_ceiling\": {transact_ceiling},\n",
             "      \"sandbox_gas_used\": {gas2},\n",
             "      \"expect\": {{\n",
-            "        \"commitment_root\": \"{root_after}\",\n",
-            "        \"commitment_next_index\": 5,\n",
+            "{withdrawal_expect}",
             "        \"nullifier_root\": \"{nullifier_after}\",\n",
-            "        \"nullifier_next_index\": 3,\n",
-            "        \"native_liability\": {liability_after}\n",
+            "        \"nullifier_next_index\": 3\n",
             "      }}\n",
-            "    }}\n",
+            "    }}{bounce_step}\n",
             "  ]\n",
             "}}\n"
         ),
@@ -510,7 +773,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         deploy = 100u64 * DENOMINATION,
         destination = hex(destination_address.address().get_bytestring(0).as_slice()),
         destination_deploy = DENOMINATION,
+        refuses = refuses,
         payout = scenario.payout,
+        recovery_owner = dec(scenario.recovery.owner_commitment),
+        recovery_data_hash = dec(scenario.recovery.output_data_hash),
+        recovery_index = scenario.recovery.leaf_index,
+        // What the sandbox's bounce delivered and cost. The chain will decide
+        // a different amount -- its forward fees are its own -- so this is
+        // recorded rather than asserted.
+        recovery_sandbox = match run.bounce.as_ref() {
+            Some(bounce) => format!(
+                "{{\"gas_used\": {}, \"exit_code\": {}, \"recovered_nanotos\": {}}}",
+                bounce.gas, bounce.exit, bounce.recovered
+            ),
+            None => "null".to_string(),
+        },
+        recovery_leaves = scenario
+            .recovery
+            .leaves
+            .iter()
+            .map(|leaf| format!("\"{}\"", dec(*leaf)))
+            .collect::<Vec<_>>()
+            .join(", "),
         empty_root = dec(genesis.commitment_root),
         nullifier_root = dec(genesis.nullifier_root),
         deposit_value = deposit_value,
@@ -522,12 +806,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         gas2 = gas[2],
         root0 = dec(scenario.roots_after_deposit[0]),
         root1 = dec(scenario.roots_after_deposit[1]),
-        root_after = dec(scenario.commitment_root_after),
+        // What the withdrawal leaves behind depends on whether its payout
+        // comes back. The tree and the liability move again when it does, and
+        // the bounce lands a block or two later -- too fast to catch in
+        // between -- so on the refusing run they are checked after it and not
+        // before. The nullifier tree is not touched by a bounce, so it is
+        // checked either way.
+        withdrawal_expect = if refuses {
+            String::new()
+        } else {
+            format!(
+                "        \"commitment_root\": \"{}\",\n        \"commitment_next_index\": 5,\n        \"native_liability\": {},\n",
+                dec(scenario.commitment_root_after),
+                2 * DENOMINATION - DENOMINATION - WITHDRAWAL_FEE
+            )
+        },
+        // A step with no body: the chain does this one by itself. What it
+        // leaves cannot be written down here, because the note is minted for
+        // whatever the bounce delivered -- so the harness reads that off the
+        // chain and asks `--recovery-root` for the tree it implies.
+        bounce_step = if refuses {
+            format!(
+                ",\n    {{\n      \"name\": \"the bounce and its recovery note\",\n      \"body\": null,\n      \"gas_ceiling\": {},\n      \"expect\": {{\n        \"commitment_next_index\": {},\n        \"nullifier_next_index\": 3,\n        \"liability_before_recovery\": {}\n      }}\n    }}",
+                BOUNCE_GAS_CEILING,
+                scenario.recovery.leaf_index + 1,
+                2 * DENOMINATION - DENOMINATION - WITHDRAWAL_FEE
+            )
+        } else {
+            String::new()
+        },
         nullifier_after = dec(scenario.nullifier_root_after),
         one = DENOMINATION,
         two = 2 * DENOMINATION,
-        // Two denominations came in; one denomination and the fee went out.
-        liability_after = 2 * DENOMINATION - DENOMINATION - WITHDRAWAL_FEE,
     );
     write(&out.join("fixture.json"), fixture.as_bytes())?;
 
