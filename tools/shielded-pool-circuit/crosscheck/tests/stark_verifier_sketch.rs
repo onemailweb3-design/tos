@@ -51,6 +51,13 @@ fn what_a_fri_verifier_would_cost() {
     let per_hash = (sha_many - sha_one) / 1000;
     eprintln!("one SHA256 of 64 bytes, measured: {per_hash} gas");
 
+    // What a field multiplication reduces to, so the extension multiply can
+    // be broken down rather than described.
+    let mdm_one = probe.muldivmod_gas(1).expect("one");
+    let mdm_many = probe.muldivmod_gas(1001).expect("a thousand and one");
+    let per_mdm = (mdm_many - mdm_one) / 1000;
+    eprintln!("one muldivmod over 257-bit integers: {per_mdm} gas");
+
     let fold = probe.fold_gas().expect("one folding step");
     eprintln!("one FRI folding step over eight cubic-extension values: {fold} gas");
 

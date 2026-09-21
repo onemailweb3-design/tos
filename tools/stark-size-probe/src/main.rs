@@ -226,7 +226,53 @@ fn measure_ext(
     }
 }
 
+/// The proof's own structure, so the query and layer counts a verifier walks
+/// are read off it rather than worked out on paper.
+fn describe(width: usize, length: usize, blowup: usize, queries: usize) {
+    let options = ProofOptions::new(
+        queries,
+        blowup,
+        20,
+        FieldExtension::Cubic,
+        8,
+        127,
+        winterfell::BatchingMethod::Linear,
+        winterfell::BatchingMethod::Linear,
+    );
+    let prover = WorkProver { options: options.clone() };
+    let proof = prover.prove(build_trace(width, length)).expect("prove");
+    let lde = proof.lde_domain_size();
+    println!("trace {width} x {length}, blowup {blowup}, {queries} queries");
+    println!("  LDE domain          {lde} (2^{})", lde.trailing_zeros());
+    let fri = options.to_fri_options();
+    println!("  folding factor      {}", fri.folding_factor());
+    println!("  remainder max deg   {}", fri.remainder_max_degree());
+    // Layers until the remainder is small enough, and the Merkle depth each
+    // one is committed at.
+    let folding = fri.folding_factor();
+    let mut domain = lde;
+    let mut depths = vec![
+        (lde as f64).log2() as usize,
+        (lde as f64).log2() as usize,
+    ];
+    let mut layers = 0;
+    while domain > fri.remainder_max_degree() + 1 {
+        domain /= folding;
+        depths.push((domain as f64).log2() as usize);
+        layers += 1;
+    }
+    let total: usize = depths.iter().sum();
+    println!("  FRI layers          {layers}");
+    println!("  Merkle depths       {depths:?} -> {total} levels a query");
+    println!("  levels in total     {} x {total} = {}", queries, queries * total);
+    println!("  proof bytes         {}", proof.to_bytes().len());
+}
+
 fn main() {
+    println!("--- the proof's own structure ---");
+    describe(8, 1 << 12, 16, 60);
+    println!();
+
     println!("trace          blowup  queries  grinding  conjectured  proven  proof bytes");
     println!("-------------  ------  -------  --------  -----------  ------  -----------");
 

@@ -39,27 +39,35 @@ thirty-four.
 
 ## 2. What the measurement actually says
 
-The interesting part is not the total. It is where the total goes.
+The interesting part is not the total. It is that the two halves are
+expensive **for different reasons**, and only one of them is what everybody
+assumes.
 
-| | share of the total | share that is the computation |
-| --- | ---: | ---: |
-| Merkle paths | 30% | **12%** |
-| FRI folding | 70% | 87% is extension multiplication, of which **10%** is the multiply |
+| | share of the total | what that share is |
+| --- | ---: | --- |
+| Merkle paths | 30% | 12% hashing, **88% cell and slice bookkeeping** |
+| FRI folding | 70% | **72% is `muldivmod` instructions**, 15% other arithmetic, 13% bookkeeping |
 
-A Merkle level costs 1,422 gas of which the SHA256 over sixty-four bytes is
-**170**, measured. The rest is `begin_cell()` at 500, cell loads at 100 each,
-and slice handling. One cubic-extension multiplication costs 2,431 gas of
-which nine `muldivmod` instructions are about 234.
+**The Merkle half is the interpreter.** A level costs 1,422 gas of which the
+SHA256 over sixty-four bytes is 170, measured. The rest is `begin_cell()` at
+500, cell loads at 100 each, and slice handling. An instruction that walks
+the whole path removes that and keeps the hashing.
 
-So most of the cost is not the cryptography. It is the interpreter -- seven
-eighths of a Merkle level and nine tenths of an extension multiplication.
-These instructions do not make the arithmetic faster; they remove the
-interpreter from around it. What they cannot remove is the hashing itself,
-which section 4.1 prices.
+**The folding half is not.** One cubic-extension multiplication costs 2,431
+gas, and nine `muldivmod` instructions are 2,016 of it -- eighty-three
+percent. There is no interpreter overhead to remove. The problem is that the
+instruction is the wrong size: `muldivmod` multiplies and divides 257-bit
+integers, and a Goldilocks multiplication needs 64 bits. Every field
+operation pays 257-bit prices for 64-bit work.
 
-This is also why Groth16 is cheap here and expensive on the EVM: the hard
-part is one native instruction, `BLS_PAIRING`. The question was never
-"Groth16 or STARK". It is "which one does the VM have an instruction for".
+The scale of that mismatch is the argument for section 3.1. A cubic-extension
+multiplication is about forty nanoseconds of real work; at the price
+POSEIDON2_PERM8 was set to by measurement, that is worth four to seven gas.
+It costs 2,431.
+
+**TVM has no small-field arithmetic at all.** That, and not the proof system,
+is what makes a FRI verifier expensive here -- and it is why Groth16 is cheap:
+its hard part is one native instruction sized for the job.
 
 ## 3. The instructions
 
@@ -82,12 +90,19 @@ Multiplies two elements of the cubic extension of Goldilocks,
 `GLEXT3_ADD` (0xf93301) and `GLEXT3_SUB` (0xf93302) follow, with the same
 stack shape.
 
-**This is the one that cannot be avoided.** A verifier evaluates the AIR's
-transition constraints at the out-of-domain point, and those constraints are
-*circuit-specific* -- no instruction can absorb them, they have to be written
-in FunC. The pool's AIR is eight constraints of degree five, which is on the
-order of a hundred extension multiplications: 243,000 gas at today's prices,
-more than the entire Groth16 verification, before a single query is checked.
+**This is the one that cannot be avoided, and the one with the largest
+margin.** Measured, a cubic-extension multiplication written over
+`muldivmod` costs 2,431 gas to do about forty nanoseconds of work -- roughly
+five hundred times what the same work is worth at the price
+POSEIDON2_PERM8 was measured into.
+
+It is also load-bearing in a way no other instruction can relieve. A verifier
+evaluates the AIR's transition constraints at the out-of-domain point, and
+those constraints are *circuit-specific*: no instruction can absorb them,
+they have to be written in FunC. Together with the DEEP composition, which is
+per query, that is on the order of eight hundred extension operations --
+about two million gas at today's prices, ten times the entire Groth16
+verification, before a single Merkle path is walked.
 
 It is also the only one of the three that commits to nothing. Any small-field
 proof system needs it, and it fixes no FRI parameter.
@@ -176,27 +191,40 @@ them.
 
 ## 5. What the three would buy
 
-Priced consistently with the Poseidon2 tariff:
+Estimated, with every assumption stated. The hashing and the extension
+arithmetic are priced at the rate POSEIDON2_PERM8 was measured into -- forty
+five gas a sixty-four byte SHA256, six gas an extension multiplication --
+because pricing them at today's basic-instruction rates would flatter the
+result.
 
-| | gas |
-| --- | ---: |
-| Merkle paths, native (hashing only; the bookkeeping is what the instruction removes) | ~170,000 |
-| folding, native | ~36,000 |
-| parsing an 88 KB proof, ~700 cells at 100 | ~70,000 |
-| transcript, out-of-domain evaluation, DEEP composition | ~150,000 |
-| **a whole STARK verification** | **~420,000** |
+| | gas | how it is arrived at |
+| --- | ---: | --- |
+| Merkle paths | ~167,000 | 3,720 levels x 45, the hashing an instruction cannot remove |
+| FRI folding | ~35,000 | 180 folds x 24 multiplications x 6, plus 50 a fold of handling |
+| parsing an 88 KB proof | ~69,000 | 689 cells at 100 |
+| transcript, out-of-domain, DEEP | ~43,000 | ~800 extension operations at 50 all-in, plus 20 hashes |
+| **a whole STARK verification** | **~315,000** | |
 
-Against 204,493 for Groth16: about twice, which is the same order. A private
-transfer's ceiling would move from 2,170,000 to roughly 2,700,000, the sender
-would pre-pay about 1.1 TOS instead of 0.87, and throughput would be
-essentially unchanged.
+Against 204,493 for Groth16: **about one and a half times**. Carried through:
 
-At that point the setup ceremony, the quantum exposure and the per-circuit
-freeze all go away for a cost that rounds to nothing.
+| | today | with the three instructions |
+| --- | ---: | ---: |
+| a withdrawal | 1,730,942 | ~1,841,000 |
+| its ceiling | 2,170,000 | ~2,310,000 |
+| the sender pre-pays | 0.87 TOS | ~0.92 TOS |
+| private transfers in a 60M block | 34 | 32 |
 
-**These are estimates built from measured pieces, not measurements.** They
-are good enough to decide whether to start, and not good enough to decide
-anything else.
+Six percent. At that price the setup ceremony, the quantum exposure of a
+pairing and the per-circuit freeze all go away for something that rounds to
+nothing.
+
+For contrast, the same verification without the instructions is 17.4M gas,
+9.5 TOS and three transfers a block. **The instructions are the whole
+difference between the two, which is the point of this document.**
+
+**These are estimates built from measured pieces, not measurements.** The
+measured pieces are in section 7.2. They are good enough to decide whether to
+start and not good enough to decide anything else.
 
 ## 6. What not to do
 
@@ -210,7 +238,68 @@ on them. If they are worth adding they are worth adding on their own merits,
 and 3.1 has merits that have nothing to do with proofs: a small field with
 native arithmetic is useful to anything that has outgrown 257-bit integers.
 
-## 7. Sequence
+## 7. Where every number here comes from
+
+This document had a figure wrong once -- section 4.1 -- because it was
+derived from a formula belonging to a different opcode instead of measured.
+Every number is therefore listed with its provenance, so the next reader can
+tell which ones would survive a change of mind and which would not.
+
+### 7.1 Measured
+
+Run `cargo test --release --test stark_verifier_sketch -- --nocapture` in
+`tools/shielded-pool-circuit/crosscheck`, and `cargo run --release` in
+`tools/stark-size-probe`.
+
+| | value | where |
+| --- | ---: | --- |
+| one SHA256 of 64 bytes | 170 gas | sketch, slope over 1,000 |
+| one `muldivmod`, 257-bit | 224 gas | sketch, slope over 1,000 |
+| one cubic-extension multiplication | 2,431 gas | sketch, slope over 100 |
+| one Merkle level | 1,422 gas | sketch, slope from depth 4 to 16 |
+| one FRI folding step | 67,293 gas | sketch |
+| the two inner loops | 17,402,580 gas | sketch |
+| Groth16 verification, whole | 204,493 gas | `shielded_groth16_sandbox` |
+| a withdrawal, whole | 1,730,942 gas | `transact_in_a_mature_pool` |
+| one transact message | 15,548 bytes | `withdrawal_round_trip` |
+| STARK proof, 128-bit proven | 88,095 bytes | size probe |
+| LDE domain, layers, depths | 2^16, 3, [16,16,13,10,7] | size probe, read off the proof |
+| levels a query | 62 | the same, summed |
+| POSEIDON2_PERM8 | 3,500 gas | `crypto/vm/poseidon2ops.h` |
+| cell create / cell load | 500 / 100 gas | `crypto/vm/vm.h` |
+| `SHA256U` | 0xf902 | `crypto/vm/tosops.cpp` |
+| 0xf933xx unused, version 17 current | -- | grep, `common/global-version.h` |
+| `groth16.fc` | 120 lines | `wc -l` |
+
+### 7.2 Estimated, with the assumption named
+
+| | value | assumption |
+| --- | ---: | --- |
+| a 64-byte SHA256 priced at the crypto anchor | 30-55 gas | ~300 ns at 5.5-9.2 ns/gas |
+| a cubic-extension multiplication, native | 4-7 gas | ~40 ns at the same |
+| POSEIDON2_PERM8 in nanoseconds | 19,350 / 32,060 | B1, C++ and Rust VM, on a shared host |
+| extension operations in transcript+OOD+DEEP | ~800 | 8 constraints of degree 5 at one point, plus 12 a query |
+| cells in an 88 KB proof | 689 | 1023 bits a cell |
+| a whole STARK verification | ~315,000 gas | section 5's table |
+| everything in section 5's second table | -- | follows from the above and D6 |
+
+### 7.3 Known to be soft
+
+- The nanosecond figures behind the crypto anchor were measured on a shared
+  192-thread Xeon, not on target hardware. Everything priced against them
+  moves together if that changes.
+- The ~800 extension operations is the least grounded number in this
+  document. It is an AIR that does not exist yet, evaluated by a verifier
+  that does not exist yet.
+- `muldivmod` at 224 gas and SHA256 at 170 are both far more conservative per
+  unit of work than POSEIDON2_PERM8 at 3,500. That is consistent across both,
+  so it may be that the basic instruction prices carry dispatch overhead by
+  design -- or that the Poseidon2 tariff is the outlier. This document does
+  not resolve it and does not need to, because section 5 prices the new
+  instructions at the *crypto* rate, which is the conservative direction for
+  a proposal that wants them.
+
+## 8. Sequence
 
 Nothing here is ready to implement. In order:
 

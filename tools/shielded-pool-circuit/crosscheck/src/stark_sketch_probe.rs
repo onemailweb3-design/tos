@@ -157,6 +157,16 @@ int p_fold(cell values, int a0, int a1, int a2) method_id {
   return gl_add(gl_add(r0, r1), r2);
 }
 
+int p_muldivmod(int rounds) method_id {
+  int acc = 1;
+  int i = 0;
+  while (i < rounds) {
+    (_, acc) = muldivmod(acc + 7, 1234567, gl_p());
+    i = i + 1;
+  }
+  return acc;
+}
+
 int p_sha256(int rounds) method_id {
   slice sixty_four = begin_cell().store_uint(0x1234, 256).store_uint(0x5678, 256)
                        .end_cell().begin_parse();
@@ -344,6 +354,12 @@ impl StarkSketch {
             "p_extmul",
             vec![Self::integer(rounds)?, Self::integer(7)?, Self::integer(11)?, Self::integer(13)?],
         )
+    }
+
+    /// The gas one `muldivmod` over 257-bit integers costs, which is what a
+    /// field multiplication reduces to.
+    pub fn muldivmod_gas(&self, rounds: u64) -> Result<i64> {
+        self.call("p_muldivmod", vec![Self::integer(rounds)?])
     }
 
     /// The gas `rounds` SHA256 hashes of sixty-four bytes cost. The
