@@ -51,6 +51,59 @@ cell f_fill(int index) method_id {
   return frontier_append(frontier, index, leaf);
 }
 
+;; --- what the dictionary itself costs -------------------------------------
+;; The frontier's key space is exactly 0..83, dense and known at compile time,
+;; yet it is stored in a sparse HashmapE. These three price the operations an
+;; append is made of, so the question "is a second instruction needed, or is
+;; the container wrong" can be answered with numbers.
+
+int f_reads(cell frontier, int rounds) method_id {
+  int acc = 0;
+  int i = 0;
+  while (i < rounds) {
+    acc = acc + frontier_get(frontier, i % tree_depth(), i % tree_arity());
+    i = i + 1;
+  }
+  return acc;
+}
+
+cell f_writes(cell frontier, int rounds) method_id {
+  int i = 0;
+  while (i < rounds) {
+    frontier = frontier_set(frontier, i % tree_depth(), i % tree_arity(), 0x1234 + i);
+    i = i + 1;
+  }
+  return frontier;
+}
+
+;; The same eighty-four values as a flat chain of cells, three to a cell, read
+;; by walking rather than by key. This is what a dense container costs.
+cell f_flat_build() method_id {
+  cell chain = begin_cell().end_cell();
+  int i = 0;
+  while (i < 28) {
+    chain = begin_cell()
+      .store_uint(0x1234 + i * 3, 256)
+      .store_uint(0x1235 + i * 3, 256)
+      .store_uint(0x1236 + i * 3, 256)
+      .store_ref(chain)
+      .end_cell();
+    i = i + 1;
+  }
+  return chain;
+}
+
+int f_flat_reads(cell chain, int rounds) method_id {
+  int acc = 0;
+  int i = 0;
+  while (i < rounds) {
+    slice s = chain.begin_parse();
+    acc = acc + s~load_uint(256);
+    i = i + 1;
+  }
+  return acc;
+}
+
 ;; The digit sum, which is what decides how many slots the append reads.
 int f_digit_sum(int index) method_id {
   int total = 0;
@@ -145,6 +198,42 @@ impl FrontierProbe {
             .to_string()
             .parse()
             .map_err(|error| CrossCheckError::Vm(format!("sum: {error}")))
+    }
+
+    /// The gas `rounds` dictionary reads cost against a frontier of that age.
+    pub fn dict_read_gas(&self, index: u64, rounds: u64) -> Result<i64> {
+        let frontier = self.fill(index)?;
+        let (_, gas) = self.call(
+            "f_reads",
+            vec![StackItem::cell(frontier), Self::integer(&rounds.to_string())?],
+        )?;
+        Ok(gas)
+    }
+
+    /// The same for writes.
+    pub fn dict_write_gas(&self, index: u64, rounds: u64) -> Result<i64> {
+        let frontier = self.fill(index)?;
+        let (_, gas) = self.call(
+            "f_writes",
+            vec![StackItem::cell(frontier), Self::integer(&rounds.to_string())?],
+        )?;
+        Ok(gas)
+    }
+
+    /// What the same values cost to read from a flat cell chain.
+    pub fn flat_read_gas(&self, rounds: u64) -> Result<i64> {
+        let (stack, _) = self.call("f_flat_build", vec![])?;
+        let chain = stack
+            .last()
+            .ok_or_else(|| CrossCheckError::Vm("no chain".to_string()))?
+            .as_cell()
+            .map(Clone::clone)
+            .map_err(|error| CrossCheckError::Vm(format!("chain: {error}")))?;
+        let (_, gas) = self.call(
+            "f_flat_reads",
+            vec![StackItem::cell(chain), Self::integer(&rounds.to_string())?],
+        )?;
+        Ok(gas)
     }
 
     /// The gas one append at `index` costs against that pool's frontier.
