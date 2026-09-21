@@ -68,35 +68,71 @@ on every run, and it is a gate rather than a note: every byte offset below is a
 function of the exponent, so a circuit that grew past 32,768 would make an
 already-fetched slice *the wrong bytes* rather than too few of them.
 
-### Eighteen megabytes out of seventy-two gibibytes
+### Eighteen megabytes, and where they sit in each file
 
 The accumulator stores five sections, each in ascending power order, so a
-degree-2^15 SRS is a prefix of every section rather than a prefix of the file:
+degree-2^15 SRS is a prefix of every section rather than a prefix of the file.
+Both ceremonies were fetched on 2026-09-21; the sections are the same shape and
+the same size either way, and only the offsets differ.
 
-| section | points | bytes | offset |
-|---|---:|---:|---:|
-| `tau_g1` | 65,535 | 6,291,360 | 64 |
-| `tau_g2` | 32,768 | 6,291,456 | 25,769,803,744 |
-| `alpha_tau_g1` | 32,768 | 3,145,728 | 51,539,607,520 |
-| `beta_tau_g1` | 32,768 | 3,145,728 | 64,424,509,408 |
-| `beta_g2` | 1 | 192 | 77,309,411,296 |
+**Zcash** — the default. The accumulator is the last of 89 records, so every
+offset is deep in the file. Slice
+`1bfd7acdb3ecbfaaa695ab159a7a643a2eb58203a4d93361040c6bd4c2aa3d6e`:
 
-18,874,464 bytes, fetched with five HTTP range requests. **Done, on
-2026-09-21.** The slice is `d161614630b0504bd02075a9f57e7ca18d24f0c7c911c5cda5a686e91b8ced75`,
-its sections hash to
+| section | points | bytes | offset | sha256 |
+|---|---:|---:|---:|---|
+| `tau_g1` | 65,535 | 6,291,360 | 106,300,550,400 | `b228baf1…47d9d9` |
+| `tau_g2` | 32,768 | 6,291,456 | 106,703,203,488 | `01aafa19…322585` |
+| `alpha_tau_g1` | 32,768 | 3,145,728 | 107,105,856,672 | `0377104a…91b832` |
+| `beta_tau_g1` | 32,768 | 3,145,728 | 107,307,183,264 | `4e36cc73…696ece` |
+| `beta_g2` | 1 | 192 | 107,508,509,856 | `7137a823…75ec73` |
+
+**Filecoin** — a challenge file, so the accumulator starts 64 bytes in. Slice
+`d161614630b0504bd02075a9f57e7ca18d24f0c7c911c5cda5a686e91b8ced75`:
+
+| section | points | bytes | offset | sha256 |
+|---|---:|---:|---:|---|
+| `tau_g1` | 65,535 | 6,291,360 | 64 | `5fe833e9…22e602` |
+| `tau_g2` | 32,768 | 6,291,456 | 25,769,803,744 | `97f86b31…bdb502` |
+| `alpha_tau_g1` | 32,768 | 3,145,728 | 51,539,607,520 | `bb92e0d5…b71491` |
+| `beta_tau_g1` | 32,768 | 3,145,728 | 64,424,509,408 | `fc3dae17…92c617` |
+| `beta_g2` | 1 | 192 | 77,309,411,296 | `605833eb…f1d3ba` |
+
+Anyone holding a transcript can reproduce its slice with five reads, because
+the slice file is those ranges end to end with nothing added. The full hashes
+are in each fetch's provenance record and pinned in
+`tools/shielded-pool-ceremony/tests/the_real_slice.rs`.
+
+### Where the artifacts live, and why losing them does not matter
+
+Both slices sit in **`artifacts/phase1/`**, which `.gitignore` excludes:
 
 ```
-tau_g1        5fe833e989076843642fc5da26126951d54245829725d1f83aade91a2d22e602
-tau_g2        97f86b31a42c362421d1bdfee64ca71357dd78e0aa7ac95adc1fcb02ffbdb502
-alpha_tau_g1  bb92e0d55af3219da27a6675d3d9bba18f0b42e2c66c27e196f9ad7771b71491
-beta_tau_g1   fc3dae175498ce1c7027b4749a6a944ed92b230c05ebd20c1be321ff8e92c617
-beta_g2       605833ebc3b3227c2e4c8c35401eb5caca504ee68c54aaf4fd98571badf1d3ba
+artifacts/phase1/phase1-zcash-2m15.bin       18,874,464 bytes   1bfd7acd…
+artifacts/phase1/phase1-zcash-2m15.json
+artifacts/phase1/phase1-filecoin-2m15.bin    18,874,464 bytes   d1616146…
+artifacts/phase1/phase1-filecoin-2m15.json
 ```
 
-and anyone holding the transcript can reproduce them with five reads, because
-the slice file is those ranges end to end with nothing added. The artifact is
-not committed: eighteen megabytes of someone else's ceremony belongs beside a
-build, not in the history, and the hashes above are what identifies it.
+They are deliberately **not committed**. Eighteen megabytes of somebody else's
+ceremony belongs beside a build, not in a history that everyone clones for
+ever — and there is nothing to protect, because the bytes are public and the
+hashes above are what identifies them.
+
+**So these files are disposable.** Delete the directory and nothing is lost:
+re-fetching gives the same bytes, and the pinned hashes are what says so.
+Zcash's takes seconds; Filecoin's takes about twenty-five minutes through its
+IPFS gateway. What is *not* disposable is the hashes — they live in this
+document and in the test, in git, and they are the reason a re-fetch can be
+checked rather than trusted.
+
+The same reasoning keeps the reference string out of the repository: seven
+seconds of arithmetic from a slice that is itself reproducible. Storing a
+derived artifact buys nothing but a second copy that can go stale.
+
+The tests that need these files are `#[ignore]`d rather than skipping quietly
+when the directory is empty, because a test that passes while doing nothing is
+the failure this repository's `CLAUDE.md` opens with.
 
 Getting those offsets wrong is the worst error available here: the bytes would
 parse, the points would be on the curve and in the right subgroup, and
@@ -358,7 +394,7 @@ cargo test --release --manifest-path tools/shielded-pool-circuit/crosscheck/Carg
 ```
 
 Fetching and judging are separate on purpose: one half needs the network and no
-cryptography, the other needs cryptography and no network. The artifact is not
-committed — `artifacts/phase1/` is ignored — so the tests that need it are
-`#[ignore]`d rather than skipping quietly, which would be a test that passes
-while doing nothing.
+cryptography, the other needs cryptography and no network.
+
+If `artifacts/phase1/` is empty, the first command fills it and the rest work.
+Nothing is lost by it being empty — see *Where the artifacts live* above.
