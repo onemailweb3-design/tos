@@ -1235,6 +1235,10 @@ add_test(NAME n6-threshold-proposal
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-n6-threshold-proposal.py
           ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(n6-threshold-proposal PROPERTIES LABELS "source-guard")
+add_test(NAME n6-microbench-results
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-n6-microbench-results.py
+          ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(n6-microbench-results PROPERTIES LABELS "source-guard")
 add_test(NAME finality-evidence-admission-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-evidence-admission.sh ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(finality-evidence-admission-source PROPERTIES LABELS "source-guard")

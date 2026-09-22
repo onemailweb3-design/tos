@@ -72,8 +72,33 @@ same repository makes the file content and its SHA-256 reproducible from that
 commit; a memo-repository file could not be pinned by the recorded commit. This
 is a deliberate design-path deviation, not a second criteria source.
 
+## N6.2 diagnostic feasibility measurement
+
+`N6-MICROBENCH-RESULTS.json` records a Release-build diagnostic run at exact
+commit `d1e971eadc4bcc3462be04139b5aca7163123788`. The runner pinned affinity to
+CPUs 0-15 and recorded the observed CPU model, frequency and `powersave`
+governor without changing either frequency or governor. The result is marked
+`DIAGNOSTIC_FEASIBILITY_ONLY`; it is not eligible as release evidence and does
+not evaluate the owner's still-unset acceptance thresholds.
+
+Registered gate: `n6-microbench-results` (label `source-guard`). It checks the
+measured commit and benchmark-source binding, Release/native-ML-DSA build
+identity, host provenance, complete operation and signer matrices, percentile
+sample discipline, frozen carrier maximum, and the open worker-pool decision.
+
+The worst expected launch proof measurement is the 100-signer row. Its actual
+serialized BlockProof size and single-thread callback stall are facts in the
+JSON result; they are not a worker-pool decision. That decision remains
+`OPEN_UNTIL_OWNER_ACCEPTS_NONZERO_CRITERIA` and no production offload was made.
+
+Mutation evidence:
+
+| Mutation | Gate that went red | Exact named failure |
+|---|---|---|
+| Reduce a real single-operation sample count from 10,000 to 99 while retaining its `p99_us` | `n6-microbench-results` | `N6_MICROBENCH_RESULTS_FAILURE: mldsa44_sign claims p99 from only 99 samples` |
+
 ## Evidence boundary
 
-All results above are deterministic scaffolding evidence. No N6.2 benchmark,
-release-grade measurement, launch-cap freeze, or Genesis release evidence has
-been produced on this branch.
+The N6.2 result above is diagnostic feasibility evidence only. No release-grade
+measurement, threshold verdict, launch-cap freeze, or Genesis release evidence
+has been produced on this branch.
