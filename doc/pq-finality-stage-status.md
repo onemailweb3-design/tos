@@ -104,7 +104,7 @@ their two authoritative tracked schema inputs remain inventoried.
 |---|---|---|---|
 | `n5-pq-block-signature-conformance` | `pq-block-signature-conformance` | Stable validator ID, descriptor type/algorithm/key, signed preimage, role, every included signature, checked weight, and quorum are enforced. | That every production proof consumer supplies the right trusted context. |
 | `n5-pq-block-signature-no-legacy` | `pq-block-signature-no-legacy` | Cell, node-TL, and lite-TL `#11/#12` carriers are refused before classical verification under a PQ set. | Removal of historical classical codecs. |
-| `n5-pq-session-binding` | `validator-session-derivation`, `validator-session-param30`, `validator-session-global-id`, `validator-session-local-override`, `validator-session-governing-snapshot`, `validator-session-session-path`, `validator-session-constructor-selection`, `pq-block-signature-conformance`, `pq-finality-boundary-source` | The shared formula commits governing-state `global_id`, Param29 hash, exact selected Param30 cell hash and group coordinates; a proof must match a separately trusted expected session. | Execution of the sole production derivation caller in `validator/manager.cpp`; see Registered gaps. |
+| `n5-pq-session-binding` | `validator-session-derivation`, `validator-session-param30`, `validator-session-global-id`, `validator-session-local-override`, `validator-session-governing-snapshot`, `validator-session-session-path`, `validator-session-constructor-selection`, `validator-session-manager-assembly`, `validator-session-state-global-id`, `validator-session-assembly-source`, `pq-block-signature-conformance`, `pq-finality-boundary-source` | The shared formula commits governing-state `global_id`, Param29 hash, exact selected Param30 cell hash and group coordinates; the manager's named production input assembly reproduces the frozen vector and binds every coordinate; a bidirectional source gate pins all three manager group paths to it; `ShardStateQ::get_global_id()` is exercised from a real serialized state BOC; a proof must match a separately trusted expected session. | Actor-scheduler creation and lifecycle of a live `ValidatorManagerImpl`; the focused gates exercise and source-pin the exact pure assembly used by its validator, future-validator and observer paths, not manager initialization. |
 
 Mutations observed:
 
@@ -389,14 +389,18 @@ retain the certificate, stop retrying it, and stop production.
 
 The following are gaps, not green claims.
 
-1. **Manager integration is not exercised.**
-   `derive_validator_session_identity` has one production caller,
-   `validator/manager.cpp`.  Direct vector/consequence tests exercise the shared
-   helper, but no test drives that actor caller.  The consensus end-to-end harness
-   assigns a constant `bus->session_id` and is insensitive to the formula.  The
-   current tree lacks an actor-scheduler validator-engine harness, so this is not
-   covered by the available integration harness; it is not evidence that the caller
-   works merely because adjacent end-to-end tests are green.
+1. **Manager actor integration is not exercised.**
+   `validator/manager.cpp` now passes a named
+   `ValidatorSessionIdentityInput` to the shared derivation in each of its current,
+   future and observer group paths.  The registered manager-assembly gate calls that
+   exact production overload, reproduces the frozen vector and changes every input
+   independently; the state-global-id gate obtains the remaining state input through
+   `ShardStateQ::fetch` from a real serialized state BOC.  No test starts the manager
+   actor from a zerostate and observes the resulting group, because the current tree
+   lacks that actor-scheduler validator-engine harness.  The consensus end-to-end
+   harness still assigns a constant `bus->session_id` and is insensitive to this
+   wiring.  Thus the pure production assembly is covered; actor initialization and
+   group lifecycle remain an explicit pre-Genesis integration gap.
 
 2. **Three API/tooling consumers remain incomplete.**
 

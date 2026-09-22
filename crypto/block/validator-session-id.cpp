@@ -89,4 +89,10 @@ ValidatorSessionIdentity derive_validator_session_identity(
   return {.session_config_hash = config_hash, .session_id = session_id};
 }
 
+ValidatorSessionIdentity derive_validator_session_identity(const ValidatorSessionIdentityInput& input) {
+  return derive_validator_session_identity(
+      input.global_id, input.validator_options_hash, input.simplex_config_cell_hash, input.shard,
+      input.catchain_seqno, input.validators, input.vertical_seqno, input.last_key_block_seqno, input.new_catchain_ids);
+}
+
 }  // namespace block

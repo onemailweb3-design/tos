@@ -22,6 +22,22 @@ struct ValidatorSessionIdentity {
   tos::ValidatorSessionId session_id;
 };
 
+// Named form of every coordinate assembled by ValidatorManagerImpl when it
+// creates a live validator or observer group. Keeping these inputs together
+// makes that production assembly directly testable without starting the actor
+// scheduler, while the derivation below remains the single formula.
+struct ValidatorSessionIdentityInput {
+  td::int32 global_id;
+  td::Bits256 validator_options_hash;
+  td::Bits256 simplex_config_cell_hash;
+  tos::ShardIdFull shard;
+  tos::CatchainSeqno catchain_seqno;
+  std::vector<tos::ValidatorDescr> validators;
+  td::uint32 vertical_seqno;
+  tos::BlockSeqno last_key_block_seqno;
+  bool new_catchain_ids;
+};
+
 // The one complete derivation and constructor-selection rule for validator
 // session identity. Live group creation and proof verification must call this
 // helper; neither is allowed to restate either hash or the
@@ -30,5 +46,7 @@ ValidatorSessionIdentity derive_validator_session_identity(
     td::int32 global_id, const td::Bits256& validator_options_hash, const td::Bits256& simplex_config_cell_hash,
     tos::ShardIdFull shard, tos::CatchainSeqno catchain_seqno, const std::vector<tos::ValidatorDescr>& validators,
     td::uint32 vertical_seqno, tos::BlockSeqno last_key_block_seqno, bool new_catchain_ids);
+
+ValidatorSessionIdentity derive_validator_session_identity(const ValidatorSessionIdentityInput& input);
 
 }  // namespace block

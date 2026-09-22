@@ -6,11 +6,13 @@
 
 #include "block/validator-session-id.h"
 #include "block/validator-session-members.h"
+#include "block/block-auto.h"
 #include "td/utils/misc.h"
 #include "tl-utils/common-utils.hpp"
 #include "tl-utils/tl-utils.hpp"
 #include "validator/consensus/db-path.h"
 #include "validator/consensus/session-compat.h"
+#include "validator/impl/shard.hpp"
 #include "vm/boc.h"
 #include "vm/cells.h"
 
@@ -45,6 +47,20 @@ struct Vector {
   tos::ValidatorSessionId session_id;
 };
 
+block::ValidatorSessionIdentityInput identity_input(const Vector& vector) {
+  return {
+      .global_id = vector.global_id,
+      .validator_options_hash = vector.options_hash,
+      .simplex_config_cell_hash = td::Bits256{vector.config_cell->get_hash().bits()},
+      .shard = vector.shard,
+      .catchain_seqno = vector.catchain_seqno,
+      .validators = {vector.validator},
+      .vertical_seqno = vector.vertical_seqno,
+      .last_key_block_seqno = vector.key_seqno,
+      .new_catchain_ids = true,
+  };
+}
+
 Vector make_vector() {
   tos::ValidatorSessionConfig config;
   tos::validator::consensus::ValidatorSessionOptions options{config};
@@ -62,9 +78,7 @@ Vector make_vector() {
       .session_config_hash = {},
       .session_id = {},
   };
-  auto identity = block::derive_validator_session_identity(
-      vector.global_id, vector.options_hash, td::Bits256{cell->get_hash().bits()}, vector.shard, vector.catchain_seqno,
-      {vector.validator}, vector.vertical_seqno, vector.key_seqno, true);
+  auto identity = block::derive_validator_session_identity(identity_input(vector));
   vector.session_config_hash = identity.session_config_hash;
   vector.session_id = identity.session_id;
   return vector;
@@ -85,18 +99,122 @@ std::string render(const Vector& vector) {
   return out.str();
 }
 
+int check_manager_assembly_inputs(const Vector& vector) {
+  const auto expected = block::derive_validator_session_identity(identity_input(vector));
+  if (expected.session_config_hash.to_hex() !=
+          "9596398C00EBC759D5BC0E25A98D4359EE1062A42D9B40CBDABA1A03B28B0883" ||
+      expected.session_id.to_hex() != "F365B81E5D8FB9705FAA85C60665C9B75F8CF82AAF575E149C3EAC4E50B02276") {
+    std::fprintf(stderr, "MANAGER_SESSION_ASSEMBLY_FROZEN_VECTOR_MISMATCH\n");
+    return 1;
+  }
+
+  auto changes_session = [&](block::ValidatorSessionIdentityInput changed, const char* field) {
+    if (block::derive_validator_session_identity(changed).session_id == expected.session_id) {
+      std::fprintf(stderr, "MANAGER_SESSION_ASSEMBLY_INPUT_NOT_BOUND field=%s\n", field);
+      return false;
+    }
+    return true;
+  };
+  auto input = identity_input(vector);
+  auto changed = input;
+  changed.global_id++;
+  if (!changes_session(std::move(changed), "global_id")) return 1;
+  changed = input;
+  changed.validator_options_hash.data()[0] ^= 1;
+  if (!changes_session(std::move(changed), "validator_options_hash")) return 1;
+  changed = input;
+  changed.simplex_config_cell_hash.data()[0] ^= 1;
+  if (!changes_session(std::move(changed), "simplex_config_cell_hash")) return 1;
+  changed = input;
+  changed.shard = tos::ShardIdFull{0, tos::shardIdAll};
+  if (!changes_session(std::move(changed), "shard")) return 1;
+  changed = input;
+  changed.catchain_seqno++;
+  if (!changes_session(std::move(changed), "catchain_seqno")) return 1;
+  changed = input;
+  changed.validators[0].validator_id.value.data()[0] ^= 1;
+  if (!changes_session(std::move(changed), "validators")) return 1;
+  changed = input;
+  changed.vertical_seqno++;
+  if (!changes_session(std::move(changed), "vertical_seqno")) return 1;
+  changed = input;
+  changed.last_key_block_seqno++;
+  if (!changes_session(std::move(changed), "last_key_block_seqno")) return 1;
+  changed = input;
+  changed.new_catchain_ids = false;
+  if (!changes_session(std::move(changed), "new_catchain_ids")) return 1;
+  return 0;
+}
+
+int check_real_state_global_id() {
+  std::ifstream input(SHARD_STATE_BOC_FILE, std::ios::binary);
+  std::ostringstream bytes;
+  bytes << input.rdbuf();
+  if (!input) {
+    std::fprintf(stderr, "SHARD_STATE_GLOBAL_ID_FIXTURE_READ_FAILURE file=%s\n", SHARD_STATE_BOC_FILE);
+    return 1;
+  }
+  td::BufferSlice data{bytes.str()};
+  auto root_r = vm::std_boc_deserialize(data.as_slice());
+  if (root_r.is_error()) {
+    std::fprintf(stderr, "SHARD_STATE_GLOBAL_ID_BOC_PARSE_FAILURE error=%s\n",
+                 root_r.error().message().str().c_str());
+    return 1;
+  }
+  auto root = root_r.move_as_ok();
+  block::gen::ShardStateUnsplit::Record header;
+  if (!block::gen::unpack_cell(root, header)) {
+    std::fprintf(stderr, "SHARD_STATE_GLOBAL_ID_HEADER_PARSE_FAILURE\n");
+    return 1;
+  }
+  block::ShardId parsed_shard{header.shard_id};
+  tos::RootHash root_hash{root->get_hash().bits()};
+  tos::FileHash file_hash;
+  file_hash.set_zero();
+  tos::BlockIdExt block_id{tos::BlockId{tos::ShardIdFull(parsed_shard), header.seq_no}, root_hash, file_hash};
+  auto state_r = tos::validator::ShardStateQ::fetch(block_id, data.clone());
+  if (state_r.is_error()) {
+    std::fprintf(stderr, "SHARD_STATE_GLOBAL_ID_FETCH_FAILURE error=%s\n",
+                 state_r.error().message().str().c_str());
+    return 1;
+  }
+  // Frozen independently of the session vector: this tracked state BOC is
+  // from network -17, while the session vector deliberately uses -239.
+  constexpr td::int32 expected_global_id = -17;
+  if (header.global_id != expected_global_id || state_r.ok()->get_global_id() != expected_global_id) {
+    std::fprintf(stderr, "SHARD_STATE_GLOBAL_ID_MISMATCH header=%d accessor=%d expected=%d\n", header.global_id,
+                 state_r.ok()->get_global_id(), expected_global_id);
+    return 1;
+  }
+  return 0;
+}
+
 int check(const char* path, td::Slice only) {
   if (!only.empty() && only != "param30" && only != "global-id" && only != "local-override" &&
-      only != "governing-snapshot" && only != "session-path" && only != "constructor-selection") {
+      only != "governing-snapshot" && only != "session-path" && only != "constructor-selection" &&
+      only != "manager-assembly" && only != "state-global-id") {
     std::fprintf(stderr, "UNKNOWN_SESSION_DERIVATION_CHECK name=%s\n", only.str().c_str());
     return 2;
   }
   auto vector = make_vector();
+  if (only == "manager-assembly") {
+    return check_manager_assembly_inputs(vector);
+  }
+  if (only == "state-global-id") {
+    return check_real_state_global_id();
+  }
   std::ifstream input(path, std::ios::binary);
   std::ostringstream contents;
   contents << input.rdbuf();
   if (!input || contents.str() != render(vector)) {
     std::fprintf(stderr, "SESSION_DERIVATION_VECTOR_MISMATCH file=%s\n", path);
+    return 1;
+  }
+
+  if (only.empty() && check_manager_assembly_inputs(vector) != 0) {
+    return 1;
+  }
+  if (only.empty() && check_real_state_global_id() != 0) {
     return 1;
   }
 

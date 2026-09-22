@@ -3251,11 +3251,17 @@ void ValidatorManagerImpl::update_shards() {
           continue;
         }
         ++(shard.is_masterchain() ? active_validator_groups_master_ : active_validator_groups_shard_);
-        auto val_group_id =
-            block::derive_validator_session_identity(
-                global_id, opts_hash, selected_config.value().cell_hash, shard, val_set->get_catchain_seqno(),
-                val_set->export_vector(), opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
-                .session_id;
+        auto val_group_id = block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
+                                .global_id = global_id,
+                                .validator_options_hash = opts_hash,
+                                .simplex_config_cell_hash = selected_config.value().cell_hash,
+                                .shard = shard,
+                                .catchain_seqno = val_set->get_catchain_seqno(),
+                                .validators = val_set->export_vector(),
+                                .vertical_seqno = opts_->get_maximal_vertical_seqno(),
+                                .last_key_block_seqno = key_seqno,
+                                .new_catchain_ids = opts.new_catchain_ids,
+                            }).session_id;
         if (destroyed_validator_sessions_.contains(val_group_id)) {
           continue;
         }
@@ -3327,11 +3333,17 @@ void ValidatorManagerImpl::update_shards() {
                    << ": consensus config is missing or its protocol version is not supported by this build";
         continue;
       }
-      auto val_group_id =
-          block::derive_validator_session_identity(
-              global_id, opts_hash, selected_config.value().cell_hash, shard, val_set->get_catchain_seqno(),
-              val_set->export_vector(), opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
-              .session_id;
+      auto val_group_id = block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
+                              .global_id = global_id,
+                              .validator_options_hash = opts_hash,
+                              .simplex_config_cell_hash = selected_config.value().cell_hash,
+                              .shard = shard,
+                              .catchain_seqno = val_set->get_catchain_seqno(),
+                              .validators = val_set->export_vector(),
+                              .vertical_seqno = opts_->get_maximal_vertical_seqno(),
+                              .last_key_block_seqno = key_seqno,
+                              .new_catchain_ids = opts.new_catchain_ids,
+                          }).session_id;
       if (destroyed_validator_sessions_.contains(val_group_id)) {
         continue;
       }
@@ -3370,11 +3382,17 @@ void ValidatorManagerImpl::update_shards() {
         LOG(ERROR) << "refusing to create observer groups for " << shard.to_str() << ": " << usable.move_as_error();
         continue;
       }
-      auto session_id =
-          block::derive_validator_session_identity(
-              global_id, opts_hash, selected_config.value().cell_hash, shard, val_set->get_catchain_seqno(),
-              val_set->export_vector(), opts_->get_maximal_vertical_seqno(), key_seqno, opts.new_catchain_ids)
-              .session_id;
+      auto session_id = block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
+                            .global_id = global_id,
+                            .validator_options_hash = opts_hash,
+                            .simplex_config_cell_hash = selected_config.value().cell_hash,
+                            .shard = shard,
+                            .catchain_seqno = val_set->get_catchain_seqno(),
+                            .validators = val_set->export_vector(),
+                            .vertical_seqno = opts_->get_maximal_vertical_seqno(),
+                            .last_key_block_seqno = key_seqno,
+                            .new_catchain_ids = opts.new_catchain_ids,
+                        }).session_id;
       for (auto local_adnl_id : get_observer_adnl_ids(val_set)) {
         ObserverGroupId observer_id{session_id, local_adnl_id};
         ValidatorGroupEntry entry;

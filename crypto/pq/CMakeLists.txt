@@ -113,11 +113,15 @@ if(TARGET tos_crypto)
   add_executable(validator-session-derivation-vectors-gen
     "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-session-derivation-vectors-gen.cpp")
   set_target_properties(validator-session-derivation-vectors-gen PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+  target_include_directories(validator-session-derivation-vectors-gen PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../common")
   target_link_libraries(validator-session-derivation-vectors-gen PRIVATE validator tos_block tos_crypto tl-utils)
+  target_compile_definitions(validator-session-derivation-vectors-gen PRIVATE
+    SHARD_STATE_BOC_FILE="${CMAKE_CURRENT_SOURCE_DIR}/../../tosctl/src/block/src/tests/data/shard_state.boc")
   add_test(NAME validator-session-derivation
     COMMAND validator-session-derivation-vectors-gen
             "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-session-derivation-vectors.tsv")
-  foreach(check_name param30 global-id local-override governing-snapshot session-path constructor-selection)
+  foreach(check_name param30 global-id local-override governing-snapshot session-path constructor-selection
+                     manager-assembly state-global-id)
     add_test(NAME validator-session-${check_name}
       COMMAND validator-session-derivation-vectors-gen
               "${CMAKE_CURRENT_SOURCE_DIR}/../../test/pq-native/validator-session-derivation-vectors.tsv"

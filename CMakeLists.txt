@@ -1262,6 +1262,8 @@ add_test(NAME frozen-boc-toolchain-resolution
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-frozen-boc-toolchain.sh ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME quic-ctest-isolation-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-quic-ctest-isolation.sh ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME validator-session-assembly-source
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-validator-session-assembly.sh ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME regression-fixture-concurrency
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-regression-concurrency.sh
           ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
