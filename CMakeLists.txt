@@ -700,6 +700,7 @@ add_test(
   NAME test-quorum-static-grep
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-quorum-static.sh
           ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(test-quorum-static-grep PROPERTIES LABELS "source-guard")
 
 add_executable(test-overlay test/test-overlay.cpp)
 target_link_libraries(test-overlay overlay tdutils tdactor adnl adnltest tl_api dht )
@@ -1203,8 +1204,10 @@ tos_test(test-validator-transport-authority)
 tos_test(test-pending-finality-cache)
 add_test(NAME finality-evidence-admission-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-evidence-admission.sh ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(finality-evidence-admission-source PROPERTIES LABELS "source-guard")
 add_test(NAME pending-finality-retry-policy-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-retry-policy.sh ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(pending-finality-retry-policy-source PROPERTIES LABELS "source-guard")
 tos_test(test-pq-lite-forward-proof)
 tos_test(test-download-next-blocks-validation)
 tos_test(test-ext-message-pool)
@@ -1230,6 +1233,7 @@ if (Python3_Interpreter_FOUND)
   add_test(NAME jsonrpc-route-gating
            COMMAND ${Python3_EXECUTABLE}
                    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-jsonrpc-route-gating.py)
+  set_tests_properties(jsonrpc-route-gating PROPERTIES LABELS "source-guard")
 endif()
 tos_test(test-http-server-limits)
 tos_test(test-wallet-message-processor)
@@ -1258,31 +1262,26 @@ set_tests_properties(test-tddb PROPERTIES ENVIRONMENT
 tos_regression_test(test-db)
 add_test(NAME benchmark-exclusion-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-benchmark-exclusion.sh ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(benchmark-exclusion-source PROPERTIES LABELS "source-guard")
 add_test(NAME frozen-boc-toolchain-resolution
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-frozen-boc-toolchain.sh ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(frozen-boc-toolchain-resolution PROPERTIES LABELS "source-guard")
 add_test(NAME quic-ctest-isolation-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-quic-ctest-isolation.sh ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(quic-ctest-isolation-source PROPERTIES LABELS "source-guard")
 add_test(NAME validator-session-assembly-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-validator-session-assembly.sh ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(validator-session-assembly-source PROPERTIES LABELS "source-guard")
 add_test(NAME regression-fixture-concurrency
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-regression-concurrency.sh
           ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 # Keep cheap source-only policy checks visible on every branch and pull
-# request, independently of the native build.  The workflow selects this
-# label, so a newly labelled guard joins it without a second YAML inventory.
-# regression-fixture-concurrency is intentionally absent: despite its name it
-# executes test-fift and test-cells, and therefore requires build artifacts.
-set_tests_properties(
-  test-quorum-static-grep
-  finality-evidence-admission-source
-  pending-finality-retry-policy-source
-  benchmark-exclusion-source
-  frozen-boc-toolchain-resolution
-  quic-ctest-isolation-source
-  validator-session-assembly-source
-  jsonrpc-route-gating
-  PROPERTIES LABELS "source-guard")
+# request, independently of the native build. Each guard owns its label next
+# to its add_test(), so a newly registered guard cannot require a second YAML
+# inventory and a branch cannot label a test it does not define.
+# regression-fixture-concurrency is intentionally unlabelled: despite its name
+# it executes test-fift and test-cells, and therefore requires build artifacts.
 
 # Network-safety regressions. test-quic-sender is a multi-suite binary (it also
 # holds large-scale/fairness suites that must not gate every change), so the
