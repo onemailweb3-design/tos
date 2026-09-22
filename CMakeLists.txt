@@ -818,6 +818,12 @@ target_compile_definitions(n6-microbench PRIVATE
   N6_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
   N6_COMPILER="${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}")
 
+add_executable(n6-microbench-smoke test/pq-native/n6-microbench-smoke.cpp)
+target_include_directories(n6-microbench-smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                           ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
+target_link_libraries(n6-microbench-smoke PRIVATE validator tos_block tos_crypto tos_pq_consensus_signer
+                      tos_pq_consensus tl_api tl_lite_api tl-lite-utils tdutils tdactor)
+
 add_executable(test-pq-lite-forward-proof test/pq-native/pq-lite-forward-proof-test.cpp)
 target_include_directories(test-pq-lite-forward-proof PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                            ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
@@ -1241,6 +1247,12 @@ add_test(NAME n6-microbench-results
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-n6-microbench-results.py
           ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(n6-microbench-results PROPERTIES LABELS "source-guard")
+add_test(NAME n6-microbench-smoke
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-n6-microbench-smoke.py
+          --binary $<TARGET_FILE:n6-microbench-smoke>
+          --baseline ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-microbench-smoke-baseline.json
+          --vectors ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/block-signature-carrier-measurements.tsv)
+set_tests_properties(n6-microbench-smoke PROPERTIES LABELS "n6-microbench-smoke")
 add_test(NAME n6-cluster-runner
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-cluster-runner-test.py)
 set_tests_properties(n6-cluster-runner PROPERTIES

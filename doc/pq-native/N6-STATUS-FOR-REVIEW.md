@@ -167,6 +167,39 @@ All N6.3 output remains `DIAGNOSTIC_SCAFFOLDING_ONLY`, explicitly ineligible
 for release evidence, and makes no consensus-correctness verdict while the
 Merkle sequencing diagnosis and parked N5 gaps remain open.
 
+## N6 performance-regression smoke
+
+Registered gate: `n6-microbench-smoke` (label `n6-microbench-smoke`). The
+branch/PR workflow builds its Release executable before selecting the label
+with `--no-tests=error`; it is not a source guard and cannot pass from a
+configure-only build.
+
+The smoke subset exercises production ML-DSA signing and verification, 21-
+and 100-signer N4 certificate verification, frozen 21/100-signer #13 and
+BlockProof BOC sizes, 21-signer #13 verification, and lite SignatureSet
+verification. Exact frozen sizes, verifier-boundary operation counts and the
+401-signer structural refusal are deterministic failures. Timing uses 100
+samples and same-run single-verification normalization; only the configured
+large ratios fail, so ordinary scheduler noise and small changes do not turn
+ordinary CI red. This is regression evidence, not release acceptance or a
+replacement for the dedicated same-machine scheduled benchmark in section
+13.2.
+
+The exact-size expectations come directly from the existing frozen
+`block-signature-carrier-measurements.tsv` rows rather than a copied smoke
+baseline. The smoke baseline contains only operation-count and normalized
+large-regression policy.
+
+Mutation evidence:
+
+| Mutation | Outcome |
+|---|---|
+| Increase frozen `n5_13_boc_21` by one byte | Red: `N6_MICROBENCH_SMOKE_FAILURE: size vector n5_13_boc_21 changed: expected 53788, got 53787` |
+| Add one extra ML-DSA verification to every 21-signer #13 verification | Red: `N6_MICROBENCH_SMOKE_FAILURE: operation count drift for proof_verify_21: expected 2100, got 2200` |
+| Raise both production 400-signer guards to 401 | Red: `N6_MICROBENCH_SMOKE_FAILURE: structural cap was not enforced: maximum=400 tested=401 refused=False` |
+| Increase the 21-signer certificate p95 result by 3% | Green: ordinary small timing movement remains below the configured large-regression ratio |
+| Set the normalized 21-signer certificate p95 ratio to 4.0 | Red: `N6_MICROBENCH_SMOKE_FAILURE: large timing regression certificate_verify_21_per_signature_over_single_verify_p95: normalized p95 4.000 exceeds 3.000` |
+
 ## Evidence boundary
 
 The N6.2 result above is diagnostic feasibility evidence only. No release-grade
