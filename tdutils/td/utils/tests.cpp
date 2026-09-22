@@ -53,14 +53,11 @@ class RegressionTesterImpl : public RegressionTester {
 
   RegressionTesterImpl(string db_path, string db_cache_dir) : db_path_(db_path), db_cache_dir_(db_cache_dir) {
     load_db(db_path, tests_).ignore();
+    // The answer file is the shared resource, so every writer to the same path
+    // must derive the same lock regardless of where that caller keeps its cache.
+    db_lock_path_ = db_path_ + ".lock";
     if (db_cache_dir_.empty()) {
       db_cache_dir_ = PathView(db_path).without_extension().str() + ".cache/";
-      db_lock_path_ = db_path_ + ".lock";
-    } else {
-      // Registered tests keep their per-binary caches in one build directory.
-      // Put the shared answer-file lock there too, rather than leaving a build
-      // artifact beside the tracked answer file in the source tree.
-      db_lock_path_ = PathView(db_cache_dir_).parent_dir().str() + "regression-tests.lock";
     }
     mkdir(db_cache_dir_).ensure();
   }
