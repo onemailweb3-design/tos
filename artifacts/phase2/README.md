@@ -1,13 +1,18 @@
 # Phase-2 ceremony — open participation
 
-**Status: two contributions are signed and verified, neither of them
+**Status: three contributions are signed and verified, none of them
 independent of the operator; registration remains open. Parameters are not
 finalised and must not be deployed.**
 
 Because no contribution yet comes from a party outside the operator's control,
 `verify-attestations.py` refuses this ceremony at its final gate. That refusal
 is the correct answer today, and it stays correct until somebody outside
-contributes.
+contributes. Adding further operator-run contributions will not change it: the
+count is not what the rule asks about.
+
+[Contribution 3 and verification evidence](CONTRIBUTION-3.md);
+[download the public bundle](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-3);
+[server publication receipt](contribution-3-publication-receipt.json).
 
 [Contribution 2 and verification evidence](CONTRIBUTION-2.md);
 [download the public bundle](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-2);
@@ -112,7 +117,7 @@ acceptance conditions; neither needs to be arranged before the first contributio
 | Publish and retain announcement snapshot and publication receipt | completed before opening |
 | Register tosman and its new public signing key | public key and initial register published |
 | Open and accept the first signed contribution | completed: tosman, not independent |
-| Register and accept additional participants | open: tosdev2 registered and accepted, also not independent |
+| Register and accept additional participants | open: tosdev2 and tosdev3 registered and accepted, neither independent |
 | Accept a contribution from an independent party | **not done; the final gate refuses without it** |
 | Close, apply the announced beacon, verify and accept | only after all final gates pass |
 
@@ -128,6 +133,8 @@ keys or contributions; publish additions with their history.
 - [keys/tosman.md](keys/tosman.md): first contributor's public signing identity.
 - [keys/tosdev2.md](keys/tosdev2.md): second contributor's public signing
   identity, and what is missing from it.
+- [keys/tosdev3.md](keys/tosdev3.md): third contributor's public signing
+  identity, on a differently hosted machine, and what that does not change.
 
 The published announcement and publication receipt identify the opening.
 The beacon and final verification results appear only after closing.
