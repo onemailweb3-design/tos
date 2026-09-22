@@ -2048,9 +2048,9 @@ Mainnet/testnet activation is blocked until all are true:
     or a changed liability.
 12. **Backing:** after every deposit/transfer/withdraw-success/withdraw-bounce path:
     §actual_balance >= native_liability + reserve_floor§.
-13. **Withdrawal boundary/fee:** a withdrawal with `public_amount_out` not in the immutable denomination list is rejected; configured fee must cover current exact outbound forward fee + bounded bounce-recovery compute + margin; changing fee public input away from config fails.
+13. **Withdrawal boundary/fee:** a withdrawal with `public_amount_out` not in the immutable denomination list is rejected; configured fee must cover the current exact outbound forward fee + margin, and **must be measured against a forwarding price the chain could return to, not only today's** -- the fee is immutable while the check reads live prices; changing fee public input away from config fails. The bounded bounce-recovery compute was part of this floor until 2026-09-22 and is now charged to the recovered amount (§15.4), so a gate that still required it here would be requiring the thing that change removed.
 14. **Real rich bounce:** execute an actual pool outbound -> destination failure -> protocol-generated rich bounce.
-    Recovery liability/note amount equals the **actual bounced msg_value**, never original principal when value was lost.
+    Recovery liability/note amount equals the **actual bounced msg_value less §15.4's recovery charge**, never the original principal when value was lost, and never the gross bounced value -- minting the gross would pay for the recovery out of other users' reserve.
 15. **No bounce subsidy:** a destination deliberately burning part of the withdrawal before failure cannot make the
     pool mint/restore the burned difference from other users' reserve.
 16. **Bounce authenticity:** ordinary SENDRAWMSG cannot create the accepted bounced path; synthetic §bounced=true§
@@ -2073,7 +2073,7 @@ Mainnet/testnet activation is blocked until all are true:
 26. **Descriptor forced reuse:** two valid notes sent to one descriptor are both recovered/imported, the index is
     marked reused and never reissued; privacy-degraded state is surfaced.
 27. **Bounce dust boundary:** a real round trip measures the minimum bounced value that can complete pre-ACCEPT
-    authentication. Sub-threshold bounces never mint; above-threshold recovery mints exactly authenticated `msg_value`.
+    authentication **and the §15.4 charge, asserting which of the two binds** -- since 2026-09-22 the charge is about twenty times the authentication, so it is the charge. Sub-threshold bounces never mint; above-threshold recovery mints exactly the authenticated `msg_value` less that charge.
 28. **Circuit scalar hygiene:** `intent_nonce=0` and any real/dummy output `note_secret=0` fail the circuit; removing either non-zero constraint is killed by a targeted mutation.
 29. **Withdrawal denomination:** every configured denomination succeeds in the boundary check; one-less/one-more and arbitrary non-list values fail before payout even with an otherwise valid proof.
 30. **Cross-domain key separation:** with the same mnemonic and same `note_key_index`, two distinct execution domains derive different owner-NF keys, ML-DSA public keys and ML-KEM encapsulation keys; using a descriptor under the wrong domain fails.
