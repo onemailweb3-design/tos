@@ -25,6 +25,16 @@
         "principal": "tosdev2",
         "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINx6XqU3Sb5onu45b+zca46ExobrX/IpTA5ko01ciP4+ tosdev2"
       }
+    },
+    {
+      "name": "tosdev3",
+      "affiliation": "community",
+      "independent_of_operator": false,
+      "key": {
+        "type": "ssh",
+        "principal": "tosdev3",
+        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIGO+tG+3hWO0eGRtT3D8wR4TLMET35jRWpF8ZSXZiZT tosdev3"
+      }
     }
   ]
 }
