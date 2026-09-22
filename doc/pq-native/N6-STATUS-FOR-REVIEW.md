@@ -393,3 +393,24 @@ forked node at height 7. Removing the full-block-id comparison makes the gate
 fail with `nodes on different masterchain blocks were reported as agreeing`.
 It also pins per-node final heights, the interval distribution, and the
 individual slow-interval record rather than accepting an average.
+
+## Four-validator sustained functional regression
+
+The existing `test/integration/test_basic.py` remains the single wallet
+functional regression rather than being forked for N6. Its committee size and
+sustained window are now explicit inputs, defaulting to four PQ validators and
+ten additional masterchain blocks. The default invocation remains in the
+native integration workflow and exercises wallet deployment/transfer, the
+destination balance change, source-wallet seqno advancement, and validator
+actor statistics and performance counters before entering the sustained
+observer above.
+
+The runner refuses committee sizes outside 4..21, verifies that the requested
+size controls both the created node count and Genesis shard committee size,
+and emits the same full-block-id agreement and per-node progress evidence for
+the sustained window. A local default run booted four requested validators,
+completed the wallet assertions, produced ten additional masterchain blocks,
+and left all four nodes at the same final height with full block-id agreement
+at every height checked. This is `COLOCATED_DIAGNOSTIC_ONLY` functional
+coverage and is explicitly ineligible for release evidence; it neither closes
+the open Merkle question nor substitutes for independent-host measurements.

@@ -226,7 +226,7 @@ def validate_lite_transport_source(source_root: Path) -> None:
         )
 
 
-def _block_id_text(block: Any) -> str:
+def block_id_text(block: Any) -> str:
     shard = block.shard if block.shard >= 0 else block.shard + 2**64
     return (
         f"({block.workchain},{shard:016x},{block.seqno}):"
@@ -301,7 +301,7 @@ async def require_agreed_masterchain_block(clients: dict[str, Any], height: int)
             for client in clients.values()
         )
     )
-    by_node = {name: _block_id_text(block) for name, block in zip(clients, blocks, strict=True)}
+    by_node = {name: block_id_text(block) for name, block in zip(clients, blocks, strict=True)}
     distinct = set(by_node.values())
     if len(distinct) != 1:
         details = ", ".join(f"{name}={block_id}" for name, block_id in by_node.items())
@@ -559,7 +559,7 @@ async def run_cluster(
         await _wait_all_heights(all_nodes, 3, 120.0)
         sustained_result = (
             await observe_sustained_consensus(
-                all_nodes, sustained, _block_id_text(network.zerostate.as_block())
+                all_nodes, sustained, block_id_text(network.zerostate.as_block())
             )
             if sustained is not None
             else None
@@ -580,7 +580,7 @@ async def run_cluster(
         if require_lite:
             config_path = verifier.directory / "n6-lite-client.json"
             config_path.write_text(verifier.liteserver_config.to_json())
-            command = f"blkproofchain {_block_id_text(network.zerostate.as_block())}"
+            command = f"blkproofchain {block_id_text(network.zerostate.as_block())}"
             started_ns = time.monotonic_ns()
             process = await backend.spawn(
                 verifier.name,
