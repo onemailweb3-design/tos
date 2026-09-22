@@ -84,7 +84,13 @@
 //! random beacon. It adds no secrecy -- everybody can recompute it -- and its
 //! only property is that no participant could have predicted it while
 //! contributing, which holds only if the beacon was **named before the
-//! ceremony began**. No code can check that. What [`verify_beacon_step`] does
+//! ceremony began**. No code can check that.
+//!
+//! **It does not rescue a ceremony whose participants all colluded.** The
+//! final `delta` is `d_1 * ... * d_n * d_beacon`, and `d_beacon` is a hash of
+//! published bytes that anyone can compute -- so a coalition holding every
+//! `d_i` holds the product. Security rests on one participant having
+//! destroyed their scalar, beacon or no beacon. What [`verify_beacon_step`] does
 //! check is that the step really is the one those bytes determine, by
 //! recomputing it and comparing bytes: a participant-chosen scalar wearing the
 //! beacon's name passes [`verify_chain`] perfectly well.
@@ -422,12 +428,19 @@ fn beacon_scalar(beacon: &[u8], purpose: &[u8]) -> Result<Fr> {
 ///
 /// It adds **no secrecy at all**. The scalar is a hash of published bytes and
 /// anybody can recompute it, so a ceremony consisting only of this step is
-/// worth nothing. What it removes is a different worry: that every participant
-/// colluded, or that they were all one person. None of them could have
-/// predicted the beacon while they were contributing, so the final `delta`
-/// depends on a value that was not available to anyone during the ceremony --
-/// which is why the beacon has to be **named and fixed before the ceremony
-/// starts**, and why one chosen afterwards is decoration.
+/// worth nothing.
+///
+/// It also does **not** rescue a ceremony whose participants all colluded.
+/// The final `delta` is `d_1 * ... * d_n * d_beacon`; a coalition holding
+/// every `d_i` can compute `d_beacon` like anyone else, so it holds the
+/// product. **Security rests entirely on one participant having destroyed
+/// their scalar**, and nothing here changes that.
+///
+/// What it does add is that the finished parameters depend on a value nobody
+/// could have predicted while contributing, so no participant could steer
+/// `delta` towards something prepared in advance. That property holds only if
+/// the beacon was **named and fixed before the ceremony started**; one chosen
+/// afterwards is decoration, and no code can check which happened.
 ///
 /// # Deterministic, and that is the check
 ///

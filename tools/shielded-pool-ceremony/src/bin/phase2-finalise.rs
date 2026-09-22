@@ -14,9 +14,16 @@
 //!
 //! **No secrecy.** The scalar is a hash of the bytes in `<beacon-file>` and
 //! anybody can recompute it; a ceremony consisting only of this step is worth
-//! nothing. What it removes is a different worry -- that every participant
-//! colluded, or was one person -- because none of them could have predicted
-//! the beacon while they were contributing.
+//! nothing.
+//!
+//! **And it does not rescue a ceremony whose participants all colluded.** The
+//! final `delta` is every contribution's scalar multiplied together with this
+//! one, and this one is public -- a coalition holding the rest holds the
+//! product. Security rests on one participant having destroyed their scalar.
+//!
+//! What it does add is that the finished parameters depend on a value nobody
+//! could have predicted while contributing, so no participant could steer
+//! `delta` towards something prepared in advance.
 //!
 //! That is a claim about *when* the beacon was fixed, and no program can check
 //! it. **The beacon has to be named before the ceremony opens**: which source,

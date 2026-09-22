@@ -421,9 +421,18 @@ it.
 
 `finalise` applies a last contribution whose scalar is a hash of a **public
 random beacon**. It adds no secrecy — anybody can recompute the scalar — and a
-ceremony consisting only of it is worth nothing. What it removes is the worry
-that every participant colluded, or was one person: none of them could have
-predicted the beacon while contributing.
+ceremony consisting only of it is worth nothing.
+
+**It also does not rescue a ceremony whose participants all colluded**, and an
+earlier version of this page said it did. The final `delta` is
+`d_1 · … · d_n · d_beacon`, and `d_beacon` is a hash of published bytes: a
+coalition holding every `d_i` can compute it like anyone else, so it holds the
+product. **Security rests entirely on at least one participant having
+destroyed their scalar**, with or without a beacon.
+
+What the beacon does add is that the finished parameters depend on a value
+nobody could have predicted while contributing, so no participant could steer
+`delta` towards something prepared in advance.
 
 That property is procedural, and the code cannot check it. **The beacon has to
 be named and fixed before the ceremony starts**; one chosen afterwards is
