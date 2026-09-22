@@ -135,21 +135,27 @@ int main() {
     return 1;
   }
   tos::validator::PendingFinalityStore<int, int, int> total_budget_check;
-  constexpr std::size_t senders_fitting_total = tos::validator::pending_finality_total_budget_bytes /
-                                                 tos::validator::pending_finality_sender_budget_bytes;
-  for (std::size_t i = 0; i < senders_fitting_total; ++i) {
+  for (std::size_t i = 0; i < tos::validator::pending_finality_max_senders - 1; ++i) {
     if (!total_budget_check
              .admit(static_cast<int>(i), static_cast<int>(i), static_cast<int>(i),
                     tos::validator::pending_finality_sender_budget_bytes, false, true)
              .admitted()) {
-      std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: store rejected bytes below its 16777216-byte budget\n";
+      std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: an authenticated sender lost its reserved share\n";
       return 1;
     }
   }
+  if (!total_budget_check
+           .admit(static_cast<int>(tos::validator::pending_finality_max_senders - 1),
+                  static_cast<int>(tos::validator::pending_finality_max_senders - 1), 1,
+                  tos::validator::pending_finality_sender_budget_bytes, false, true)
+           .admitted()) {
+    std::cerr << "PENDING_FINALITY_HONEST_SHARE_FAILURE: earlier Byzantine senders excluded the final validator\n";
+    return 1;
+  }
   if (total_budget_check
-          .admit(99, 99, 99, tos::validator::pending_finality_minimum_charge_bytes, false, true)
+          .admit(1001, 1001, 1001, tos::validator::pending_finality_minimum_charge_bytes, false, true)
           .rejection != tos::validator::PendingFinalityRejection::TotalBudget) {
-    std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: store exceeded its 16777216-byte budget\n";
+    std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: store exceeded its validator-set-sized byte budget\n";
     return 1;
   }
 
@@ -271,6 +277,8 @@ int main() {
   std::cout << "PENDING_FINALITY_INGRESS_OK: missing accounting fails closed and authenticated senders retain attribution\n";
   std::cout << "PENDING_FINALITY_TRANSPORT_DEDUP_OK: evidence-distinct finalities have distinct transport ids\n";
   std::cout << "PENDING_FINALITY_SENDER_ISOLATION_OK: four bad arrivals from one sender did not exclude another sender\n";
-  std::cout << "PENDING_FINALITY_BYTE_BUDGET_OK: total=16777216 per_sender=1048576 minimum_charge=4096\n";
+  std::cout << "PENDING_FINALITY_BYTE_BUDGET_OK: total="
+            << tos::validator::pending_finality_total_budget_bytes << " per_sender=1048576 minimum_charge=4096"
+            << " sender_shares=" << tos::validator::pending_finality_max_senders << "\n";
   return 0;
 }

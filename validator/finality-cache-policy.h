@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "common/errorcode.h"
+#include "crypto/pq/pq-consensus.h"
 
 namespace tos::validator {
 
@@ -72,9 +73,18 @@ struct PendingFinalityAdmissionResult {
 // entries use their measured intrinsic signature bytes. A minimum charge for
 // either source bounds both memory and object count: at most 4096
 // minimum-sized candidates can be pending globally.
-inline constexpr std::size_t pending_finality_total_budget_bytes = 16 * 1024 * 1024;
 inline constexpr std::size_t pending_finality_sender_budget_bytes = 1024 * 1024;
 inline constexpr std::size_t pending_finality_minimum_charge_bytes = 4096;
+inline constexpr std::size_t pending_finality_max_senders = tos::pq::PQConsensusLimits{}.max_certificate_signers;
+static_assert(pending_finality_max_senders <=
+              std::numeric_limits<std::size_t>::max() / pending_finality_sender_budget_bytes);
+// A byte budget smaller than one full sender share per maximum-size validator
+// set lets distinct authenticated Byzantine validators consume every byte before
+// an honest validator arrives.  Keep the per-sender cap, but reserve one such
+// share for every authority that can belong to the target set.  This is a hard
+// upper bound, not a preallocation: the store only owns bytes actually received.
+inline constexpr std::size_t pending_finality_total_budget_bytes =
+    pending_finality_max_senders * pending_finality_sender_budget_bytes;
 
 // A verified cached value keeps the old strength policy: final replaces
 // approve, while equal strength and downgrades keep the verified value.
