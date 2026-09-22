@@ -2912,7 +2912,7 @@ bool ValidatorManagerImpl::out_of_sync() {
   bool masterchain_validator = false;
   if (!validator_groups_.size()) {
     auto val_set = last_masterchain_state_->get_validator_set(ShardIdFull{masterchainId});
-    if (!get_validator(ShardIdFull{masterchainId}, val_set).is_zero()) {
+    if (!get_validator_id(ShardIdFull{masterchainId}, val_set).is_zero()) {
       masterchain_validator = true;
     }
   }
@@ -3240,7 +3240,7 @@ void ValidatorManagerImpl::update_shards() {
       auto val_set = last_masterchain_state_->get_validator_set(shard);
       auto x = val_set->export_vector();
 
-      auto validator_id = get_validator(shard, val_set);
+      auto validator_id = get_validator_id(shard, val_set);
 
       if (!validator_id.is_zero()) {
         auto selected_config = last_masterchain_state_->get_selected_new_consensus_config(shard.workchain);
@@ -3311,10 +3311,7 @@ void ValidatorManagerImpl::update_shards() {
 
         if (shard.is_masterchain()) {
           mc_validator_adnl_id =
-              adnl::AdnlNodeIdShort{val_set->get_validator(tos::ValidatorId{validator_id.bits256_value()})->addr};
-          if (mc_validator_adnl_id.is_zero()) {
-            mc_validator_adnl_id = adnl::AdnlNodeIdShort{validator_id.bits256_value()};
-          }
+              adnl::AdnlNodeIdShort{block::validator_adnl_identity(*val_set->get_validator(validator_id))};
         }
       }
     }
@@ -3325,7 +3322,7 @@ void ValidatorManagerImpl::update_shards() {
       continue;
     }
 
-    auto validator_id = get_validator(shard, val_set);
+    auto validator_id = get_validator_id(shard, val_set);
     if (!validator_id.is_zero()) {
       auto selected_config = last_masterchain_state_->get_selected_new_consensus_config(shard.workchain);
       if (!selected_config || !selected_config.value().config.protocol_version_supported()) {
@@ -3350,10 +3347,7 @@ void ValidatorManagerImpl::update_shards() {
       get_or_make_next_group(shard, val_group_id, val_set, selected_config.value().config);
       if (shard.is_masterchain() && mc_validator_adnl_id.is_zero()) {
         mc_validator_adnl_id =
-            adnl::AdnlNodeIdShort{val_set->get_validator(tos::ValidatorId{validator_id.bits256_value()})->addr};
-        if (mc_validator_adnl_id.is_zero()) {
-          mc_validator_adnl_id = adnl::AdnlNodeIdShort{validator_id.bits256_value()};
-        }
+            adnl::AdnlNodeIdShort{block::validator_adnl_identity(*val_set->get_validator(validator_id))};
       }
     }
   }
@@ -3621,9 +3615,9 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
     NewConsensusConfig config, consensus::ValidatorSessionOptions opts, bool init_session) {
   td::actor::send_closure(ext_message_pool_, &ExtMessagePool::cleanup_external_messages, shard);
 
-  auto validator_id = get_validator(shard, validator_set);
+  auto validator_id = get_validator_id(shard, validator_set);
   CHECK(!validator_id.is_zero());
-  auto descr = validator_set->get_validator(tos::ValidatorId{validator_id.bits256_value()});
+  auto descr = validator_set->get_validator(validator_id);
   CHECK(descr);
   auto adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(*descr)};
 
@@ -3655,7 +3649,7 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
   // key the set records for us, or nothing. If we do not custody that exact key, we must not
   // start an active group with a key we cannot sign with -- refuse and stay a full node,
   // never fall back to the network keyring.
-  const tos::ValidatorId local_vid{validator_id.bits256_value()};
+  const tos::ValidatorId local_vid = validator_id;
   auto pq_signer = pq_custody_.get_matching_store(local_vid, *descr);
   if (pq_signer == nullptr) {
     LOG(ERROR) << "refusing to create validator group for " << shard.to_str()
@@ -4052,20 +4046,20 @@ bool ValidatorManagerImpl::has_local_validator_keys() {
 }
 
 bool ValidatorManagerImpl::validating_masterchain() {
-  return !get_validator(ShardIdFull(masterchainId),
-                        last_masterchain_state_->get_validator_set(ShardIdFull(masterchainId)))
+  return !get_validator_id(ShardIdFull(masterchainId),
+                           last_masterchain_state_->get_validator_set(ShardIdFull(masterchainId)))
               .is_zero();
 }
 
-PublicKeyHash ValidatorManagerImpl::get_validator(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set) {
+tos::ValidatorId ValidatorManagerImpl::get_validator_id(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set) {
   // Membership is decided by what this node custodies for a validator identity, not by
   // which Ed25519 keys happen to be installed. A node holding network or operator keys
   // and nothing else is not a consensus validator.
   auto member = local_consensus_member(*val_set, temp_keys_, permanent_keys_, pq_custody_);
   if (!member) {
-    return PublicKeyHash::zero();
+    return {};
   }
-  return PublicKeyHash{member->value};
+  return *member;
 }
 
 bool ValidatorManagerImpl::is_shard_collator(ShardIdFull shard) {

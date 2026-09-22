@@ -666,10 +666,10 @@ class ValidatorManagerImpl : public ValidatorManager {
   //
   // This is NOT consensus membership and must never be used as it. Holding an Ed25519
   // network or operator key says nothing about whether this node is a validator in a
-  // given set; get_validator() and local_consensus_member() answer that, from custody.
+  // given set; get_validator_id() and local_consensus_member() answer that, from custody.
   bool has_local_validator_keys();
   bool validating_masterchain();
-  PublicKeyHash get_validator(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set);
+  tos::ValidatorId get_validator_id(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set);
   bool is_shard_collator(ShardIdFull shard);
 
   ValidatorManagerImpl(td::Ref<ValidatorManagerOptions> opts, std::string db_root,

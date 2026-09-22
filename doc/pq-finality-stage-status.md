@@ -472,3 +472,11 @@ The following are gaps, not green claims.
    topology to the real `ShardTopBlockDescrQ::prevalidate` method.  Removing the
    production governing-state guard makes that gate red.  The surrounding actor's
    asynchronous state-history lookup remains outside the focused test.
+
+8. **Whole-project Python type checking is measured debt, not a gate.**
+   `uv run basedpyright` at this branch head reports 736 errors and 4,310
+   warnings across the configured `test/integration` and `test/tostester` trees.
+   This is not a tidy-up-sized remainder of the CI-gates work.  The workflow's
+   `python-types` job therefore remains manual and must not be presented as a
+   closure gate; converting it into one requires a separately scoped type-debt
+   project rather than suppressing or baseline-hiding the existing diagnostics.
