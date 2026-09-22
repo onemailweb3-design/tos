@@ -27,6 +27,24 @@ enum class PendingFinalityRejection {
   SharedBudget,
   ValidatorReservedBudget
 };
+
+constexpr const char *pending_finality_rejection_name(PendingFinalityRejection rejection) {
+  switch (rejection) {
+    case PendingFinalityRejection::None:
+      return "none";
+    case PendingFinalityRejection::Policy:
+      return "policy";
+    case PendingFinalityRejection::SenderAlreadyPending:
+      return "sender_already_pending";
+    case PendingFinalityRejection::SenderBudget:
+      return "sender_budget";
+    case PendingFinalityRejection::SharedBudget:
+      return "shared_budget";
+    case PendingFinalityRejection::ValidatorReservedBudget:
+      return "validator_reserved_budget";
+  }
+  return "unknown";
+}
 enum class PendingFinalityCapacity { Shared, ValidatorReserved };
 enum class PendingFinalityFailureAction { Retry, DiscardPermanent, DiscardExpired };
 

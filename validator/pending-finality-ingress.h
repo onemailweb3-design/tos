@@ -41,6 +41,18 @@ struct PendingBlockFinalitySender {
 
 enum class PendingFinalityIngressRejection { None, MissingRemoteByteCount, MissingLocalMeasurement };
 
+constexpr const char *pending_finality_ingress_rejection_name(PendingFinalityIngressRejection rejection) {
+  switch (rejection) {
+    case PendingFinalityIngressRejection::None:
+      return "none";
+    case PendingFinalityIngressRejection::MissingRemoteByteCount:
+      return "missing_remote_byte_count";
+    case PendingFinalityIngressRejection::MissingLocalMeasurement:
+      return "missing_local_measurement";
+  }
+  return "unknown";
+}
+
 struct PendingFinalityIngressDecision {
   PendingBlockFinalitySender sender;
   std::size_t accounted_bytes{0};

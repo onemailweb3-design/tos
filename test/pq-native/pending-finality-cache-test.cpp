@@ -1,4 +1,5 @@
 #include <chrono>
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -94,6 +95,33 @@ block::ShardConfig make_split_shard_config(tos::CatchainSeqno catchain_seqno, to
 }  // namespace
 
 int main() {
+  constexpr std::array ingress_rejection_names{
+      std::pair{tos::validator::PendingFinalityIngressRejection::None, "none"},
+      std::pair{tos::validator::PendingFinalityIngressRejection::MissingRemoteByteCount,
+                "missing_remote_byte_count"},
+      std::pair{tos::validator::PendingFinalityIngressRejection::MissingLocalMeasurement,
+                "missing_local_measurement"},
+  };
+  for (const auto &[rejection, expected] : ingress_rejection_names) {
+    if (std::string_view{tos::validator::pending_finality_ingress_rejection_name(rejection)} != expected) {
+      std::cerr << "PENDING_FINALITY_REJECTION_NAME_FAILURE: ingress rejection lost its stable name\n";
+      return 1;
+    }
+  }
+  constexpr std::array store_rejection_names{
+      std::pair{tos::validator::PendingFinalityRejection::None, "none"},
+      std::pair{tos::validator::PendingFinalityRejection::Policy, "policy"},
+      std::pair{tos::validator::PendingFinalityRejection::SenderAlreadyPending, "sender_already_pending"},
+      std::pair{tos::validator::PendingFinalityRejection::SenderBudget, "sender_budget"},
+      std::pair{tos::validator::PendingFinalityRejection::SharedBudget, "shared_budget"},
+      std::pair{tos::validator::PendingFinalityRejection::ValidatorReservedBudget, "validator_reserved_budget"},
+  };
+  for (const auto &[rejection, expected] : store_rejection_names) {
+    if (std::string_view{tos::validator::pending_finality_rejection_name(rejection)} != expected) {
+      std::cerr << "PENDING_FINALITY_REJECTION_NAME_FAILURE: store rejection lost its stable name\n";
+      return 1;
+    }
+  }
   if (tos::validator::pending_finality_failure_action(tos::ErrorCode::timeout, 0, 60) !=
       tos::validator::PendingFinalityFailureAction::Retry) {
     std::cerr << "PENDING_FINALITY_TIMEOUT_CLASSIFICATION_FAILURE: verification timeout was treated as permanent\n";
@@ -509,6 +537,7 @@ int main() {
     return 1;
   }
   std::cout << "PENDING_FINALITY_ORDER_OK: first cryptographically valid final accepted in both arrival orders\n";
+  std::cout << "PENDING_FINALITY_REJECTION_NAME_OK: ingress and store refusals have stable textual names\n";
   std::cout << "PENDING_FINALITY_RETRY_OK: notready retained valid evidence and a later attempt accepted it\n";
   std::cout << "PENDING_FINALITY_TIMEOUT_CLASSIFICATION_OK: verification timeout remains transient\n";
   std::cout << "PENDING_FINALITY_PERMANENT_OK: protocol violation was discarded without retry\n";

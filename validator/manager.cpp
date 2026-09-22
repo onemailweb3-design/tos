@@ -753,7 +753,8 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
                                                   local_signature_bytes);
   if (!ingress.admitted()) {
     VLOG(VALIDATOR_WARNING) << "dropping block finality broadcast with incomplete admission accounting: block="
-                            << block_id.to_str() << " rejection=" << static_cast<int>(ingress.rejection);
+                            << block_id.to_str()
+                            << " rejection=" << pending_finality_ingress_rejection_name(ingress.rejection);
     co_return td::Unit{};
   }
   // Classification was completed before the detached classical check: no
@@ -781,7 +782,7 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
   if (!admission.admitted()) {
     VLOG(VALIDATOR_DEBUG) << "dropping block finality broadcast because its sender-isolated byte-bounded store did "
                              "not admit it: block="
-                          << block_id.to_str() << " rejection=" << static_cast<int>(admission.rejection);
+                          << block_id.to_str() << " rejection=" << pending_finality_rejection_name(admission.rejection);
     co_return td::Unit{};
   }
   delay_action(

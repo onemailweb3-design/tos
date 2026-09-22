@@ -43,8 +43,14 @@ require_marker validator/manager.cpp \
   'if (!ingress.admitted()) {' \
   'manager no longer fails closed when ingress accounting rejects evidence'
 require_marker validator/manager.cpp \
+  'pending_finality_ingress_rejection_name(ingress.rejection)' \
+  'manager ingress rejection log no longer names its reason'
+require_marker validator/manager.cpp \
   'if (!admission.admitted()) {' \
   'manager no longer stops after the pending store rejects evidence'
+require_marker validator/manager.cpp \
+  'pending_finality_rejection_name(admission.rejection)' \
+  'manager pending-store rejection log no longer names its reason'
 require_marker validator/manager.cpp \
   'pending_finality_authority_memo_.get({shard, claimed_catchain_seqno}' \
   'manager no longer shares memoized validator sets between authority classification and classical verification'
@@ -102,6 +108,10 @@ require_marker validator/manager.cpp \
 
 if grep -qF 'serialize_tl_object(finality.sig_set->tl(), true)' "$root/validator/manager.cpp"; then
   echo "FINALITY_ADMISSION_SOURCE_FAILURE: manager reserializes remote finality before admission" >&2
+  failed=1
+fi
+if grep -qE 'rejection=.*static_cast<int>\(' "$root/validator/manager.cpp"; then
+  echo "FINALITY_ADMISSION_SOURCE_FAILURE: manager logs a finality rejection as a bare integer" >&2
   failed=1
 fi
 
