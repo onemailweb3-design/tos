@@ -55,6 +55,23 @@ Mutation evidence:
 The criteria file hash at the N6.1 implementation commit is
 `e975d7bf7cd69f43880411f04db62dfcd1e52a5c110e63f3248639c3fdfb3cc3`.
 
+### Threshold proposal and criteria-path deviation
+
+`N6-ACCEPTANCE-CRITERIA-PROPOSAL.json` derives review formulas from the
+authoritative ConfigParam30 timings, production verifier/query deadlines and
+the enforced N5 pending-finality resource bounds. It does not populate the
+live criteria and does not use an N6 measurement as the source of a threshold.
+Exactly two decision classes remain with the owner: the target release
+hardware profile and the headroom fractions applied to the source envelopes.
+
+The design document names `memo/pq-native/N6-ACCEPTANCE-CRITERIA.json`; the
+canonical implementation intentionally lives at
+`doc/pq-native/N6-ACCEPTANCE-CRITERIA.json` in this repository. The measurement
+manifest pins this repository's Git commit. Keeping its criteria input in the
+same repository makes the file content and its SHA-256 reproducible from that
+commit; a memo-repository file could not be pinned by the recorded commit. This
+is a deliberate design-path deviation, not a second criteria source.
+
 ## Evidence boundary
 
 All results above are deterministic scaffolding evidence. No N6.2 benchmark,

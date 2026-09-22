@@ -1219,6 +1219,9 @@ add_test(NAME n6-manifest-completeness
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/measurement-manifest-test.py)
 add_test(NAME n6-acceptance-criteria
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/measurement-acceptance-criteria-test.py)
+add_test(NAME n6-threshold-proposal
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-n6-threshold-proposal.py
+          ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME finality-evidence-admission-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-evidence-admission.sh ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME pending-finality-retry-policy-source
@@ -1302,6 +1305,7 @@ set_tests_properties(
   jsonrpc-route-gating
   n6-manifest-completeness
   n6-acceptance-criteria
+  n6-threshold-proposal
   PROPERTIES LABELS "source-guard")
 
 # Network-safety regressions. test-quic-sender is a multi-suite binary (it also
