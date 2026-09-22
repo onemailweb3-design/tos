@@ -105,7 +105,10 @@ if result.get("structural_401", {}).get("accepted") is not False:
 if [entry.get("validators") for entry in result.get("authority_classification", [])] != [21, 100, 400]:
     fail("authority-classification matrix is incomplete")
 for entry in result["authority_classification"]:
-    check_stats(f"authority/{entry['validators']}", entry["combined_miss_then_hit"])
+    if set(entry) != {"validators", "memo_miss_current_and_next", "memo_hit"}:
+        fail(f"authority/{entry['validators']} does not separate memo miss and hit")
+    check_stats(f"authority/{entry['validators']}/miss", entry["memo_miss_current_and_next"])
+    check_stats(f"authority/{entry['validators']}/hit", entry["memo_hit"])
 workers = [entry.get("workers") for entry in result.get("concurrency_sweep_100_signers", [])]
 if not workers or workers[0] != 1 or workers != sorted(set(workers)) or any(worker not in {1, 2, 4, 8, 16} for worker in workers):
     fail("bounded concurrency sweep is invalid")

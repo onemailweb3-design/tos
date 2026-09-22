@@ -3,8 +3,8 @@
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <cstring>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -19,13 +19,17 @@
 #include "auto/tl/tos_api.h"
 #include "crypto/block/block-auto.h"
 #include "crypto/block/block-parse.h"
+#include "crypto/block/mc-config.h"
 #include "crypto/block/signature-set.h"
 #include "crypto/pq/consensus-pq-signer.h"
 #include "crypto/pq/pq-bytes.h"
 #include "td/actor/actor.h"
 #include "td/utils/crypto.h"
-#include "tl-utils/tl-utils.hpp"
 #include "tl-utils/lite-utils.hpp"
+#include "tl-utils/tl-utils.hpp"
+#include "tos/quorum.h"
+#include "validator/consensus/bus.h"
+#include "validator/consensus/simplex/certificate.h"
 #include "validator/finality-cache-policy.h"
 #include "validator/pending-finality-ingress.h"
 #include "vm/boc.h"
@@ -33,6 +37,9 @@
 #include "vm/vm.h"
 
 namespace {
+
+namespace consensus = tos::validator::consensus;
+namespace simplex = tos::validator::consensus::simplex;
 
 using Clock = std::chrono::steady_clock;
 
@@ -53,6 +60,54 @@ td::Bits256 hash_of(std::string_view value) {
   td::Bits256 result;
   td::sha256(td::Slice(value.data(), value.size()), result.as_slice());
   return result;
+}
+
+td::BufferSlice frozen_patterned_signature(std::size_t signer) {
+  td::BufferSlice out(tos::pq::mldsa44_signature_bytes);
+  std::size_t offset = 0;
+  std::string seed = "persisted-pq-signature-" + std::to_string(signer);
+  while (offset < out.size()) {
+    const auto block = hash_of(seed);
+    const auto take = std::min<std::size_t>(32, out.size() - offset);
+    std::memcpy(out.data() + offset, block.data(), take);
+    offset += take;
+    seed.assign(reinterpret_cast<const char *>(block.data()), 32);
+  }
+  return out;
+}
+
+td::Ref<vm::Cell> frozen_signature_set_cell(std::size_t count) {
+  constexpr td::uint32 validator_set_hash = 0x31415926;
+  constexpr td::uint32 catchain_seqno = 1789434;
+  constexpr td::uint32 slot = 2718281;
+  const tos::BlockIdExt id{-1, 0x8000000000000000ULL, 42, hash_of("carrier-root"), hash_of("carrier-file")};
+  auto candidate = tos::create_tl_object<tos::tos_api::consensus_candidateHashDataEmpty>(
+      tos::create_tl_object<tos::tos_api::tosNode_blockIdExt>(id.id.workchain, static_cast<td::int64>(id.id.shard),
+                                                              id.id.seqno, id.root_hash, id.file_hash),
+      tos::create_tl_object<tos::tos_api::consensus_candidateId>(slot - 1, hash_of("carrier-parent")));
+  std::vector<block::PQBlockSignature> pairs;
+  pairs.reserve(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    pairs.push_back({tos::ValidatorId{hash_of("persisted-validator-" + std::to_string(i))},
+                     tos::pq::PQAlgorithmId::mldsa44, frozen_patterned_signature(i)});
+  }
+  return require_ok(block::BlockSignatureSet::serialize_simplex_pq(pairs, catchain_seqno, validator_set_hash, count,
+                                                                   hash_of("persisted-pq-block-signature-session"),
+                                                                   slot, std::move(candidate)),
+                    "frozen #13 size fixture");
+}
+
+td::Ref<vm::Cell> frozen_block_proof_cell(td::Ref<vm::Cell> signatures) {
+  const tos::BlockIdExt id{-1, 0x8000000000000000ULL, 42, hash_of("carrier-root"), hash_of("carrier-file")};
+  vm::CellBuilder proof_payload;
+  proof_payload.store_long(0x51, 8);
+  vm::CellBuilder root;
+  if (!(root.store_long_bool(0xc3, 8) && block::tlb::t_BlockIdExt.pack(root, id) &&
+        root.store_ref_bool(proof_payload.finalize()) && root.store_bool_bool(true) &&
+        root.store_ref_bool(std::move(signatures)))) {
+    fail("frozen BlockProof size fixture");
+  }
+  return root.finalize_novm();
 }
 
 tos::ConsensusKeyId key_id_of(const tos::pq::ConsensusPQKey &key) {
@@ -120,8 +175,8 @@ Stats measure(std::size_t warmup, std::size_t samples, Function &&function) {
 }
 
 void write_stats(std::ostream &out, const Stats &stats) {
-  out << "{\"samples\":" << stats.samples << ",\"p50_us\":" << stats.p50_us << ",\"p95_us\":"
-      << stats.p95_us << ",\"p99_us\":";
+  out << "{\"samples\":" << stats.samples << ",\"p50_us\":" << stats.p50_us << ",\"p95_us\":" << stats.p95_us
+      << ",\"p99_us\":";
   if (stats.p99_us) {
     out << *stats.p99_us;
   } else {
@@ -144,14 +199,13 @@ struct Fixture {
 
   Fixture() {
     candidate = tos::create_tl_object<tos::tos_api::consensus_candidateHashDataEmpty>(
-        tos::create_tl_object<tos::tos_api::tosNode_blockIdExt>(block_id.id.workchain,
-                                                                static_cast<td::int64>(block_id.id.shard),
-                                                                block_id.id.seqno, block_id.root_hash,
-                                                                block_id.file_hash),
+        tos::create_tl_object<tos::tos_api::tosNode_blockIdExt>(
+            block_id.id.workchain, static_cast<td::int64>(block_id.id.shard), block_id.id.seqno, block_id.root_hash,
+            block_id.file_hash),
         tos::create_tl_object<tos::tos_api::consensus_candidateId>(slot - 1, hash_of("n6-parent")));
-    message = require_ok(block::BlockSignatureSet::build_simplex_data_to_sign(session_id, slot, candidate, true,
-                                                                               block_id),
-                         "build signed preimage");
+    message =
+        require_ok(block::BlockSignatureSet::build_simplex_data_to_sign(session_id, slot, candidate, true, block_id),
+                   "build signed preimage");
     stores.reserve(400);
     descriptors.reserve(400);
     signatures.reserve(400);
@@ -171,8 +225,7 @@ struct Fixture {
       if (!signature) {
         fail("deterministic fixture signing");
       }
-      signatures.push_back(
-          {validator_id, signature->algorithm_id, td::BufferSlice(std::move(signature->signature))});
+      signatures.push_back({validator_id, signature->algorithm_id, td::BufferSlice(std::move(signature->signature))});
       stores.push_back(std::move(*store));
     }
   }
@@ -194,15 +247,14 @@ struct Fixture {
 
   td::Ref<block::BlockSignatureSet> signature_set(std::size_t count, td::Ref<block::ValidatorSet> vset) const {
     auto candidate_copy = tos::create_tl_object<tos::tos_api::consensus_candidateHashDataEmpty>(
-        tos::create_tl_object<tos::tos_api::tosNode_blockIdExt>(block_id.id.workchain,
-                                                                static_cast<td::int64>(block_id.id.shard),
-                                                                block_id.id.seqno, block_id.root_hash,
-                                                                block_id.file_hash),
+        tos::create_tl_object<tos::tos_api::tosNode_blockIdExt>(
+            block_id.id.workchain, static_cast<td::int64>(block_id.id.shard), block_id.id.seqno, block_id.root_hash,
+            block_id.file_hash),
         tos::create_tl_object<tos::tos_api::consensus_candidateId>(slot - 1, hash_of("n6-parent")));
-    return require_ok(block::BlockSignatureSet::create_simplex_pq_final(
-                          pairs(count), catchain_seqno, vset->get_validator_set_hash(), session_id, slot,
-                          std::move(candidate_copy)),
-                      "create #13 signature set");
+    return require_ok(
+        block::BlockSignatureSet::create_simplex_pq_final(pairs(count), catchain_seqno, vset->get_validator_set_hash(),
+                                                          session_id, slot, std::move(candidate_copy)),
+        "create #13 signature set");
   }
 };
 
@@ -222,6 +274,12 @@ struct MatrixRow {
   Stats lite_roundtrip_verify;
 };
 
+struct AuthorityRow {
+  std::size_t validators{};
+  Stats miss;
+  Stats hit;
+};
+
 td::BufferSlice make_n4_certificate(const Fixture &fixture, std::size_t count) {
   std::vector<tos::tl_object_ptr<tos::tos_api::consensus_simplex_voteSignature>> signatures;
   signatures.reserve(count);
@@ -234,6 +292,30 @@ td::BufferSlice make_n4_certificate(const Fixture &fixture, std::size_t count) {
   return tos::create_serialize_tl_object<tos::tos_api::consensus_simplex_certificate>(
       tos::create_tl_object<tos::tos_api::consensus_simplex_finalizeVote>(std::move(candidate_id)),
       tos::create_tl_object<tos::tos_api::consensus_simplex_voteSignatureSet>(std::move(signatures)));
+}
+
+std::unique_ptr<consensus::Bus> make_consensus_bus(const Fixture &fixture, std::size_t count) {
+  auto bus = std::make_unique<consensus::Bus>();
+  bus->session_id = fixture.session_id;
+  bus->shard = tos::ShardIdFull{tos::masterchainId};
+  bus->cc_seqno = Fixture::catchain_seqno;
+  bus->total_weight = 0;
+  bus->validator_set.reserve(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    const auto adnl = tos::adnl::AdnlNodeIdShort{fixture.descriptors[i].addr};
+    bus->validator_set.push_back(consensus::PeerValidator{
+        .validator_id = fixture.descriptors[i].validator_id,
+        .idx = consensus::PeerValidatorId{i},
+        .consensus_key = fixture.stores[i].consensus_key(),
+        .transport_key_id = adnl.pubkey_hash(),
+        .adnl_id = adnl,
+        .weight = fixture.descriptors[i].weight,
+    });
+    if (!tos::checked_add_validator_weight(bus->total_weight, fixture.descriptors[i].weight)) {
+      fail("N4 fixture validator weight overflow");
+    }
+  }
+  return bus;
 }
 
 void verify_raw(const Fixture &fixture, std::size_t count, bool invalid_first = false) {
@@ -283,10 +365,15 @@ MatrixRow measure_matrix_row(const Fixture &fixture, std::size_t count, std::siz
   auto vset = fixture.validator_set(count);
   auto signature_set = fixture.signature_set(count, vset);
   auto n4 = make_n4_certificate(fixture, count);
+  auto consensus_bus = make_consensus_bus(fixture, count);
   auto n5_cell = require_ok(signature_set->serialize(vset), "#13 serialize fixture");
-  auto n5_boc = require_ok(vm::std_boc_serialize(n5_cell, 0), "#13 BOC fixture");
-  auto proof_cell = make_block_proof(fixture, n5_cell);
-  auto proof_boc = require_ok(vm::std_boc_serialize(proof_cell, 0), "BlockProof BOC fixture");
+  // Size claims reuse the N5 frozen fixture. Dictionary layout depends on validator-id
+  // bit patterns, so sizing a second valid fixture is not evidence for the frozen worst-case
+  // envelope even though it exercises the same codec and signer count.
+  const auto frozen_n5_cell = frozen_signature_set_cell(count);
+  const auto n5_boc = require_ok(vm::std_boc_serialize(frozen_n5_cell, 0), "frozen #13 BOC size");
+  const auto proof_boc =
+      require_ok(vm::std_boc_serialize(frozen_block_proof_cell(frozen_n5_cell), 0), "frozen BlockProof BOC size");
   auto lite_bytes = tos::serialize_tl_object(signature_set->tl_lite(), true);
   block::PQFinalityVerificationContext context{vset, fixture.block_id, fixture.session_id};
 
@@ -296,7 +383,16 @@ MatrixRow measure_matrix_row(const Fixture &fixture, std::size_t count, std::siz
       fail("N4 certificate parse");
     }
   });
-  auto n4_verify = measure(warmup, samples, [&] { verify_raw(fixture, count); });
+  auto n4_verify = measure(warmup, samples, [&] {
+    auto parsed = tos::fetch_tl_object<tos::tos_api::consensus_simplex_certificate>(n4.clone(), true);
+    if (parsed.is_error()) {
+      fail("N4 certificate verify parse");
+    }
+    auto verified = simplex::Certificate<simplex::Vote>::from_tl(std::move(*parsed.move_as_ok()), *consensus_bus);
+    if (verified.is_error()) {
+      fail("N4 production certificate verify: " + verified.error().message().str());
+    }
+  });
   auto n5_serialize = measure(warmup, samples, [&] {
     auto cell = signature_set->serialize(vset);
     if (cell.is_error()) {
@@ -316,14 +412,17 @@ MatrixRow measure_matrix_row(const Fixture &fixture, std::size_t count, std::siz
     }
   });
   auto block_proof = measure(warmup, samples, [&] {
-    auto parsed = parse_block_proof(proof_boc.as_slice(), vset);
+    auto proof_cell = make_block_proof(fixture, n5_cell);
+    auto serialized = require_ok(vm::std_boc_serialize(proof_cell, 0), "BlockProof serialize");
+    auto parsed = parse_block_proof(serialized.as_slice(), vset);
     auto verified = block::verify_pq_finality(context, *parsed, block::FinalityRole::Final);
     if (verified.is_error()) {
       fail("BlockProof signature-reference verify");
     }
   });
   auto lite = measure(warmup, samples, [&] {
-    auto object = tos::fetch_tl_object<tos::lite_api::liteServer_SignatureSet>(lite_bytes.clone(), true);
+    auto serialized = tos::serialize_tl_object(signature_set->tl_lite(), true);
+    auto object = tos::fetch_tl_object<tos::lite_api::liteServer_SignatureSet>(std::move(serialized), true);
     if (object.is_error()) {
       fail("lite SignatureSet TL parse");
     }
@@ -336,8 +435,9 @@ MatrixRow measure_matrix_row(const Fixture &fixture, std::size_t count, std::siz
       fail("lite SignatureSet verify");
     }
   });
-  return {count, samples, n4.size(), n5_boc.size(), proof_boc.size(), lite_bytes.size(), n4_parse, n4_verify,
-          n5_serialize, n5_parse, n5_verify, block_proof, lite};
+  return {count,    samples,   n4.size(),    n5_boc.size(), proof_boc.size(), lite_bytes.size(),
+          n4_parse, n4_verify, n5_serialize, n5_parse,      n5_verify,        block_proof,
+          lite};
 }
 
 struct StallActor final : td::actor::Actor {
@@ -487,35 +587,60 @@ int main(int argc, char **argv) {
               fixture.block_id.id.workchain, static_cast<td::int64>(fixture.block_id.id.shard),
               fixture.block_id.id.seqno, fixture.block_id.root_hash, fixture.block_id.file_hash),
           tos::create_tl_object<tos::tos_api::consensus_candidateId>(Fixture::slot - 1, hash_of("n6-parent"))));
-  if (rejected_401.is_ok() || rejected_401.error().message().str().find("signer count exceeds maximum") == std::string::npos) {
+  if (rejected_401.is_ok() ||
+      rejected_401.error().message().str().find("signer count exceeds maximum") == std::string::npos) {
     fail("401-signer structural negative");
   }
 
-  std::vector<std::pair<std::size_t, Stats>> authority;
+  std::vector<AuthorityRow> authority;
   for (std::size_t count : {21U, 100U, 400U}) {
     tos::validator::PendingFinalityAuthorityMemo memo;
-    auto vset = fixture.validator_set(count);
-    std::vector<tos::PublicKeyHash> roots;
-    roots.reserve(count);
+    const auto validator_count = static_cast<int>(count);
+    block::TotalValidatorSet total(0, 1, validator_count, validator_count);
+    total.list.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
-      roots.push_back(tos::PublicKeyHash{block::validator_adnl_identity(fixture.descriptors[i])});
+      const auto &descriptor = fixture.descriptors[i];
+      total.list.emplace_back(descriptor.validator_id, descriptor.algorithm_id, descriptor.key_id,
+                              descriptor.pq_public_key, descriptor.weight, i, descriptor.addr);
     }
-    auto loader = [&] {
-      return std::vector<tos::validator::PendingFinalityAuthoritySet>{
-          {vset->get_validator_set_hash(), roots, vset}};
+    total.total_weight = count;
+    block::CatchainValidatorsConfig config(0, 0, 0, static_cast<td::uint32>(count));
+    const tos::ShardIdFull shard{tos::basechainId, tos::shardIdAll};
+    auto make_set = [&](tos::CatchainSeqno seqno) {
+      auto descriptors = block::Config::do_compute_validator_set(config, shard, total, seqno);
+      std::vector<tos::PublicKeyHash> roots;
+      roots.reserve(descriptors.size());
+      for (const auto &descriptor : descriptors) {
+        roots.push_back(tos::PublicKeyHash{block::validator_adnl_identity(descriptor)});
+      }
+      auto set = td::Ref<block::ValidatorSet>{true, seqno, shard, std::move(descriptors)};
+      return tos::validator::PendingFinalityAuthoritySet{set->get_validator_set_hash(), std::move(roots), set};
     };
-    auto stats = measure(10, small_batch_samples, [&] {
+    const auto expected = make_set(Fixture::catchain_seqno);
+    auto loader = [&] {
+      std::vector<tos::validator::PendingFinalityAuthoritySet> result;
+      result.push_back(make_set(Fixture::catchain_seqno));
+      result.push_back(make_set(Fixture::catchain_seqno + 1));
+      return result;
+    };
+    auto miss = measure(10, small_batch_samples, [&] {
       memo.clear();
-      if (!memo.contains({tos::ShardIdFull{tos::masterchainId}, Fixture::catchain_seqno},
-                         vset->get_validator_set_hash(), roots.back(), loader)) {
+      if (!memo.contains({shard, Fixture::catchain_seqno}, expected.validator_set_hash, expected.roots.back(),
+                         loader)) {
         fail("authority memo miss classification");
       }
-      if (!memo.contains({tos::ShardIdFull{tos::masterchainId}, Fixture::catchain_seqno},
-                         vset->get_validator_set_hash(), roots.back(), loader)) {
+    });
+    memo.clear();
+    if (!memo.contains({shard, Fixture::catchain_seqno}, expected.validator_set_hash, expected.roots.back(), loader)) {
+      fail("authority memo hit setup");
+    }
+    auto hit = measure(10, small_batch_samples, [&] {
+      if (!memo.contains({shard, Fixture::catchain_seqno}, expected.validator_set_hash, expected.roots.back(),
+                         loader)) {
         fail("authority memo hit classification");
       }
     });
-    authority.emplace_back(count, stats);
+    authority.push_back({count, miss, hit});
   }
 
   auto pending_primitives = measure(100, single_samples, [&] {
@@ -532,34 +657,36 @@ int main(int argc, char **argv) {
     if (workers > cpus.size()) {
       continue;
     }
-    concurrency.emplace_back(workers, measure(2, 20, [&] {
-      std::vector<std::thread> threads;
-      for (std::size_t worker = 0; worker < workers; ++worker) {
-        threads.emplace_back([&, worker] {
-          for (std::size_t i = worker; i < 100; i += workers) {
-            const auto &signature = fixture.signatures[i];
-            if (tos::pq::verify_mldsa44(
-                    std::string_view(fixture.message.data(), fixture.message.size()), tos::pq::simplex_sign_context,
-                    std::string_view(signature.signature.data(), signature.signature.size()),
-                    fixture.descriptors[i].pq_public_key) != tos::pq::VerifyResult::valid) {
-              fail("bounded concurrency verification");
-            }
+    concurrency.emplace_back(
+        workers, measure(2, 20, [&] {
+          std::vector<std::thread> threads;
+          for (std::size_t worker = 0; worker < workers; ++worker) {
+            threads.emplace_back([&, worker] {
+              for (std::size_t i = worker; i < 100; i += workers) {
+                const auto &signature = fixture.signatures[i];
+                if (tos::pq::verify_mldsa44(std::string_view(fixture.message.data(), fixture.message.size()),
+                                            tos::pq::simplex_sign_context,
+                                            std::string_view(signature.signature.data(), signature.signature.size()),
+                                            fixture.descriptors[i].pq_public_key) != tos::pq::VerifyResult::valid) {
+                  fail("bounded concurrency verification");
+                }
+              }
+            });
           }
-        });
-      }
-      for (auto &thread : threads) {
-        thread.join();
-      }
-    }));
+          for (auto &thread : threads) {
+            thread.join();
+          }
+        }));
   }
 
   const double stall_us = actor_stall(fixture, 100);
-  const auto &launch_row = *std::find_if(matrix.begin(), matrix.end(), [](const auto &row) { return row.signers == 100; });
+  const auto &launch_row =
+      *std::find_if(matrix.begin(), matrix.end(), [](const auto &row) { return row.signers == 100; });
   const auto cpu = cpus.front();
-  const auto governor = read_first_line("/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
-                                        "/cpufreq/scaling_governor");
-  const auto frequency = read_first_line("/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
-                                         "/cpufreq/scaling_cur_freq");
+  const auto governor =
+      read_first_line("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/scaling_governor");
+  const auto frequency =
+      read_first_line("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/scaling_cur_freq");
   std::string cpu_model = "unavailable";
   std::ifstream cpuinfo("/proc/cpuinfo");
   for (std::string line; std::getline(cpuinfo, line);) {
@@ -567,7 +694,8 @@ int main(int argc, char **argv) {
       const auto separator = line.find(':');
       if (separator != std::string::npos) {
         cpu_model = line.substr(separator + 1);
-        while (!cpu_model.empty() && cpu_model.front() == ' ') cpu_model.erase(cpu_model.begin());
+        while (!cpu_model.empty() && cpu_model.front() == ' ')
+          cpu_model.erase(cpu_model.begin());
       }
       break;
     }
@@ -581,49 +709,60 @@ int main(int argc, char **argv) {
   out << "{\n  \"schema_version\":1,\n  \"evidence_class\":\"DIAGNOSTIC_FEASIBILITY_ONLY\",\n";
   out << "  \"release_evidence_eligible\":false,\n  \"git_commit\":" << json_string(git_commit) << ",\n";
   out << "  \"acceptance_criteria_sha256\":" << json_string(criteria_sha256) << ",\n";
-  out << "  \"build\":{\"type\":" << json_string(N6_BUILD_TYPE) << ",\"compiler\":"
-      << json_string(N6_COMPILER) << ",\"allocator\":\"system\",\"pq_backend\":\"native-ml-dsa-44\"},\n";
+  out << "  \"build\":{\"type\":" << json_string(N6_BUILD_TYPE) << ",\"compiler\":" << json_string(N6_COMPILER)
+      << ",\"allocator\":\"system\",\"pq_backend\":\"native-ml-dsa-44\"},\n";
   out << "  \"host\":{\"cpu_model\":" << json_string(cpu_model) << ",\"affinity_cpus\":[";
   for (std::size_t i = 0; i < cpus.size(); ++i) {
-    if (i) out << ',';
+    if (i)
+      out << ',';
     out << cpus[i];
   }
-  out << "],\"frequency_khz_observed\":" << json_string(frequency) << ",\"governor_observed\":"
-      << json_string(governor) << ",\"frequency_or_governor_changed_by_runner\":false},\n";
-  out << "  \"sample_policy\":{\"single_warmup\":" << single_warmup << ",\"single_measured\":"
-      << single_samples << ",\"small_batch_measured\":" << small_batch_samples
-      << ",\"large_batch_measured\":" << large_batch_samples
+  out << "],\"frequency_khz_observed\":" << json_string(frequency) << ",\"governor_observed\":" << json_string(governor)
+      << ",\"frequency_or_governor_changed_by_runner\":false},\n";
+  out << "  \"sample_policy\":{\"single_warmup\":" << single_warmup << ",\"single_measured\":" << single_samples
+      << ",\"small_batch_measured\":" << small_batch_samples << ",\"large_batch_measured\":" << large_batch_samples
       << ",\"shortened_batches_are_diagnostic\":true},\n";
   out << "  \"single_operations\":{\n";
-  for (const auto &[name, stats] : std::vector<std::pair<std::string, Stats>>{
-           {"mldsa44_sign", sign}, {"mldsa44_verify_valid", verify_valid}, {"mldsa44_verify_invalid", verify_invalid},
-           {"key_id_derivation", key_id}, {"pqbytes_1312_pack_unpack", pqbytes_1312},
-           {"pqbytes_2420_pack_unpack", pqbytes_2420}, {"pending_finality_primitives", pending_primitives}}) {
+  for (const auto &[name, stats] :
+       std::vector<std::pair<std::string, Stats>>{{"mldsa44_sign", sign},
+                                                  {"mldsa44_verify_valid", verify_valid},
+                                                  {"mldsa44_verify_invalid", verify_invalid},
+                                                  {"key_id_derivation", key_id},
+                                                  {"pqbytes_1312_pack_unpack", pqbytes_1312},
+                                                  {"pqbytes_2420_pack_unpack", pqbytes_2420},
+                                                  {"pending_finality_primitives", pending_primitives}}) {
     out << "    " << json_string(name) << ':';
     write_stats(out, stats);
     out << (name == "pending_finality_primitives" ? "\n" : ",\n");
   }
   out << "  },\n  \"authority_classification\":[\n";
   for (std::size_t i = 0; i < authority.size(); ++i) {
-    out << "    {\"validators\":" << authority[i].first << ",\"combined_miss_then_hit\":";
-    write_stats(out, authority[i].second);
+    out << "    {\"validators\":" << authority[i].validators << ",\"memo_miss_current_and_next\":";
+    write_stats(out, authority[i].miss);
+    out << ",\"memo_hit\":";
+    write_stats(out, authority[i].hit);
     out << '}' << (i + 1 == authority.size() ? "\n" : ",\n");
   }
   out << "  ],\n  \"certificate_proof_matrix\":[\n";
   for (std::size_t i = 0; i < matrix.size(); ++i) {
     const auto &row = matrix[i];
-    out << "    {\"signers\":" << row.signers << ",\"samples\":" << row.samples << ",\"sizes\":{\"n4_certificate_tl_bytes\":"
-        << row.n4_bytes << ",\"n5_13_boc_bytes\":" << row.n5_boc_bytes << ",\"block_proof_boc_bytes\":"
-        << row.block_proof_boc_bytes << ",\"lite_signature_set_tl_bytes\":" << row.lite_tl_bytes << "},\"timings\":{";
-    const std::array<std::pair<std::string_view, const Stats *>, 7> timings{{
-        {"n4_certificate_parse", &row.n4_parse}, {"n4_certificate_verify", &row.n4_verify},
-        {"n5_13_serialize", &row.n5_serialize}, {"n5_13_parse", &row.n5_parse}, {"n5_13_verify", &row.n5_verify},
-        {"block_proof_signature_reference_roundtrip_verify", &row.block_proof_roundtrip_verify},
-        {"lite_signature_set_roundtrip_verify", &row.lite_roundtrip_verify}}};
+    out << "    {\"signers\":" << row.signers << ",\"samples\":" << row.samples
+        << ",\"sizes\":{\"n4_certificate_tl_bytes\":" << row.n4_bytes << ",\"n5_13_boc_bytes\":" << row.n5_boc_bytes
+        << ",\"block_proof_boc_bytes\":" << row.block_proof_boc_bytes
+        << ",\"lite_signature_set_tl_bytes\":" << row.lite_tl_bytes << "},\"timings\":{";
+    const std::array<std::pair<std::string_view, const Stats *>, 7> timings{
+        {{"n4_certificate_parse", &row.n4_parse},
+         {"n4_certificate_verify", &row.n4_verify},
+         {"n5_13_serialize", &row.n5_serialize},
+         {"n5_13_parse", &row.n5_parse},
+         {"n5_13_verify", &row.n5_verify},
+         {"block_proof_signature_reference_roundtrip_verify", &row.block_proof_roundtrip_verify},
+         {"lite_signature_set_roundtrip_verify", &row.lite_roundtrip_verify}}};
     for (std::size_t j = 0; j < timings.size(); ++j) {
       out << json_string(timings[j].first) << ':';
       write_stats(out, *timings[j].second);
-      if (j + 1 != timings.size()) out << ',';
+      if (j + 1 != timings.size())
+        out << ',';
     }
     out << "}}" << (i + 1 == matrix.size() ? "\n" : ",\n");
   }
@@ -638,8 +777,14 @@ int main(int argc, char **argv) {
   out << "],\n  \"actor_thread_decision\":{\"launch_proof_signers\":100,\"launch_block_proof_bytes\":"
       << launch_row.block_proof_boc_bytes << ",\"single_thread_actor_callback_stall_us\":" << stall_us
       << ",\"decision\":\"OPEN_UNTIL_OWNER_ACCEPTS_NONZERO_CRITERIA\",\"worker_pool_changed\":false},\n";
-  out << "  \"scope\":{\"n5_carrier_and_crypto\":\"production\",\"block_proof\":\"real serialized BlockProof signature reference; no CheckProof actor claim\",\"lite\":\"real checked SignatureSet parser; no transport or chain-advancement claim\"},\n";
-  out << "  \"acceptance_evaluation\":{\"status\":\"NOT_EVALUATED_OWNER_CRITERIA_UNSET\",\"thresholds_moved_to_fit_results\":false}\n}\n";
+  out << "  \"scope\":{\"n4_certificate\":\"production TL parser, quorum and ML-DSA verifier\","
+         "\"authority_classification\":\"production shard-set computation and memo lookup\","
+         "\"n5_carrier_and_crypto\":\"production\",\"block_proof\":\"real serialized BlockProof signature "
+         "reference; no CheckProof actor claim\",\"lite\":\"real checked SignatureSet parser; no transport or "
+         "chain-advancement claim\"},\n";
+  out << "  "
+         "\"acceptance_evaluation\":{\"status\":\"NOT_EVALUATED_OWNER_CRITERIA_UNSET\",\"thresholds_moved_to_fit_"
+         "results\":false}\n}\n";
   out.close();
   std::cout << "N6_MICROBENCH_DONE output=" << output_path << " evidence=DIAGNOSTIC_FEASIBILITY_ONLY\n";
   return 0;
