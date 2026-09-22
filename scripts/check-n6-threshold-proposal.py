@@ -29,6 +29,20 @@ if proposal.get("status") != "REVIEW_PROPOSAL_NOT_ACCEPTANCE_CRITERIA":
     fail("proposal can be mistaken for accepted launch criteria")
 if set(proposal.get("owner_decisions", {})) != {"release_hardware_profile", "headroom_fractions"}:
     fail("proposal must leave exactly hardware profile and headroom fractions to the owner")
+hardware = proposal["owner_decisions"]["release_hardware_profile"]
+if hardware.get("status") != "OWNER_DECISION_REQUIRED" or set(
+    hardware.get("required_fields", [])
+) != {
+    "cpu_model",
+    "cpu_governor",
+    "turbo_or_boost_enabled",
+    "memory",
+    "storage",
+    "network_link",
+}:
+    fail("release hardware proposal does not pin CPU governor and turbo/boost policy")
+if "throttling governor" not in hardware.get("rationale", ""):
+    fail("release hardware proposal does not explain why frequency policy affects timing evidence")
 
 required_criteria = set(criteria) - {"threshold_rationale"}
 proposed_criteria = proposal.get("proposed_criteria", {})
@@ -82,7 +96,9 @@ types = collapsed(root / "tos/tos-types.h")
 if "duration_fn(8, standstill_timeout, 10'000)" not in types:
     fail("ConfigParam30 standstill timeout source changed")
 manager = (root / "validator/manager.cpp").read_text(encoding="utf-8")
-if not re.search(r'create_actor<ValidateBroadcast>\("broadcast-sigcheck".*?Timestamp::in\(2\.0\)', manager, re.S):
+if not re.search(
+    r'create_actor<ValidateBroadcast>\("broadcast-sigcheck".*?Timestamp::in\(2\.0\)', manager, re.S
+):
     fail("production block-signature context timeout is no longer two seconds")
 lite = (root / "lite-client/lite-client.cpp").read_text(encoding="utf-8")
 if not re.search(r'ExtClient::send_query, "query".*?Timestamp::in\(10\.0\)', lite, re.S):
@@ -102,9 +118,19 @@ pq_consensus = collapsed(root / "crypto/pq/pq-consensus.h")
 if "max_certificate_signers = 400" not in pq_consensus:
     fail("structural validator-reserved sender count changed")
 
-if proposed_criteria["max_pending_finality_bytes"]["proposal"] != facts["pending_finality_total_bytes"]:
+if (
+    proposed_criteria["max_pending_finality_bytes"]["proposal"]
+    != facts["pending_finality_total_bytes"]
+):
     fail("pending-finality byte proposal is not the enforced two-pool bound")
-if proposed_criteria["max_pending_finality_candidates"]["proposal"] != facts["pending_finality_maximum_candidates"]:
-    fail("pending-finality candidate proposal is not derived from the byte pools and minimum charge")
+if (
+    proposed_criteria["max_pending_finality_candidates"]["proposal"]
+    != facts["pending_finality_maximum_candidates"]
+):
+    fail(
+        "pending-finality candidate proposal is not derived from the byte pools and minimum charge"
+    )
 
-print("N6_THRESHOLD_PROPOSAL_OK: every criterion has a top-down rationale; live criteria remain owner-blocked")
+print(
+    "N6_THRESHOLD_PROPOSAL_OK: every criterion has a top-down rationale; live criteria remain owner-blocked"
+)

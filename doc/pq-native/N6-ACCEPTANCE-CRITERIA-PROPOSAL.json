@@ -3,7 +3,18 @@
   "schema_version": 1,
   "source_commit_policy": "Resolve every source fact from the release candidate commit; never derive a threshold from the N6 run it judges.",
   "owner_decisions": {
-    "release_hardware_profile": "OWNER_DECISION_REQUIRED: name the CPU, memory, storage and network-link profile on which release evidence must pass.",
+    "release_hardware_profile": {
+      "status": "OWNER_DECISION_REQUIRED",
+      "required_fields": [
+        "cpu_model",
+        "cpu_governor",
+        "turbo_or_boost_enabled",
+        "memory",
+        "storage",
+        "network_link"
+      ],
+      "rationale": "Release timing is attributable only when the CPU frequency policy is pinned. A throttling governor changes latency and tail variance, while turbo or boost changes the available peak; omitting either makes a later timing change indistinguishable from a platform-policy change."
+    },
     "headroom_fractions": {
       "finality_window": "OWNER_DECISION_REQUIRED",
       "block_signature_timeout": "OWNER_DECISION_REQUIRED",
@@ -38,7 +49,7 @@
     },
     "release_hardware_profile": {
       "proposal": "owner_decisions.release_hardware_profile",
-      "rationale": "Hardware-dependent latency and resource fractions are meaningful only on the reviewed CPU, memory, storage and link profile."
+      "rationale": "Hardware-dependent latency and resource fractions are meaningful only on the reviewed CPU, memory, storage and link profile, including the CPU governor and whether turbo or boost is enabled. A throttling governor invalidates a release timing claim because it changes both sustained frequency and tail variance."
     },
     "required_scales": {
       "proposal": [21, 32, 64, 100],

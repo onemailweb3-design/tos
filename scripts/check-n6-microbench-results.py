@@ -20,35 +20,54 @@ result_path = root / "doc/pq-native/N6-MICROBENCH-RESULTS.json"
 if not result_path.is_file():
     fail("results file is missing")
 result = json.loads(result_path.read_text(encoding="utf-8"))
-if result.get("evidence_class") != "DIAGNOSTIC_FEASIBILITY_ONLY" or result.get("release_evidence_eligible") is not False:
+if (
+    result.get("evidence_class") != "DIAGNOSTIC_FEASIBILITY_ONLY"
+    or result.get("release_evidence_eligible") is not False
+):
     fail("parked N5 gaps were presented as release evidence")
 if result.get("acceptance_evaluation") != {
     "status": "NOT_EVALUATED_OWNER_CRITERIA_UNSET",
     "thresholds_moved_to_fit_results": False,
 }:
     fail("diagnostic measurements claimed a threshold verdict")
-if result.get("build", {}).get("type") != "Release" or result.get("build", {}).get("pq_backend") != "native-ml-dsa-44":
+if (
+    result.get("build", {}).get("type") != "Release"
+    or result.get("build", {}).get("pq_backend") != "native-ml-dsa-44"
+):
     fail("result did not use the Release build and validator ML-DSA backend")
 host = result.get("host", {})
-if not host.get("affinity_cpus") or not host.get("cpu_model") or host.get("frequency_or_governor_changed_by_runner") is not False:
+if (
+    not host.get("affinity_cpus")
+    or not host.get("cpu_model")
+    or not isinstance(host.get("governor_observed"), str)
+    or not host["governor_observed"].strip()
+    or host.get("frequency_or_governor_changed_by_runner") is not False
+):
     fail("CPU affinity/frequency/governor provenance is incomplete")
 
-criteria_hash = hashlib.sha256((root / "doc/pq-native/N6-ACCEPTANCE-CRITERIA.json").read_bytes()).hexdigest()
+criteria_hash = hashlib.sha256(
+    (root / "doc/pq-native/N6-ACCEPTANCE-CRITERIA.json").read_bytes()
+).hexdigest()
 if result.get("acceptance_criteria_sha256") != criteria_hash:
     fail("result does not bind the current precommitted acceptance criteria")
 commit = result.get("git_commit", "")
 if len(commit) != 40:
     fail("result has no exact measured Git commit")
 try:
-    subprocess.run(["git", "-C", root, "cat-file", "-e", f"{commit}^{{commit}}"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", root, "cat-file", "-e", f"{commit}^{{commit}}"],
+        check=True,
+        capture_output=True,
+    )
     measured_source = subprocess.check_output(
         ["git", "-C", root, "show", f"{commit}:test/pq-native/n6-microbench.cpp"]
     )
 except subprocess.CalledProcessError as exc:
     fail(f"measured commit or benchmark source is unavailable: {exc}")
-if hashlib.sha256(measured_source).hexdigest() != hashlib.sha256(
-    (root / "test/pq-native/n6-microbench.cpp").read_bytes()
-).hexdigest():
+if (
+    hashlib.sha256(measured_source).hexdigest()
+    != hashlib.sha256((root / "test/pq-native/n6-microbench.cpp").read_bytes()).hexdigest()
+):
     fail("benchmark source differs from the source at the measured commit")
 
 required_single = {
@@ -102,7 +121,11 @@ for row in matrix:
         fail(f"{row['signers']}-signer #13 exceeds the frozen structural maximum")
 if result.get("structural_401", {}).get("accepted") is not False:
     fail("401 signers were not structurally refused")
-if [entry.get("validators") for entry in result.get("authority_classification", [])] != [21, 100, 400]:
+if [entry.get("validators") for entry in result.get("authority_classification", [])] != [
+    21,
+    100,
+    400,
+]:
     fail("authority-classification matrix is incomplete")
 for entry in result["authority_classification"]:
     if set(entry) != {"validators", "memo_miss_current_and_next", "memo_hit"}:
@@ -110,14 +133,27 @@ for entry in result["authority_classification"]:
     check_stats(f"authority/{entry['validators']}/miss", entry["memo_miss_current_and_next"])
     check_stats(f"authority/{entry['validators']}/hit", entry["memo_hit"])
 workers = [entry.get("workers") for entry in result.get("concurrency_sweep_100_signers", [])]
-if not workers or workers[0] != 1 or workers != sorted(set(workers)) or any(worker not in {1, 2, 4, 8, 16} for worker in workers):
+if (
+    not workers
+    or workers[0] != 1
+    or workers != sorted(set(workers))
+    or any(worker not in {1, 2, 4, 8, 16} for worker in workers)
+):
     fail("bounded concurrency sweep is invalid")
 for entry in result["concurrency_sweep_100_signers"]:
     check_stats(f"concurrency/{entry['workers']}", entry["batch"])
 actor = result.get("actor_thread_decision", {})
-if actor.get("launch_proof_signers") != 100 or actor.get("single_thread_actor_callback_stall_us", 0) <= 0:
+if (
+    actor.get("launch_proof_signers") != 100
+    or actor.get("single_thread_actor_callback_stall_us", 0) <= 0
+):
     fail("actor callback stall was not measured at the candidate launch maximum")
-if actor.get("decision") != "OPEN_UNTIL_OWNER_ACCEPTS_NONZERO_CRITERIA" or actor.get("worker_pool_changed") is not False:
+if (
+    actor.get("decision") != "OPEN_UNTIL_OWNER_ACCEPTS_NONZERO_CRITERIA"
+    or actor.get("worker_pool_changed") is not False
+):
     fail("measurement made an unauthorized worker-pool decision")
 
-print("N6_MICROBENCH_RESULTS_OK: diagnostic feasibility matrix is complete and makes no launch claim")
+print(
+    "N6_MICROBENCH_RESULTS_OK: diagnostic feasibility matrix is complete and makes no launch claim"
+)

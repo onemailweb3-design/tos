@@ -63,6 +63,17 @@ the enforced N5 pending-finality resource bounds. It does not populate the
 live criteria and does not use an N6 measurement as the source of a threshold.
 Exactly two decision classes remain with the owner: the target release
 hardware profile and the headroom fractions applied to the source envelopes.
+The hardware profile must name the CPU governor and whether turbo/boost is
+enabled, in addition to CPU model, memory, storage and network link. A
+throttling governor changes sustained latency and tail variance, so a release
+timing claim without that frequency policy cannot be attributed to the code.
+
+Frequency-policy mutation evidence:
+
+| Mutation | Gate that went red | Exact named failure |
+|---|---|---|
+| Remove `turbo_or_boost_enabled` from the proposed release-hardware profile | `n6-threshold-proposal` | `N6_THRESHOLD_PROPOSAL_FAILURE: release hardware proposal does not pin CPU governor and turbo/boost policy` |
+| Omit the observed governor from the diagnostic result | `n6-microbench-results` | `N6_MICROBENCH_RESULTS_FAILURE: CPU affinity/frequency/governor provenance is incomplete` |
 
 The design document names `memo/pq-native/N6-ACCEPTANCE-CRITERIA.json`; the
 canonical implementation intentionally lives at
@@ -96,6 +107,44 @@ Mutation evidence:
 | Mutation | Gate that went red | Exact named failure |
 |---|---|---|
 | Reduce a real single-operation sample count from 10,000 to 99 while retaining its `p99_us` | `n6-microbench-results` | `N6_MICROBENCH_RESULTS_FAILURE: mldsa44_sign claims p99 from only 99 samples` |
+
+## N6.3 diagnostic multi-process cluster scaffold
+
+Implementation commit:
+
+- `9b39d0963` — local and remote-command process backends with one manifest/result format, per-process DB/identity/port/log/trace/resource isolation, live finality tracing, and the release lite-client route.
+
+Registered gates:
+
+- `n6-cluster-runner`
+- `n6-live-finality-overlay`
+- `n6-lite-framed-tcp`
+
+The live-finality gate starts four PQ Genesis validators and a distinct
+non-validator consumer. It accepts evidence only when the same canonical
+transport id is sent by one process, received through production Plumtree by a
+different process, and reaches the manager's trusted PQ verification-success
+point. Payload size, propagation, receiver queueing and verification time are
+recorded as separate diagnostic fields. The lite gate invokes the release
+`lite-client` and requires a fetched proof to validate through its production
+`AdnlExtClient`/`AdnlExtServer` framed-TCP route; RLDP is not substituted.
+
+The remote backend is a caller-supplied command protocol. SSH, cloud
+provisioning and artifact staging remain external concerns rather than
+consensus-test dependencies. Cross-host propagation requires externally
+synchronized clocks; the manifest states that condition, while queueing and
+verification use per-process monotonic time.
+
+Mutation evidence:
+
+| Mutation | Gate that went red | Exact named failure |
+|---|---|---|
+| Delete the manager's successful PQ verification trace | `n6-live-finality-overlay` | `N6_LIVE_FINALITY_OVERLAY_FAILURE: no finality payload crossed from one process through Plumtree to a different process and completed trusted PQ verification` |
+| Replace the release client's `AdnlExtClient::create` route | `n6-cluster-runner` | `N6_LITE_FRAMED_TCP_FAILURE: release lite-client no longer uses AdnlExtClient` |
+
+All N6.3 output remains `DIAGNOSTIC_SCAFFOLDING_ONLY`, explicitly ineligible
+for release evidence, and makes no consensus-correctness verdict while the
+Merkle sequencing diagnosis and parked N5 gaps remain open.
 
 ## Evidence boundary
 
