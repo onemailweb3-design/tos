@@ -438,6 +438,8 @@ retain the certificate, stop retrying it, and stop production.
 ## Registered gaps and explicit non-claims
 
 The two remaining closure gaps are the restart-cut part of item 5 and item 7.
+Both are parked by owner decision, with implementation work not started on either
+fixture; they are not pending-and-imminent work on this branch.
 The other entries below record resolved rows, deliberate naming
 choices, harness boundaries, evidence-retention limits, or separately scoped
 API/tooling debt; none is silently promoted to a green claim.
@@ -505,7 +507,8 @@ API/tooling debt; none is silently promoted to a green claim.
    would duplicate CI runtime without adding evidence, and renaming would likewise
    add no evidence.  This is a documented naming deviation, not an unmet gate.
 
-   The five restart cuts listed in §10.5.4 remain a gap.  They need deterministic
+   The five restart cuts listed in §10.5.4 remain a parked gap; implementation
+   work has not started.  They need deterministic
    cut points spanning the Simplex journal, `#13` storage,
    BlockProof storage, the finalized marker, and a reconstruction from DB/archive
    state without actor memory.  The first four require production failpoints and
@@ -527,6 +530,8 @@ API/tooling debt; none is silently promoted to a green claim.
    output cannot be reconstructed from committed files alone.
 
 7. **The focused BlockProof fixture does not run the `CheckProof` actor.**
+   This integration fixture is parked by owner decision and implementation work
+   has not started.
    `test-pq-signature-persistence` parses a serialized BlockProof envelope and
    calls the shared verifier directly.  Deleting the real actor's verifier-error
    rejection leaves it green.  Exercising `CheckProof` requires an actor scheduler,
