@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -50,6 +51,44 @@ ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::Bl
     }
   }
   return result;
+}
+
+block::ShardConfig make_split_shard_config(tos::CatchainSeqno catchain_seqno, tos::ShardIdFull &real_shard,
+                                            tos::ShardIdFull &deeper_shard) {
+  auto make_leaf = [&](tos::ShardIdFull shard, unsigned seqno, const char *label) {
+    auto root_hash = pq_block_signature_test::hash_of(std::string(label) + "-root");
+    auto file_hash = pq_block_signature_test::hash_of(std::string(label) + "-file");
+    td::Ref<block::McShardHash> descriptor{
+        true, tos::BlockId{shard, seqno}, 1, 2, 1, root_hash, file_hash, block::CurrencyCollection{},
+        block::CurrencyCollection{}, 1, 1, catchain_seqno, shard.shard};
+    vm::CellBuilder builder;
+    td::Ref<vm::Cell> leaf;
+    if (!builder.store_bool_bool(false) || !descriptor->pack(builder) || !builder.finalize_to(leaf)) {
+      std::cerr << "PENDING_FINALITY_SHARD_WINDOW_FIXTURE_FAILURE: could not build shard leaf\n";
+      std::exit(1);
+    }
+    return leaf;
+  };
+
+  auto all = tos::ShardIdFull{tos::basechainId, tos::shardIdAll};
+  auto left = tos::shard_child(all, true);
+  real_shard = tos::shard_child(all, false);
+  deeper_shard = tos::shard_child(real_shard, true);
+  auto left_leaf = make_leaf(left, 10, "left");
+  auto right_leaf = make_leaf(real_shard, 11, "right");
+  vm::CellBuilder branch_builder;
+  td::Ref<vm::Cell> branch;
+  if (!branch_builder.store_bool_bool(true) || !branch_builder.store_ref_bool(std::move(left_leaf)) ||
+      !branch_builder.store_ref_bool(std::move(right_leaf)) || !branch_builder.finalize_to(branch)) {
+    std::cerr << "PENDING_FINALITY_SHARD_WINDOW_FIXTURE_FAILURE: could not build split shard tree\n";
+    std::exit(1);
+  }
+  vm::Dictionary dictionary{32};
+  if (!dictionary.set_ref(td::BitArray<32>{tos::basechainId}, std::move(branch), vm::Dictionary::SetMode::Add)) {
+    std::cerr << "PENDING_FINALITY_SHARD_WINDOW_FIXTURE_FAILURE: could not build shard dictionary\n";
+    std::exit(1);
+  }
+  return block::ShardConfig{dictionary.get_root_cell()};
 }
 
 }  // namespace
@@ -217,6 +256,38 @@ int main() {
   tos::validator::PendingFinalityAuthorityMemo authority_memo;
   const auto current_catchain_seqno = fixture.validator_set->get_catchain_seqno();
   const auto validator_set_hash = fixture.validator_set->get_validator_set_hash();
+  tos::validator::PendingFinalityAuthorityMemo classical_authority_memo;
+  std::size_t classical_authority_computations = 0;
+  auto classical_loader = [&] {
+    ++classical_authority_computations;
+    return std::vector<tos::validator::PendingFinalityAuthoritySet>{
+        {validator_set_hash, {validator_peer}, fixture.validator_set}};
+  };
+  const auto &classical_sets = classical_authority_memo.get(
+      {fixture.id.shard_full(), current_catchain_seqno}, classical_loader);
+  if (classical_sets.size() != 1 || classical_sets.front().validator_set != fixture.validator_set ||
+      !classical_authority_memo.contains({fixture.id.shard_full(), current_catchain_seqno}, validator_set_hash,
+                                         validator_peer, classical_loader) ||
+      classical_authority_computations != 1) {
+    std::cerr << "PENDING_FINALITY_CLASSICAL_MEMO_FAILURE: authority and classical verification did not share one validator-set computation\n";
+    return 1;
+  }
+
+  tos::ShardIdFull real_shard;
+  tos::ShardIdFull deeper_shard;
+  auto split_shards = make_split_shard_config(current_catchain_seqno, real_shard, deeper_shard);
+  auto inherited_catchain_seqno = split_shards.get_shard_cc_seqno(deeper_shard);
+  auto exact_deeper_shard = split_shards.get_shard_hash(deeper_shard, true);
+  if (inherited_catchain_seqno != current_catchain_seqno || exact_deeper_shard.not_null()) {
+    std::cerr << "PENDING_FINALITY_SHARD_WINDOW_FIXTURE_FAILURE: deeper non-existent shard did not inherit only the containing shard's catchain coordinate\n";
+    return 1;
+  }
+  if (tos::validator::pending_finality_coordinate_is_admissible(exact_deeper_shard.not_null(),
+                                                                inherited_catchain_seqno,
+                                                                current_catchain_seqno)) {
+    std::cerr << "PENDING_FINALITY_DEEP_SHARD_WINDOW_FAILURE: non-existent descendant shard reached validator-set computation\n";
+    return 1;
+  }
   std::size_t authority_computations = 0;
   for (int i = 0; i < 64; ++i) {
     auto claimed_catchain_seqno = static_cast<tos::CatchainSeqno>(current_catchain_seqno + (i % 3));
@@ -226,7 +297,7 @@ int main() {
         claimed_validator_set_hash, validator_peer, [&] {
           ++authority_computations;
           return std::vector<tos::validator::PendingFinalityAuthoritySet>{
-              {validator_set_hash, {validator_peer}}};
+              {validator_set_hash, {validator_peer}, {}}};
         });
     if (classified != (i == 0)) {
       std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: attacker-controlled coordinates changed authority\n";
@@ -250,7 +321,7 @@ int main() {
           validator_peer, [&] {
             ++bounded_authority_computations;
             return std::vector<tos::validator::PendingFinalityAuthoritySet>{
-                {validator_set_hash, {validator_peer}}};
+                {validator_set_hash, {validator_peer}, {}}};
           });
     }
   }
@@ -267,7 +338,7 @@ int main() {
       authority_memo, fixture.id.shard_full(), current_catchain_seqno, current_catchain_seqno, validator_set_hash,
       validator_peer, [&] {
         ++authority_computations;
-        return std::vector<tos::validator::PendingFinalityAuthoritySet>{{validator_set_hash, {validator_peer}}};
+        return std::vector<tos::validator::PendingFinalityAuthoritySet>{{validator_set_hash, {validator_peer}, {}}};
       });
   if (authority_computations != 3) {
     std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: trusted-state invalidation retained a stale classification\n";
@@ -458,6 +529,9 @@ int main() {
             << cycled_shard_count << " global_computations=" << bounded_authority_computations
             << " global_entries=" << bounded_authority_memo.size() << " global_cap="
             << tos::validator::pending_finality_authority_memo_max_entries << "\n";
+  std::cout << "PENDING_FINALITY_CLASSICAL_MEMO_OK: authority classification and classical verification share one computation\n";
+  std::cout << "PENDING_FINALITY_DEEP_SHARD_WINDOW_OK: containing_cc_seqno=" << inherited_catchain_seqno
+            << " exact_descendant=absent validator_set_computation=blocked\n";
   std::cout << "PENDING_FINALITY_CLASSIFICATION_COST: validators=400 average_us=" << measured_microseconds
             << " copied_pq_key_bytes_per_set="
             << measured_validator_count * tos::pq::mldsa44_public_key_bytes << " iterations=" << measurement_iterations

@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "block/validator-set.h"
 #include "keys/keys.hpp"
 #include "validator/validator-transport-authority.h"
 
@@ -103,6 +104,7 @@ struct PendingFinalityAuthorityKey {
 struct PendingFinalityAuthoritySet {
   td::uint32 validator_set_hash;
   std::vector<PublicKeyHash> roots;
+  td::Ref<block::ValidatorSet> validator_set;
 };
 
 constexpr bool pending_finality_catchain_is_current_or_next(CatchainSeqno current, CatchainSeqno claimed) {
@@ -110,6 +112,15 @@ constexpr bool pending_finality_catchain_is_current_or_next(CatchainSeqno curren
     return true;
   }
   return current != std::numeric_limits<CatchainSeqno>::max() && claimed == current + 1;
+}
+
+// get_shard_cc_seqno() deliberately resolves descendants to their containing
+// configured shard. That is useful to chain logic, but an untrusted block id
+// must not use such a descendant as a fresh validator-set memo key. Require an
+// exact configured shard before any validator-set computation.
+constexpr bool pending_finality_coordinate_is_admissible(bool exact_configured_shard, CatchainSeqno current,
+                                                          CatchainSeqno claimed) {
+  return exact_configured_shard && pending_finality_catchain_is_current_or_next(current, claimed);
 }
 
 inline constexpr std::size_t pending_finality_authority_memo_max_entries = 8;
@@ -127,14 +138,13 @@ inline constexpr std::size_t pending_finality_authority_memo_max_entries = 8;
 class PendingFinalityAuthorityMemo {
  public:
   template <class Loader>
-  bool contains(const PendingFinalityAuthorityKey &key, td::uint32 claimed_validator_set_hash,
-                const PublicKeyHash &peer, Loader &&loader) {
+  const std::vector<PendingFinalityAuthoritySet> &get(const PendingFinalityAuthorityKey &key, Loader &&loader) {
     for (auto it = entries_.begin(); it != entries_.end(); ++it) {
       if (it->key == key) {
         auto sets = std::move(it->sets);
         entries_.erase(it);
         entries_.push_back({key, std::move(sets)});
-        return contains_peer(entries_.back().sets, claimed_validator_set_hash, peer);
+        return entries_.back().sets;
       }
     }
     auto sets = loader();
@@ -142,7 +152,13 @@ class PendingFinalityAuthorityMemo {
       entries_.pop_front();
     }
     entries_.push_back({key, std::move(sets)});
-    return contains_peer(entries_.back().sets, claimed_validator_set_hash, peer);
+    return entries_.back().sets;
+  }
+
+  template <class Loader>
+  bool contains(const PendingFinalityAuthorityKey &key, td::uint32 claimed_validator_set_hash,
+                const PublicKeyHash &peer, Loader &&loader) {
+    return contains_peer(get(key, std::forward<Loader>(loader)), claimed_validator_set_hash, peer);
   }
 
   void clear() {

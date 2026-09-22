@@ -46,10 +46,13 @@ require_marker validator/manager.cpp \
   'if (!admission.admitted()) {' \
   'manager no longer stops after the pending store rejects evidence'
 require_marker validator/manager.cpp \
-  'pending_finality_sender_is_validator(' \
-  'manager no longer memoizes authenticated-sender classification by validator coordinates'
+  'pending_finality_authority_memo_.get({shard, claimed_catchain_seqno}' \
+  'manager no longer shares memoized validator sets between authority classification and classical verification'
+require_marker validator/manager.cpp \
+  'pending_finality_coordinate_is_admissible(state->get_shard_from_config(shard, true).not_null(),' \
+  'manager authority classification no longer requires an exact configured shard before set computation'
 require_marker validator/pending-finality-ingress.h \
-  'pending_finality_catchain_is_current_or_next(current_catchain_seqno, claimed_catchain_seqno)' \
+  'pending_finality_catchain_is_current_or_next(current, claimed)' \
   'manager authority classification no longer rejects implausible catchain claims before set computation'
 require_marker validator/pending-finality-ingress.h \
   'set.validator_set_hash == claimed_validator_set_hash' \
@@ -60,6 +63,14 @@ require_marker validator/manager.cpp \
 require_marker validator/manager.cpp \
   '*pending_finality_authority_memo_state_ != last_masterchain_block_id_' \
   'manager no longer keys authority-memo lifetime to the trusted masterchain state'
+require_marker validator/manager.cpp \
+  'check_finality_signatures(finality.block_id, finality.sig_set, std::move(validator_sets))' \
+  'classical finality verification no longer consumes validator sets from the shared authority memo'
+if sed -n '/static td::actor::Task<> check_finality_signatures/,/^}/p' "$root/validator/manager.cpp" | \
+    grep -qF 'get_validator_set('; then
+  echo "FINALITY_ADMISSION_SOURCE_FAILURE: classical finality verification recomputes a validator set outside the shared memo" >&2
+  failed=1
+fi
 require_marker validator/manager.cpp \
   'ingress.accounted_bytes, capacity, signatures_verified' \
   'manager no longer passes the authority capacity class into the pending store'
