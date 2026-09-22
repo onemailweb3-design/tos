@@ -437,27 +437,28 @@ retain the certificate, stop retrying it, and stop production.
 
 ## Registered gaps and explicit non-claims
 
-The three remaining closure gaps are item 1, the restart-cut part of item 5,
-and item 7.  The other entries below record resolved rows, deliberate naming
+The two remaining closure gaps are the restart-cut part of item 5 and item 7.
+The other entries below record resolved rows, deliberate naming
 choices, harness boundaries, evidence-retention limits, or separately scoped
 API/tooling debt; none is silently promoted to a green claim.
 
-1. **Manager actor integration is not exercised.**
+1. **Manager actor integration is exercised by a real zerostate startup.**
    `validator/manager.cpp` now passes a named
    `ValidatorSessionIdentityInput` to the shared derivation in each of its current,
    future and observer group paths.  The registered manager-assembly gate calls that
    exact production overload, reproduces the frozen vector and changes every input
    independently; the state-global-id gate obtains the remaining state input through
-   `ShardStateQ::fetch` from a real serialized state BOC.  No test starts the manager
-   actor from a zerostate and observes the resulting group, because the current tree
-   lacks that actor-scheduler validator-engine harness.  The consensus end-to-end
-   harness still assigns a constant `bus->session_id` and is insensitive to this
-   wiring.  Thus the pure production assembly is covered; actor initialization and
-   group lifecycle remain an explicit pre-Genesis integration gap.
-   **Closure condition and cost:** close it with a zerostate-driven
-   `ValidatorManagerImpl` actor-scheduler harness that observes the created group
-   and session ID; the cost is a new validator-engine scheduler fixture, not
-   another pure derivation test.
+   `ShardStateQ::fetch` from a real serialized state BOC.  The workflow test
+   `test/integration/test_manager_session_identity.py` additionally provisions a
+   real ML-DSA-44 consensus seed, writes the matching `validator_pq#b3` descriptor
+   into a generated zerostate, starts the production DHT and validator-engine actors,
+   and observes the masterchain group ID logged by `ValidatorManagerImpl`.  With the
+   same validator identities, keys and consensus configuration, changing only the
+   zerostate `global_id` changes the observed session ID.  Replacing the manager's
+   production `.global_id = global_id` assembly with zero makes the gate fail with
+   `MANAGER_SESSION_IDENTITY_FAILURE: changing zerostate global_id did not change the manager-created group session`.
+   The older consensus end-to-end harness still pins `bus->session_id`; it coexists
+   with this integration evidence but does not supply it.
 
 2. **Three API/tooling consumers remain incomplete.**
 
