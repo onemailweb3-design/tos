@@ -45,11 +45,6 @@ if (
 ):
     fail("CPU affinity/frequency/governor provenance is incomplete")
 
-criteria_hash = hashlib.sha256(
-    (root / "doc/pq-native/N6-ACCEPTANCE-CRITERIA.json").read_bytes()
-).hexdigest()
-if result.get("acceptance_criteria_sha256") != criteria_hash:
-    fail("result does not bind the current precommitted acceptance criteria")
 commit = result.get("git_commit", "")
 if len(commit) != 40:
     fail("result has no exact measured Git commit")
@@ -62,8 +57,19 @@ try:
     measured_source = subprocess.check_output(
         ["git", "-C", root, "show", f"{commit}:test/pq-native/n6-microbench.cpp"]
     )
+    measured_criteria = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            root,
+            "show",
+            f"{commit}:doc/pq-native/N6-ACCEPTANCE-CRITERIA.json",
+        ]
+    )
 except subprocess.CalledProcessError as exc:
-    fail(f"measured commit or benchmark source is unavailable: {exc}")
+    fail(f"measured commit, benchmark source, or acceptance criteria is unavailable: {exc}")
+if result.get("acceptance_criteria_sha256") != hashlib.sha256(measured_criteria).hexdigest():
+    fail("result does not bind the acceptance criteria at its measured commit")
 if (
     hashlib.sha256(measured_source).hexdigest()
     != hashlib.sha256((root / "test/pq-native/n6-microbench.cpp").read_bytes()).hexdigest()
