@@ -159,6 +159,33 @@ CASES = [
                            'pub(super) const GAS_PRICE: i64 = 0;'))],
          expect_red={'vm': ['both_instructions_cost_the_tariff']},
          expect_green=['cpp']),
+
+    # PATH7's two prices. Both VMs pin them as literals in their own tests --
+    # deliberately, because a test that reads the constant it is checking
+    # cannot check it -- but until these four cases existed nobody had watched
+    # either tripwire fire. A guard nobody has seen go red is a guard that
+    # might be measuring nothing, and these two numbers decide how much a
+    # withdrawal costs on a chain whose two VMs have to agree to the gas.
+    Case('cpp/path7-level-price', 'a level of PATH7 costs less, C++',
+         [(CPP_HEADER, replace('poseidon2_path7_level_gas_price = 3000',
+                               'poseidon2_path7_level_gas_price = 2999'))],
+         expect_red={'cpp': ['one more level of POSEIDON2_PATH7 costs']},
+         expect_green=['block', 'vm']),
+    Case('cpp/path7-base-price', 'the PATH7 base costs nothing, C++',
+         [(CPP_HEADER, replace('poseidon2_path7_base_gas_price = 500',
+                               'poseidon2_path7_base_gas_price = 0'))],
+         expect_red={'cpp': ['extrapolates back to']},
+         expect_green=['block', 'vm']),
+    Case('rust/path7-level-price', 'a level of PATH7 costs less, Rust',
+         [(RS_OPS, replace('pub(super) const PATH7_LEVEL_GAS_PRICE: i64 = 3000;',
+                           'pub(super) const PATH7_LEVEL_GAS_PRICE: i64 = 2999;'))],
+         expect_red={'vm': ['a_path_costs_its_base_plus_a_level']},
+         expect_green=['cpp']),
+    Case('rust/path7-base-price', 'the PATH7 base costs nothing, Rust',
+         [(RS_OPS, replace('pub(super) const PATH7_BASE_GAS_PRICE: i64 = 500;',
+                           'pub(super) const PATH7_BASE_GAS_PRICE: i64 = 0;'))],
+         expect_red={'vm': ['a_path_costs_its_base_plus_a_level']},
+         expect_green=['cpp']),
 ]
 
 

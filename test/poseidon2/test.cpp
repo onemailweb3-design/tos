@@ -540,6 +540,25 @@ void check_path7_gas() {
   constexpr long long kPerLevel = 3000 + 2 * 100;
   const long long four = path7_gas(4);
   const long long five = path7_gas(5);
+  // The base, isolated. Extrapolating back to depth zero leaves the base plus
+  // this harness's own fixed cost for running a one-instruction continuation,
+  // so the constant below is that sum and not the tariff alone. Without this
+  // the C++ base price is unguarded: the delta check cancels it exactly, and
+  // setting `poseidon2_path7_base_gas_price` to zero passed every C++ test
+  // while the Rust VM's absolute pinned it. Two VMs that disagree about what a
+  // withdrawal costs do not agree at all.
+  //
+  // Written as literals, like the Rust VM's absolute and for the same reason:
+  // a test that reads the constant it is checking cannot check it. 500 is the
+  // base; 39 is what this harness costs to run one instruction, and is the
+  // same 39 the Rust test spells `34 + 5`.
+  constexpr long long kBaseAndHarness = 500 + 39;
+  const long long intercept = four - 4 * kPerLevel;
+  require(intercept == kBaseAndHarness,
+          "POSEIDON2_PATH7 extrapolates back to " + std::to_string(intercept) +
+              " at depth zero, not " + std::to_string(kBaseAndHarness) +
+              ". The base price is the only thing in that figure that should ever move, and "
+              "it may not move in one VM alone.");
   require(five - four == kPerLevel,
           "one more level of POSEIDON2_PATH7 costs " + std::to_string(five - four) + ", not " +
               std::to_string(kPerLevel) +
