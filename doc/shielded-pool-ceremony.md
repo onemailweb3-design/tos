@@ -868,11 +868,13 @@ So **nothing circuit-shaped is outstanding, and a ceremony is not waiting on a
 decision.** The genesis state hash moved with the profile
 (`fd9303eb...` to `ced6d862...`), which is free while no address is published.
 
-What remains open is a number rather than a shape: `config.withdrawal_fee` was
-held at 50,000,000 because the cliff was 3.4x away, and it is now 56.5x away.
-Re-deriving it downwards is a real saving for every withdrawal and it does not
-block anything -- the profile already makes the mainnet fee an activation
-decision.
+`config.withdrawal_fee` was re-derived with it, 50,000,000 to **20,000,000**:
+the same safety standard the previous derivation settled on, applied to the
+only term the floor still has. It clears the forwarding price this chain
+charged until `3c7f4036d` by 3.76x, where 50,000,000 cleared the gas price it
+had just left by 3.35x. The genesis state hash moved again, to `28c9f65b...`.
+
+**Nothing is outstanding on this page that a ceremony has to wait for.**
 
 ## Running the checks
 

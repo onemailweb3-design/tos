@@ -29,7 +29,10 @@ const EPOCH_NONE: u32 = 0xffff_ffff;
 const RESERVE_FLOOR: u64 = 5 * TOS;
 /// The one configured denomination, and the fee section 14.2 fixes.
 pub const DENOMINATION: u64 = TOS;
-pub const WITHDRAWAL_FEE: u64 = 50_000_000;
+/// Section 14.2's fee, from the crate that puts it in the genesis store
+/// rather than copied. A test constant that restates a chain constant rots
+/// the moment the chain's moves, and this one has moved.
+pub const WITHDRAWAL_FEE: u64 = shielded_pool_genesis::WITHDRAWAL_FEE as u64;
 
 /// A field element as its 32 big-endian wire bytes.
 pub fn be(value: Fr) -> [u8; 32] {

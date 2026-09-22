@@ -118,6 +118,22 @@ int p_query_id(int digest) method_id { return payout_query_id(digest); }
 ;; solvency boundary to be the sum rather than merely large enough.
 int p_bounce_compute_fee(int ceiling) method_id { return get_compute_fee(0, ceiling); }
 
+;; The payout body's size, as `payout_forward_fee` measures it. A forward fee
+;; can be reproduced by more than one (bits, cells) pair, so deriving what the
+;; fee would be under a different ConfigParam 25 from the fee alone is a guess
+;; between them. This is the measurement that makes it arithmetic.
+(int, int) p_body_size(cell body) method_id {
+  (int cells, int bits, _) = compute_data_size(body, 1024);
+  return (cells, bits);
+}
+
+;; `get_forward_fee` at prices the caller names rather than the chain's, so a
+;; deployment's fee can be judged against a price the chain is not charging
+;; today -- including one it charged yesterday.
+int p_forward_fee_at(int lump, int per_bit, int per_cell, int bits, int cells) method_id {
+  return lump + muldivc(per_bit * bits + per_cell * cells, 1, 65536);
+}
+
 ;; Sends the payout for real, so the fee the action phase charges can be read
 ;; back and compared against the one the contract computed. The body names the
 ;; recipient and the amount; everything else the library builds.
@@ -418,6 +434,111 @@ fn the_fee_must_cover_the_message_and_not_the_recovery() {
         "the smallest solvent fee is {enough}, the forward fee exactly; the {recovery} a \
          bounded recovery at a {ceiling} gas ceiling would cost is charged to the bounce, \
          not pre-paid by every withdrawal"
+    );
+}
+
+/// How far the configured fee is from the cliff, measured rather than argued.
+///
+/// `config.withdrawal_fee` is written into the genesis store and can never
+/// change, while the check that enforces it reads the chain's **live**
+/// forwarding prices. So if ConfigParam 25 is ever governed past what the fee
+/// affords, every withdrawal fails at exit 243 permanently while deposits and
+/// transfers carry on. Money goes in and cannot come out, and there is no
+/// admin to fix it.
+///
+/// The fee is therefore not sized against today's price. It is sized against
+/// the highest price the chain could plausibly reach, and the only
+/// non-hypothetical reference for that is a price **this chain itself
+/// charged**: until `3c7f4036d` its three forwarding prices were each exactly
+/// six times today's.
+///
+/// Both halves of that are measured here rather than inferred. A forward fee
+/// can be reproduced by more than one `(bits, cells)` pair, so working out
+/// what the same message would cost under different prices from the fee alone
+/// is a guess between them; `p_body_size` removes the guess.
+#[test]
+fn the_configured_fee_clears_the_price_this_chain_used_to_charge() {
+    let probe = Probe::deploy();
+    let data = byte_chain(&payload(7));
+    let digest = small(0x31337);
+    let record = record_of(&probe, &digest, &data);
+    let body = probe.cell("p_body", vec![int(&digest), StackItem::cell(record)]);
+
+    // Today's ConfigParam 25, and the values this chain charged before the
+    // alignment. Read from `crypto/smartcont/gen-zerostate.fif`; the ratio is
+    // asserted rather than trusted.
+    const TODAY: (i128, i128, i128) = (66_667, 4_369_067, 436_906_667);
+    const BEFORE_ALIGNMENT: (i128, i128, i128) = (400_000, 26_214_400, 2_621_440_000);
+    // The zerostate says the old prices "were each exactly six times these".
+    // Each is short by two: the alignment divided by six and rounded **up**,
+    // and 400,000 / 6 is 66,666.67. The relationship that is exact is the one
+    // the alignment performed, so that is the one asserted.
+    for (before, today) in [
+        (BEFORE_ALIGNMENT.0, TODAY.0),
+        (BEFORE_ALIGNMENT.1, TODAY.1),
+        (BEFORE_ALIGNMENT.2, TODAY.2),
+    ] {
+        assert_eq!(
+            today,
+            (before + 5) / 6,
+            "today's price is not the pre-alignment one divided by six, rounded up"
+        );
+    }
+
+    let size = probe.call("p_body_size", vec![StackItem::cell(body.clone())])
+        .expect("the body's size");
+    assert_eq!(size.len(), 2, "p_body_size returned {} values", size.len());
+    let number = |item: &StackItem| -> i128 {
+        item.as_integer().expect("an integer").to_string().parse().expect("a number")
+    };
+    let cells = number(&size[0]);
+    let bits = number(&size[1]);
+
+    let at = |(lump, bit, cell): (i128, i128, i128)| {
+        probe.int(
+            "p_forward_fee_at",
+            vec![
+                StackItem::int(IntegerData::from_str_radix(&lump.to_string(), 10).unwrap()),
+                StackItem::int(IntegerData::from_str_radix(&bit.to_string(), 10).unwrap()),
+                StackItem::int(IntegerData::from_str_radix(&cell.to_string(), 10).unwrap()),
+                StackItem::int(IntegerData::from_str_radix(&bits.to_string(), 10).unwrap()),
+                StackItem::int(IntegerData::from_str_radix(&cells.to_string(), 10).unwrap()),
+            ],
+        )
+    };
+
+    // The reconstruction has to reproduce what the chain actually charges, or
+    // the figure for the other price is arithmetic about the wrong message.
+    let live = probe.int("p_forward_fee", vec![StackItem::cell(body.clone())]);
+    assert_eq!(
+        at(TODAY),
+        live,
+        "the reconstruction gives {} where the chain charges {live}",
+        at(TODAY)
+    );
+
+    let restoration = at(BEFORE_ALIGNMENT);
+    let configured: i128 = 50_000_000;
+    eprintln!(
+        "the payout body is {bits} bits in {cells} cells; it forwards for {live} today and \
+         would for {restoration} at the prices this chain charged before {}",
+        "3c7f4036d"
+    );
+    eprintln!(
+        "the configured fee {configured} is {:.1}x today's floor and {:.2}x the floor at \
+         those prices",
+        configured as f64 / live as f64,
+        configured as f64 / restoration as f64
+    );
+
+    // The property that matters: restoring the price the chain itself charged
+    // must not brick withdrawals. Everything above that is margin.
+    assert!(
+        configured > restoration,
+        "the configured fee {configured} does not clear the {restoration} floor at the \
+         forwarding prices this chain charged until {}, so restoring them would brick every \
+         withdrawal permanently",
+        "3c7f4036d"
     );
 }
 

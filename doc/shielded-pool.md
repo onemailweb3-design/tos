@@ -511,11 +511,42 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   it and asserts it is the charge that binds rather than the pre-ACCEPT
   authentication, which is now about twenty times cheaper.
 
-  **What it does not change.** `config.withdrawal_fee` is still 50,000,000.
-  Re-deriving it downwards is a separate decision and a real one — the
-  argument that kept it there was the cliff, and the cliff has moved — but it
-  changes the genesis state, so the address, and the profile already makes the
-  mainnet fee an activation decision.
+  **And the fee, re-derived.** 50,000,000 to **20,000,000**. The argument
+  that kept it at 50,000,000 was the cliff, and the cliff moved.
+
+  What the fee now has to clear is the payout's forward fee, and the only
+  non-hypothetical figure for how high that could go is a price **this chain
+  itself charged**: until `3c7f4036d` each of its three ConfigParam 25 prices
+  was today's multiplied by six. The payout body is 10,984 bits in 13 cells —
+  measured, not inferred, because a forward fee can be reproduced by more than
+  one `(bits, cells)` pair and reconstructing it under other prices from the
+  fee alone is a guess between them. So the floor is 885,601 today and
+  5,313,600 at those prices.
+
+  | fee | TOS | × today | × the 6× this chain ran at |
+  |---:|---:|---:|---:|
+  | 50,000,000 | 0.050 | 56.5× | 9.41× |
+  | 25,000,000 | 0.025 | 28.2× | 4.70× |
+  | **20,000,000** | **0.020** | **22.6×** | **3.76×** |
+  | 10,000,000 | 0.010 | 11.3× | 1.88× |
+  | 5,313,601 | 0.0053 | 6.0× | 1.00× — at the cliff |
+
+  20,000,000 is the **same safety standard the previous derivation settled
+  on**, applied to the term that is left: that one kept 50,000,000 because it
+  cleared the gas price this chain had just left by 3.35×, and this clears the
+  forwarding price it had just left by 3.76×. It is strictly further from its
+  cliff than the number it replaces was from the old one, and it costs a
+  withdrawal 2.0× a whole private transaction rather than 5.1×.
+
+  The difference is not a transfer. Section 14.3 leaves the fee in the balance
+  as unencumbered reserve, and with no admin and no upgrade path it can never
+  be paid out to anyone — over-charging is burnt, not collected.
+
+  `the_configured_fee_clears_the_price_this_chain_used_to_charge` measures
+  both floors and requires the configured fee to clear the second. Its
+  reconstruction is held to the chain's own `get_forward_fee` at today's
+  prices before it is trusted at any other, so a reconstruction that drifted
+  would be caught rather than believed.
 
   **And what the sender actually pays is a price, not a gas count.** A
   transact cost its sender 0.098 TOS against 0.000356 for an ordinary payment
@@ -536,6 +567,10 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   |---|---:|---:|
   | a transact, what the sender attaches — the ceiling, whatever it spends | 0.098000 | **0.009800** |
   | a withdrawal, the whole fee the chain charged | 0.078382 | **0.008104** |
+
+  Those two are the gas cut alone, before the withdrawal fee was re-derived.
+  On top of the second a withdrawal also pays `config.withdrawal_fee`, which
+  is now 0.020 rather than 0.050.
   | deposit, ceiling | 0.014667 | 0.001467 |
   | ordinary payment | 0.000356 | 0.000202 |
 

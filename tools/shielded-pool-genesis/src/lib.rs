@@ -336,57 +336,74 @@ pub const RESERVE_FLOOR: u128 = 5_000_000_000;
 /// Section 14.2's fee, and the one constant here whose size is decided by a
 /// price nobody has chosen yet.
 ///
-/// The fee pre-funds a recovery. When a payout bounces, the pool authenticates
-/// the bounce, calls ACCEPT and runs the recovery under `bounce_gas_ceiling`;
-/// the compute that buys was paid for by this fee, which the withdrawing user
-/// converted to reserve before the money left. So section 14.2 requires, and
-/// `payout_require_solvent` enforces at run time:
+/// The fee funds what the pool spends **as the sender of the payout**, and
+/// nothing else. Section 14.2 requires, and `payout_require_solvent` enforces
+/// at run time:
 ///
-///     withdrawal_fee >= payout_forward_fee(body) + get_compute_fee(bounce_ceiling)
+///     withdrawal_fee >= payout_forward_fee(body)
 ///
-/// Both terms read the chain's **live** configuration and this constant is
+/// That term reads the chain's **live** configuration and this constant is
 /// **immutable**, so the check is on the deployment rather than on the
-/// message. If the chain's prices are ever governed past what the pool
-/// charges, every withdrawal fails at exit 243 for good, while deposits and
-/// transfers carry on -- money goes in and can never come out again. That is
-/// the failure this number is sized against, and it is irreversible.
+/// message. If forwarding is ever governed past what the pool charges, every
+/// withdrawal fails at exit 243 for good, while deposits and transfers carry
+/// on -- money goes in and can never come out again. That is the failure this
+/// number is sized against, and it is irreversible.
 ///
-/// So it is not sized against today's price. Measured floors, with the
-/// forwarding term (885,601, ConfigParam 25) held fixed and only the gas price
-/// moved:
+/// # What it no longer funds
 ///
-///     gas price                       floor       50,000,000 covers it
-///     6.666 nanotos  (today)        2,352,270            21.3x
-///     66.66          (TON's live)  15,552,270             3.2x
-///     400            (TON, pre-cut) 88,885,601    NO -- 0.56x
-///     1000           (TON genesis) 220,885,601    NO -- 0.23x
+/// Until 2026-09-22 the floor also carried a whole bounded recovery's
+/// compute, and that term was the dangerous one: it moved with the **gas**
+/// price, which the chain governs directly. Section 15.4 now charges the
+/// recovery to the money being recovered, at the prices live when the bounce
+/// arrives, so the floor holds only a term that prices bytes. It is also
+/// fairer -- every withdrawal used to pre-pay for a recovery almost none of
+/// them will ever need.
 ///
-/// 50,000,000 survives up to about **223 nanotos a gas**: 34 times today's
-/// price, but only 3.4 times the TON-aligned value this chain itself ran at
-/// until 2026-09-21. Read against today alone the margin looks like waste;
-/// read against the price the chain might return to, it is headroom of 3.4x
-/// over a cliff.
+/// # Where the cliff is, measured
 ///
-/// It is therefore deliberately NOT re-derived downwards after the tenfold
-/// gas cut. Three times today's floor would be about 7,000,000, and a pool
-/// carrying that bricks every withdrawal the moment the price goes back to
-/// where it was this morning. Saving 0.043 TOS a withdrawal is not worth an
-/// irreversible loss of the withdrawal path.
+/// The floor is `payout_forward_fee` of the section 15.2 body, which
+/// `the_configured_fee_clears_the_price_this_chain_used_to_charge` measures
+/// rather than assumes -- a forward fee can be reproduced by more than one
+/// `(bits, cells)` pair, so reconstructing it under other prices from the fee
+/// alone is a guess between them. The body is **10,984 bits in 13 cells**.
 ///
-/// Raising it is a real option and a pure trade: 100,000,000 survives 451
-/// nanotos a gas, 250,000,000 survives 1,133 and so covers TON's whole
-/// historical range -- at 10 and 26 times what a withdrawal's own compute
-/// costs today. The profile makes the mainnet fee an activation decision, and
-/// activation is when the price policy will be known, which is the right
-/// moment to choose between them.
+/// The only non-hypothetical reference for "how high could forwarding go" is
+/// a price **this chain itself charged**: until `3c7f4036d` each of its three
+/// ConfigParam 25 prices was today's, multiplied by six (today's are the old
+/// ones divided by six and rounded up, so six times today's is two nanotos
+/// over each).
 ///
-/// A V2 note, because it removes the question rather than answering it: the
-/// recovery's compute could be charged to the recovered amount instead -- the
-/// money is already back in the pool when the note is minted -- and then the
-/// fee would not need to pre-fund anything and could be sized for whatever
-/// else it is for. That changes section 15.4 and the circuit, so it has to be
-/// decided before the ceremony fixes the verifying key.
-pub const WITHDRAWAL_FEE: u128 = 50_000_000;
+///     forwarding prices                 floor    20,000,000 covers it
+///     today (TON's live)              885,601             22.6x
+///     6x    (this chain, until        5,313,600            3.76x
+///            2026-09-21)
+///
+/// # Why 20,000,000
+///
+/// It is the same safety standard the previous derivation settled on, applied
+/// to the term that is left. That one kept 50,000,000 because it cleared the
+/// gas price this chain had just left by **3.35x**; 20,000,000 clears the
+/// forwarding price this chain had just left by **3.76x**, so it is strictly
+/// further from its cliff than the number it replaces was from the old one.
+///
+/// And it is 2.0x what a whole private transaction costs the sender, where
+/// 50,000,000 was 5.1x. The difference is not a transfer: section 14.3 leaves
+/// the fee in the balance as unencumbered reserve, and with no admin and no
+/// upgrade path it can never be paid out to anyone. Over-charging is burnt,
+/// not collected.
+///
+/// The alternatives, for a deployment that wants to weigh it again:
+///
+///     fee            TOS   x today  x the 6x this chain ran at
+///     50,000,000   0.050     56.5x                      9.41x
+///     25,000,000   0.025     28.2x                      4.70x
+///     20,000,000   0.020     22.6x                      3.76x   <- here
+///     10,000,000   0.010     11.3x                      1.88x
+///      5,313,601   0.0053     6.0x                      1.00x   at the cliff
+///
+/// The profile still makes the mainnet fee an activation decision, and
+/// activation is when the price policy will be known.
+pub const WITHDRAWAL_FEE: u128 = 20_000_000;
 
 /// Section 12.1's immutable list, sorted and positive.
 pub const DENOMINATIONS: [u128; 4] =
