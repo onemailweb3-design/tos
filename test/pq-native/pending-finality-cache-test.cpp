@@ -221,6 +221,30 @@ int main() {
               << authority_computations << " times\n";
     return 1;
   }
+
+  tos::validator::PendingFinalityAuthorityMemo bounded_authority_memo;
+  std::size_t bounded_authority_computations = 0;
+  constexpr auto cycled_shard_count = tos::validator::pending_finality_authority_memo_max_entries + 4;
+  for (std::size_t i = 0; i < cycled_shard_count; ++i) {
+    auto shard = tos::ShardIdFull{tos::basechainId, tos::shardIdAll - static_cast<tos::ShardId>(i * 2)};
+    for (int repeat = 0; repeat < 2; ++repeat) {
+      tos::validator::pending_finality_sender_is_validator(
+          bounded_authority_memo, shard, current_catchain_seqno, current_catchain_seqno, validator_set_hash,
+          validator_peer, [&] {
+            ++bounded_authority_computations;
+            return std::vector<tos::validator::PendingFinalityAuthoritySet>{
+                {validator_set_hash, {validator_peer}}};
+          });
+    }
+  }
+  if (bounded_authority_computations != cycled_shard_count ||
+      bounded_authority_memo.size() > tos::validator::pending_finality_authority_memo_max_entries) {
+    std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_BOUND_FAILURE: cycled " << cycled_shard_count
+              << " shard coordinates caused computations=" << bounded_authority_computations
+              << " entries=" << bounded_authority_memo.size() << " cap="
+              << tos::validator::pending_finality_authority_memo_max_entries << "\n";
+    return 1;
+  }
   authority_memo.clear();
   tos::validator::pending_finality_sender_is_validator(
       authority_memo, fixture.id.shard_full(), current_catchain_seqno, current_catchain_seqno, validator_set_hash,
@@ -410,7 +434,11 @@ int main() {
             << " validator_reserved=" << tos::validator::pending_finality_validator_reserved_budget_bytes
             << " per_sender=1048576 minimum_charge=4096 validator_shares="
             << tos::validator::pending_finality_max_validator_senders << "\n";
-  std::cout << "PENDING_FINALITY_AUTHORITY_MEMO_OK: cycled_claims=64 computations=2 entries=2\n";
+  std::cout << "PENDING_FINALITY_AUTHORITY_MEMO_OK: cycled_claims=64 computations=2 entries=2"
+               " global_cycled_shards="
+            << cycled_shard_count << " global_computations=" << bounded_authority_computations
+            << " global_entries=" << bounded_authority_memo.size() << " global_cap="
+            << tos::validator::pending_finality_authority_memo_max_entries << "\n";
   std::cout << "PENDING_FINALITY_CLASSIFICATION_COST: validators=400 average_us=" << measured_microseconds
             << " copied_pq_key_bytes_per_set="
             << measured_validator_count * tos::pq::mldsa44_public_key_bytes << " iterations=" << measurement_iterations

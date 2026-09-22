@@ -723,10 +723,12 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
     // computation at 390 us and 524800 copied PQ-key bytes on the development
     // host (20-run average). Checking current plus next can therefore copy
     // 1049600 bytes per miss. A cheap local cc_seqno check admits only current
-    // and next, so the two-entry memo covers the complete legitimate window.
-    // The attacker-claimed set hash is compared with the computed hash stored
-    // inside an entry and cannot create cache keys. The memo is reset above when
-    // the trusted masterchain state changes.
+    // and next. The attacker-claimed set hash is compared with the computed hash
+    // stored inside an entry and cannot create cache keys. A global eight-entry
+    // LRU bounds memory even when arrivals cycle attacker-selected shard ids;
+    // current/next being the only legitimate coordinates per shard keeps the
+    // honest-path working set small. The memo is reset above when the trusted
+    // masterchain state changes.
     validator_capacity = pending_finality_sender_is_validator(
         pending_finality_authority_memo_, shard, current_catchain_seqno, claimed_catchain_seqno,
         claimed_validator_set_hash, ingress.sender.peer, [&] {

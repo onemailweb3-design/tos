@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <deque>
 #include <limits>
-#include <map>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -113,33 +112,37 @@ constexpr bool pending_finality_catchain_is_current_or_next(CatchainSeqno curren
   return current != std::numeric_limits<CatchainSeqno>::max() && claimed == current + 1;
 }
 
-// For each shard, only current and next catchain coordinates can be legitimate
-// at one trusted state, which is why each shard has exactly two entries. The
-// attacker-controlled set hash is deliberately not part of the key: entries
-// store locally computed hashes beside their roots, so cycling claimed hashes
-// is a cheap comparison rather than another validator-set computation. The
-// manager clears the memo when its trusted masterchain state changes, so a
-// cached negative result cannot survive the state update that makes a set known.
+inline constexpr std::size_t pending_finality_authority_memo_max_entries = 8;
+
+// Only current and next catchain coordinates can be legitimate for one shard
+// at one trusted state, so a small cache has a high honest-path hit rate. That
+// observation does not bound the number of attacker-selected shard ids: the
+// global LRU cap below bounds the structure regardless of which key component
+// an arrival varies. The attacker-controlled set hash is deliberately not part
+// of the key: entries store locally computed hashes beside their roots, so
+// cycling claimed hashes is a cheap comparison rather than another
+// validator-set computation. The manager clears the memo when its trusted
+// masterchain state changes, so a cached negative result cannot survive the
+// state update that makes a set known.
 class PendingFinalityAuthorityMemo {
  public:
   template <class Loader>
   bool contains(const PendingFinalityAuthorityKey &key, td::uint32 claimed_validator_set_hash,
                 const PublicKeyHash &peer, Loader &&loader) {
-    auto &entries = entries_[key.shard];
-    for (auto it = entries.begin(); it != entries.end(); ++it) {
+    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
       if (it->key == key) {
         auto sets = std::move(it->sets);
-        entries.erase(it);
-        entries.push_back({key, std::move(sets)});
-        return contains_peer(entries.back().sets, claimed_validator_set_hash, peer);
+        entries_.erase(it);
+        entries_.push_back({key, std::move(sets)});
+        return contains_peer(entries_.back().sets, claimed_validator_set_hash, peer);
       }
     }
     auto sets = loader();
-    if (entries.size() == max_entries_per_shard) {
-      entries.pop_front();
+    if (entries_.size() == pending_finality_authority_memo_max_entries) {
+      entries_.pop_front();
     }
-    entries.push_back({key, std::move(sets)});
-    return contains_peer(entries.back().sets, claimed_validator_set_hash, peer);
+    entries_.push_back({key, std::move(sets)});
+    return contains_peer(entries_.back().sets, claimed_validator_set_hash, peer);
   }
 
   void clear() {
@@ -147,12 +150,7 @@ class PendingFinalityAuthorityMemo {
   }
 
   std::size_t size() const {
-    std::size_t result = 0;
-    for (const auto &[unused, entries] : entries_) {
-      (void)unused;
-      result += entries.size();
-    }
-    return result;
+    return entries_.size();
   }
 
  private:
@@ -175,8 +173,7 @@ class PendingFinalityAuthorityMemo {
     return false;
   }
 
-  static constexpr std::size_t max_entries_per_shard = 2;
-  std::map<ShardIdFull, std::deque<Entry>> entries_;
+  std::deque<Entry> entries_;
 };
 
 template <class Loader>
