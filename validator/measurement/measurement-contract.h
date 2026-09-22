@@ -7,6 +7,8 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -32,6 +34,8 @@ enum class TraceStage : std::uint8_t {
   block_proof_persisted,
   finalized_marker_written,
   finality_broadcast_sent,
+  peer_finality_broadcast_received,
+  peer_finality_verification_started,
   peer_finality_broadcast_verified,
   lite_proof_generated,
   lite_proof_verified,
@@ -77,6 +81,7 @@ struct TracePoint {
   TraceId trace_id;
   TraceStage stage;
   ClockSample clock;
+  std::optional<std::size_t> exact_bytes;
 };
 
 struct SizePoint {
@@ -95,10 +100,12 @@ class Sink {
 // null sink disables collection.  Serializers always finish producing bytes
 // before the observer sees their immutable Slice.
 void install_sink(std::shared_ptr<Sink> sink);
+td::Result<std::shared_ptr<Sink>> create_jsonl_file_sink(std::string path, std::string node_id);
 
 ClockSample sample_clocks();
 td::Result<std::int64_t> monotonic_duration_ns(const ClockSample& start, const ClockSample& finish);
 void record_trace(TraceId trace_id, TraceStage stage);
+void record_trace(TraceId trace_id, TraceStage stage, std::size_t exact_bytes);
 void record_trace_at(TraceId trace_id, TraceStage stage, ClockSample clock);
 void record_serialized_size(SerializedArtifact artifact, std::size_t exact_bytes);
 void record_serialized_size(SerializedArtifact artifact, td::Slice serialized);

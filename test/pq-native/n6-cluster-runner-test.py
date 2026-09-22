@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Fast contract gate for the N6.3 orchestrator and backend format."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "test/tostester/src"))
+
+from tostester.n6_cluster import (  # noqa: E402
+    analyze_live_finality,
+    validate_lite_transport_source,
+    validate_node_isolation,
+)
+from tostester.process_backend import LocalProcessBackend, RemoteCommandBackend  # noqa: E402
+
+
+def event(node: str, trace: str, stage: str, monotonic: int, wall: int, size: int | None = None):
+    result = {
+        "kind": "trace",
+        "node_id": node,
+        "trace_id": trace,
+        "stage": stage,
+        "monotonic_ns": monotonic,
+        "wall_unix_ns": wall,
+    }
+    if size is not None:
+        result["exact_bytes"] = size
+    return result
+
+
+async def check_backends(directory: Path) -> None:
+    local = LocalProcessBackend()
+    process = await local.spawn(
+        "node-1", "/bin/sh", ["-c", "printf local"], directory, os.environ, capture_stdout=True
+    )
+    stdout, _ = await process.communicate()
+    assert process.returncode == 0 and stdout == b"local"
+    remote = RemoteCommandBackend({"node-1": [sys.executable, "-m", "tostester.remote_process"]})
+    process = await remote.spawn(
+        "node-1", "/bin/sh", ["-c", "printf remote"], directory, os.environ, capture_stdout=True
+    )
+    stdout, _ = await process.communicate()
+    assert process.returncode == 0 and stdout == b"remote"
+    assert local.manifest() == {"kind": "local-process"}
+    assert remote.manifest() == {
+        "kind": "remote-command",
+        "nodes": ["node-1"],
+        "provisioning": "external",
+    }
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        trace = "ab" * 32
+        first = root / "node-a.jsonl"
+        second = root / "node-b.jsonl"
+        first.write_text(
+            json.dumps(event("node-a", trace, "finality_broadcast_sent", 10, 100, 984260)) + "\n"
+        )
+        second.write_text(
+            "\n".join(
+                json.dumps(item)
+                for item in (
+                    event("node-b", trace, "peer_finality_broadcast_received", 20, 130, 984260),
+                    event("node-b", trace, "peer_finality_verification_started", 27, 137),
+                    event("node-b", trace, "peer_finality_broadcast_verified", 39, 149),
+                )
+            )
+            + "\n"
+        )
+        evidence = analyze_live_finality([first, second])
+        assert evidence.sender_node == "node-a" and evidence.verifier_node == "node-b"
+        assert evidence.payload_bytes == 984260
+        assert (evidence.propagation_ns, evidence.queueing_ns, evidence.verification_ns) == (
+            30,
+            7,
+            12,
+        )
+        validate_node_isolation(
+            [
+                {
+                    "db_root": f"db-{index}",
+                    "adnl_identity": f"adnl-{index}",
+                    "ports": [1000 + index * 3 + offset for offset in range(3)],
+                    "log": f"log-{index}",
+                    "trace": f"trace-{index}",
+                    "resource_monitor": f"resource-{index}",
+                }
+                for index in range(3)
+            ]
+        )
+        validate_lite_transport_source(ROOT)
+        asyncio.run(check_backends(root))
+    print(
+        "N6_CLUSTER_RUNNER_OK: local and remote-command backends share the manifest and evidence contract"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (AssertionError, RuntimeError, ValueError) as error:
+        print(f"N6_CLUSTER_RUNNER_FAILURE: {error}", file=sys.stderr)
+        raise SystemExit(1) from error

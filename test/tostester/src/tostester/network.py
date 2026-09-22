@@ -23,6 +23,7 @@ from toslib import EngineConsoleClient, ToslibClient, ToslibError, ToslibEventLo
 from .install import Install
 from .key import Key
 from .log_streamer import LogStreamer
+from .process_backend import LocalProcessBackend, ProcessBackend
 from .zerostate import NetworkConfig, PqInitialValidator, Zerostate, create_zerostate
 
 l = logging.getLogger(__name__)
@@ -199,23 +200,21 @@ class Network:
 
             match start_options.debug:
                 case None:
-                    self.__process = await asyncio.create_subprocess_exec(
+                    self.__process = await self._network.process_backend.spawn(
+                        self.name,
                         executable,
-                        *cmd_flags,
-                        cwd=self._directory,
-                        env=process_env,
-                        stderr=asyncio.subprocess.PIPE,
+                        cmd_flags,
+                        self._directory,
+                        process_env,
                     )
                 case "rr":
                     l.info(f"Recording {self.name} with rr")
-                    self.__process = await asyncio.create_subprocess_exec(
+                    self.__process = await self._network.process_backend.spawn(
+                        self.name,
                         "rr",
-                        "record",
-                        executable,
-                        *cmd_flags,
-                        cwd=self._directory,
-                        env=process_env,
-                        stderr=asyncio.subprocess.PIPE,
+                        ["record", str(executable), *cmd_flags],
+                        self._directory,
+                        process_env,
                     )
 
             assert self.__process.stderr is not None  # to placate pyright
@@ -229,6 +228,14 @@ class Network:
 
         def announce_to(self, dht: "DHTNode"):
             self._static_nodes.append(dht)
+
+        @property
+        def directory(self) -> Path:
+            return self._directory
+
+        @property
+        def process_id(self) -> int | None:
+            return None if self.__process is None else self.__process.pid
 
         @abstractmethod
         async def run(self, options: StartOptions | None = None):
@@ -263,12 +270,14 @@ class Network:
         event_loop: asyncio.AbstractEventLoop | None = None,
         *,
         base_port: int = 2000,
+        process_backend: ProcessBackend | None = None,
     ):
         self._install = install
         self._directory = directory.absolute()
         self._port = base_port
         self._node_idx = 0
         self._status = _Status.INITED
+        self._process_backend = process_backend or LocalProcessBackend()
 
         self._toslib = install.toslibjson
         self._event_loop = ToslibEventLoop(self._toslib, event_loop)
@@ -291,6 +300,10 @@ class Network:
     @property
     def install(self):
         return self._install
+
+    @property
+    def process_backend(self) -> ProcessBackend:
+        return self._process_backend
 
     def create_dht_node(self) -> "DHTNode":
         assert self._status < _Status.CLOSED
@@ -606,6 +619,14 @@ class FullNode(Network.Node):
     @property
     def validator_key(self):
         return self._validator_key
+
+    @property
+    def adnl_identity(self) -> bytes:
+        return self._validator_key.id
+
+    @property
+    def transport_ports(self) -> tuple[int, int, int]:
+        return (self._addr.port, self._liteserver_addr.port, self._engine_console_addr.port)
 
     @override
     async def run(self, options: StartOptions | None = None):

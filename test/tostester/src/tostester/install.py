@@ -55,6 +55,10 @@ class Install:
         return self.build_dir / "validator-engine-console/validator-engine-console"
 
     @property
+    def lite_client_exe(self):
+        return self.build_dir / "lite-client/lite-client"
+
+    @property
     def blockchain_explorer_exe(self):
         return self.build_dir / "blockchain-explorer/blockchain-explorer"
 

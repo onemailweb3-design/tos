@@ -65,6 +65,7 @@
 #include "checksum.h"
 #include "fabric.h"
 #include "finality-cache-policy.h"
+#include "full-node-serializer.hpp"
 #include "get-next-key-blocks.h"
 #include "import-db-slice-local.hpp"
 #include "import-db-slice.hpp"
@@ -1021,11 +1022,14 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
   }
 
   auto sig_set = finality->evidence.sig_set;
+  const auto finality_trace_id =
+      fullnode::block_finality_broadcast_trace_id(BlockFinalityBroadcast{block_id, finality->evidence.sig_set});
   auto finality_source = finality->evidence.source;
   auto was_final = finality->is_final;
   BlockBroadcast broadcast{block_id, std::move(sig_set), std::move(data), proof.move_as_ok()};
   const bool signatures_checked = finality->verified || !broadcast.sig_set->is_pq();
   if (!signatures_checked) {
+    measurement::record_trace(finality_trace_id, measurement::TraceStage::peer_finality_verification_started);
     auto broadcast_for_validation = broadcast.clone();
     validate_block_broadcast_signatures(
         std::move(broadcast_for_validation),
@@ -1104,6 +1108,9 @@ void ValidatorManagerImpl::checked_pending_block_finality(BlockIdExt block_id, B
   if (!pending->mark_front_verified(attempt_token)) {
     return;
   }
+  measurement::record_trace(
+      fullnode::block_finality_broadcast_trace_id(BlockFinalityBroadcast{block_id, broadcast.sig_set}),
+      measurement::TraceStage::peer_finality_broadcast_verified);
   new_block_broadcast(
       std::move(broadcast), true, source,
       [SelfId = actor_id(this), block_id, was_final, attempt_token](td::Result<td::Unit> apply_result) mutable {

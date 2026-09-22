@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <fstream>
+#include <iomanip>
 #include <mutex>
+#include <sstream>
 #include <string>
 
 #include "measurement-contract.h"
@@ -28,12 +31,91 @@ std::shared_ptr<Sink> enabled_sink() {
   return sink;
 }
 
+std::string json_escape(std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  for (const char ch : value) {
+    switch (ch) {
+      case '\\':
+        result += "\\\\";
+        break;
+      case '"':
+        result += "\\\"";
+        break;
+      case '\n':
+        result += "\\n";
+        break;
+      case '\r':
+        result += "\\r";
+        break;
+      case '\t':
+        result += "\\t";
+        break;
+      default:
+        result += ch;
+    }
+  }
+  return result;
+}
+
+std::string trace_id_hex(const TraceId& id) {
+  std::ostringstream out;
+  out << std::hex << std::setfill('0');
+  for (const auto byte : id) {
+    out << std::setw(2) << static_cast<unsigned>(byte);
+  }
+  return out.str();
+}
+
+class JsonlFileSink final : public Sink {
+ public:
+  JsonlFileSink(std::string path, std::string node_id)
+      : out_(std::move(path), std::ios::app), node_id_(std::move(node_id)) {
+  }
+
+  bool is_open() const {
+    return out_.is_open();
+  }
+
+  void record_trace(TracePoint point) override {
+    std::lock_guard guard(mutex_);
+    out_ << "{\"kind\":\"trace\",\"node_id\":\"" << json_escape(node_id_) << "\",\"trace_id\":\""
+         << trace_id_hex(point.trace_id) << "\",\"stage\":\"" << trace_stage_name(point.stage)
+         << "\",\"monotonic_ns\":" << point.clock.monotonic_ns << ",\"wall_unix_ns\":" << point.clock.wall_unix_ns;
+    if (point.exact_bytes) {
+      out_ << ",\"exact_bytes\":" << *point.exact_bytes;
+    }
+    out_ << "}\n";
+    out_.flush();
+  }
+
+  void record_size(SizePoint point) override {
+    std::lock_guard guard(mutex_);
+    out_ << "{\"kind\":\"size\",\"node_id\":\"" << json_escape(node_id_) << "\",\"artifact\":\""
+         << serialized_artifact_name(point.artifact) << "\",\"exact_bytes\":" << point.exact_bytes << "}\n";
+    out_.flush();
+  }
+
+ private:
+  std::mutex mutex_;
+  std::ofstream out_;
+  std::string node_id_;
+};
+
 }  // namespace
 
 void install_sink(std::shared_ptr<Sink> value) {
   std::lock_guard guard(sink_mutex);
   sink = std::move(value);
   sink_enabled.store(static_cast<bool>(sink), std::memory_order_release);
+}
+
+td::Result<std::shared_ptr<Sink>> create_jsonl_file_sink(std::string path, std::string node_id) {
+  auto result = std::make_shared<JsonlFileSink>(std::move(path), std::move(node_id));
+  if (!result->is_open()) {
+    return td::Status::Error("failed to open measurement JSONL output");
+  }
+  return std::static_pointer_cast<Sink>(std::move(result));
 }
 
 ClockSample sample_clocks() {
@@ -55,14 +137,23 @@ td::Result<std::int64_t> monotonic_duration_ns(const ClockSample& start, const C
 void record_trace(TraceId trace_id, TraceStage stage) {
   auto current = enabled_sink();
   if (current) {
-    current->record_trace({.trace_id = std::move(trace_id), .stage = stage, .clock = sample_clocks()});
+    current->record_trace(
+        {.trace_id = std::move(trace_id), .stage = stage, .clock = sample_clocks(), .exact_bytes = {}});
+  }
+}
+
+void record_trace(TraceId trace_id, TraceStage stage, std::size_t exact_bytes) {
+  auto current = enabled_sink();
+  if (current) {
+    current->record_trace(
+        {.trace_id = std::move(trace_id), .stage = stage, .clock = sample_clocks(), .exact_bytes = exact_bytes});
   }
 }
 
 void record_trace_at(TraceId trace_id, TraceStage stage, ClockSample clock) {
   auto current = enabled_sink();
   if (current) {
-    current->record_trace({.trace_id = std::move(trace_id), .stage = stage, .clock = clock});
+    current->record_trace({.trace_id = std::move(trace_id), .stage = stage, .clock = clock, .exact_bytes = {}});
   }
 }
 
@@ -103,6 +194,10 @@ std::string_view trace_stage_name(TraceStage stage) {
       return "finalized_marker_written";
     case TraceStage::finality_broadcast_sent:
       return "finality_broadcast_sent";
+    case TraceStage::peer_finality_broadcast_received:
+      return "peer_finality_broadcast_received";
+    case TraceStage::peer_finality_verification_started:
+      return "peer_finality_verification_started";
     case TraceStage::peer_finality_broadcast_verified:
       return "peer_finality_broadcast_verified";
     case TraceStage::lite_proof_generated:

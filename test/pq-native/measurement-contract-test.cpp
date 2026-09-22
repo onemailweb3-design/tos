@@ -103,6 +103,8 @@ TEST(MeasurementContract, MetricSchema) {
       TraceStage::block_proof_persisted,
       TraceStage::finalized_marker_written,
       TraceStage::finality_broadcast_sent,
+      TraceStage::peer_finality_broadcast_received,
+      TraceStage::peer_finality_verification_started,
       TraceStage::peer_finality_broadcast_verified,
       TraceStage::lite_proof_generated,
       TraceStage::lite_proof_verified,
@@ -137,11 +139,11 @@ TEST(MeasurementContract, LowCardinality) {
           "N6_LOW_CARDINALITY_FAILURE: forbidden label refusal did not name validator_id");
 
   BoundedTraceBuffer buffer(2, 2);
-  buffer.record_trace({trace_id(1), TraceStage::candidate_generated, {1, 1}});
-  buffer.record_trace({trace_id(1), TraceStage::candidate_first_sent, {2, 2}});
-  buffer.record_trace({trace_id(1), TraceStage::candidate_first_received, {3, 3}});
-  buffer.record_trace({trace_id(2), TraceStage::candidate_generated, {4, 4}});
-  buffer.record_trace({trace_id(3), TraceStage::candidate_generated, {5, 5}});
+  buffer.record_trace({trace_id(1), TraceStage::candidate_generated, {1, 1}, {}});
+  buffer.record_trace({trace_id(1), TraceStage::candidate_first_sent, {2, 2}, {}});
+  buffer.record_trace({trace_id(1), TraceStage::candidate_first_received, {3, 3}, {}});
+  buffer.record_trace({trace_id(2), TraceStage::candidate_generated, {4, 4}, {}});
+  buffer.record_trace({trace_id(3), TraceStage::candidate_generated, {5, 5}, {}});
   require(buffer.trace_count() == 2, "N6_LOW_CARDINALITY_FAILURE: trace-id bound was exceeded");
   ASSERT_EQ(1u, buffer.evicted_traces());
   ASSERT_EQ(1u, buffer.dropped_events());

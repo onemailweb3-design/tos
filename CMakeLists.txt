@@ -1239,6 +1239,20 @@ add_test(NAME n6-microbench-results
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-n6-microbench-results.py
           ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(n6-microbench-results PROPERTIES LABELS "source-guard")
+add_test(NAME n6-cluster-runner
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-cluster-runner-test.py)
+set_tests_properties(n6-cluster-runner PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/test/tostester/src")
+add_test(NAME n6-live-finality-overlay
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run-n6-cluster-gate.sh
+          ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} live-finality 29400)
+add_test(NAME n6-lite-framed-tcp
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run-n6-cluster-gate.sh
+          ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} lite-framed-tcp 29600)
+set_tests_properties(n6-live-finality-overlay n6-lite-framed-tcp PROPERTIES
+  LABELS "n6-cluster"
+  TIMEOUT 240)
+add_dependencies(all-tests validator-engine lite-client tos-pq-consensus-key)
 add_test(NAME finality-evidence-admission-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-evidence-admission.sh ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(finality-evidence-admission-source PROPERTIES LABELS "source-guard")

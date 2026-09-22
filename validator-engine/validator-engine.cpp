@@ -72,6 +72,7 @@
 #include "overlay-manager.h"
 #include "overlays.h"
 #include "validator/impl/config.hpp"
+#include "validator/measurement/measurement-contract.h"
 #include "validator/state-download-buffer.h"
 #include "validator-engine.hpp"
 
@@ -6003,6 +6004,8 @@ int main(int argc, char *argv[]) {
   LOG_STATUS(td::change_maximize_rlimit(td::RlimitType::nofile, 1572864));
 
   std::vector<std::function<void()>> acts;
+  std::string measurement_jsonl;
+  std::string measurement_node_id;
 
   td::OptionParser p;
   p.set_description("validator or full node for TOS network");
@@ -6015,6 +6018,10 @@ int main(int argc, char *argv[]) {
               << ", Date: " << GitMetadata::CommitDate() << "]\n";
     std::exit(0);
   });
+  p.add_option('\0', "measurement-jsonl", "write bounded-vocabulary N6 trace events to this JSONL file",
+               [&](td::Slice path) { measurement_jsonl = path.str(); });
+  p.add_option('\0', "measurement-node-id", "stable node name written into N6 trace events",
+               [&](td::Slice value) { measurement_node_id = value.str(); });
   p.add_option('h', "help", "prints_help", [&]() {
     char b[10240];
     td::StringBuilder sb(td::MutableSlice{b, 10000});
@@ -6754,6 +6761,14 @@ int main(int argc, char *argv[]) {
   if (S.is_error()) {
     LOG(ERROR) << "failed to parse options: " << S.move_as_error();
     std::_Exit(2);
+  }
+  if (!measurement_jsonl.empty() || !measurement_node_id.empty()) {
+    if (measurement_jsonl.empty() || measurement_node_id.empty()) {
+      LOG(ERROR) << "--measurement-jsonl and --measurement-node-id must be supplied together";
+      std::_Exit(2);
+    }
+    tos::validator::measurement::install_sink(
+        tos::validator::measurement::create_jsonl_file_sink(measurement_jsonl, measurement_node_id).move_as_ok());
   }
 
   // H-03 startup invariant: log the effective persistent-state budget

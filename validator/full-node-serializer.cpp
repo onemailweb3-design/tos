@@ -14,6 +14,8 @@
     You should have received a copy of the GNU Lesser General Public License
     along with TOS Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include <cstring>
+
 #include "auto/tl/tos_api.hpp"
 #include "block/block-auto.h"
 #include "block/block-parse.h"
@@ -203,6 +205,13 @@ td::Bits256 block_finality_broadcast_transport_id(const BlockFinalityBroadcast& 
   destination.substr(0, block_identity.size()).copy_from(block_identity.as_slice());
   destination.substr(block_identity.size()).copy_from(signature_set_hash.as_slice());
   return td::sha256_bits256(identity.as_slice());
+}
+
+measurement::TraceId block_finality_broadcast_trace_id(const BlockFinalityBroadcast& broadcast) {
+  const auto transport_id = block_finality_broadcast_transport_id(broadcast);
+  measurement::TraceId result{};
+  std::memcpy(result.data(), transport_id.as_slice().data(), result.size());
+  return result;
 }
 
 td::Result<BlockFinalityBroadcast> deserialize_block_finality_broadcast(
