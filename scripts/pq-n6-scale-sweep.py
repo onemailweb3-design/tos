@@ -20,6 +20,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--scales", type=int, nargs="+", required=True)
     parser.add_argument("--base-port", type=int, default=29800)
+    parser.add_argument(
+        "--allow-local-multi-scale-diagnostic",
+        action="store_true",
+        help="allow multiple co-located local scale points; never release evidence",
+    )
     parser.add_argument("--remote-command-inventory", type=Path)
     return parser.parse_args()
 
@@ -39,6 +44,7 @@ async def main() -> int:
         args.scales,
         args.profile.resolve(),
         args.base_port,
+        args.allow_local_multi_scale_diagnostic,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "test/tostester/src"))
 
 import tostester.n6_cluster as n6_cluster  # noqa: E402
 from tostester.n6_cluster import (  # noqa: E402
+    analyze_consensus_milestones,
     analyze_live_finality,
     load_latency_profile,
     validate_latency_backend,
@@ -145,6 +146,24 @@ def main() -> int:
             7,
             12,
         )
+        milestones_path = root / "milestones.jsonl"
+        milestones_path.write_text(
+            "\n".join(
+                json.dumps(item)
+                for item in (
+                    event("node-a", trace, "candidate_generated", 10, 110),
+                    event("node-a", trace, "notarization_certificate_observed", 20, 120),
+                    event("node-a", trace, "finalization_certificate_observed", 30, 130),
+                )
+            )
+            + "\n"
+        )
+        milestones = analyze_consensus_milestones([milestones_path], 100)
+        assert (
+            milestones.time_to_first_proposal_ns,
+            milestones.time_to_first_notarization_certificate_ns,
+            milestones.time_to_first_final_certificate_ns,
+        ) == (10, 20, 30)
         validate_node_isolation(
             [
                 {

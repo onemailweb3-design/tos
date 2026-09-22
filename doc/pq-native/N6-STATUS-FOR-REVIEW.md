@@ -285,6 +285,15 @@ the actual boot-count argument and checks both reported counts. Fixing the
 boot argument to the first scale makes the second point fail with
 `N6_SCALE_SWEEP_FAILURE: requested scale 7 booted 4 validators`; this prevents
 a list-shaped driver from silently measuring one cluster repeatedly.
+The milestone analyzer also requires strict proposal < notarization < FinalCert
+ordering. Three fields populated from one event fail with
+`proposal, notarization and FinalCert milestones are not distinct`.
+
+An explicit `--allow-local-multi-scale-diagnostic` switch exists only for
+instrument validation on a capable development host. It is false by default,
+is not used by the registered 4-validator gate, and sets
+`local_colocation_diagnostic_override=true` in its result. Such a run remains
+ineligible for release evidence and cannot satisfy a required release scale.
 
 This tier proves only minimum-BFT protocol progress, message flow and carrier
 transport. It makes no launch-sizing, carrier-ceiling, network-capacity or

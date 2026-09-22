@@ -175,10 +175,12 @@ def analyze_consensus_milestones(
     )
     if not (
         result.time_to_first_proposal_ns
-        <= result.time_to_first_notarization_certificate_ns
-        <= result.time_to_first_final_certificate_ns
+        < result.time_to_first_notarization_certificate_ns
+        < result.time_to_first_final_certificate_ns
     ):
-        raise RuntimeError("N6_SCALE_SWEEP_FAILURE: consensus milestones are out of order")
+        raise RuntimeError(
+            "N6_SCALE_SWEEP_FAILURE: proposal, notarization and FinalCert milestones are not distinct"
+        )
     return result
 
 
@@ -462,11 +464,13 @@ async def run_scale_sweep(
     scales: list[int],
     profile_path: Path,
     base_port: int,
+    allow_local_diagnostic_scales: bool = False,
 ) -> dict[str, Any]:
     if not scales or len(scales) != len(set(scales)) or any(scale < 4 for scale in scales):
         raise ValueError("N6_SCALE_SWEEP_FAILURE: scales must be unique integers of at least four")
     profile = load_latency_profile(profile_path)
-    if backend.manifest()["kind"] == "local-process" and scales != [4]:
+    local_multi_scale = backend.manifest()["kind"] == "local-process" and scales != [4]
+    if local_multi_scale and not allow_local_diagnostic_scales:
         raise ValueError(
             "N6_SCALE_SWEEP_FAILURE: this local host is restricted to the 4-validator minimum-BFT tier"
         )
@@ -514,6 +518,7 @@ async def run_scale_sweep(
         "required_release_scales": required_release_scales,
         "required_release_scales_measured": [],
         "full_required_matrix_executed": False,
+        "local_colocation_diagnostic_override": local_multi_scale,
         "consensus_correctness_verdict": "NOT_MADE_MERKLE_DIAGNOSIS_OPEN",
     }
     (artifact_dir / "scale-sweep-result.json").write_text(
