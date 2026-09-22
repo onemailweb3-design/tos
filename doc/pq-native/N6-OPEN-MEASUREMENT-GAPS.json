@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "required_gap_ids": [
+    "release-scale-matrix-unmeasured",
+    "carrier-scale-transport-unmeasured"
+  ],
+  "gaps": {
+    "release-scale-matrix-unmeasured": {
+      "observation": "The required 21/32/64/100 release scales have not been measured; this host runs only the separate 4-validator minimum-BFT functional tier.",
+      "reason": "The available measurement server is a 6-core KVM guest with 11.68 GiB RAM. Co-locating 21 validators would reserve about 8.0 GiB for the N5 pending-finality budget alone and would not represent the one-validator-per-host topology required by section 0.5.",
+      "closure_condition": "Run every required release scale with one validator per reviewed host or VM at the exact N5-complete measured commit and retain the manifests and results.",
+      "status": "OPEN"
+    },
+    "carrier-scale-transport-unmeasured": {
+      "observation": "No cluster run has transported a finality carrier near the 984260-byte 400-signer ceiling over the reviewed 100 Mbps symmetric deployment link.",
+      "reason": "The 4-validator functional tier carries only an approximately ten-kilobyte certificate and therefore cannot exercise the carrier, admission-pool, fan-out or network-capacity ceilings.",
+      "closure_condition": "Run the live overlay scenario at a signer count that produces a carrier near the 984260-byte ceiling on the reviewed deployment network and retain separate payload, queueing, propagation and verification evidence.",
+      "status": "OPEN"
+    }
+  }
+}

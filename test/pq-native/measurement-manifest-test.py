@@ -211,11 +211,38 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
         ),
         encoding="utf-8",
     )
+    resolved_gaps = Path(raw).parent / f"measurement-gaps-{Path(raw).name}.json"
+    resolved_gaps.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "required_gap_ids": [
+                    "release-scale-matrix-unmeasured",
+                    "carrier-scale-transport-unmeasured",
+                ],
+                "gaps": {
+                    gap_id: {
+                        "observation": "fixture observation",
+                        "reason": "fixture reason",
+                        "closure_condition": "fixture closure condition",
+                        "status": "RESOLVED",
+                        "resolved_by": "fixture run evidence",
+                    }
+                    for gap_id in (
+                        "release-scale-matrix-unmeasured",
+                        "carrier-scale-transport-unmeasured",
+                    )
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     try:
         # This branch has a live correctness question.  Check it before every
         # other release precondition so neither a missing N5 artifact nor a dirty
         # developer tree can make this refusal pass for the wrong reason.
         live_questions = repo_root / "doc/pq-native/N6-OPEN-CORRECTNESS-QUESTIONS.json"
+        live_gaps = repo_root / "doc/pq-native/N6-OPEN-MEASUREMENT-GAPS.json"
         try:
             module.create_manifest(
                 repo=repo_root,
@@ -225,6 +252,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                 mode="release",
                 n5_closure_path=None,
                 correctness_questions_path=live_questions,
+                measurement_gaps_path=live_gaps,
             )
             fail("current branch with an open correctness question was release eligible")
         except module.ManifestError as exc:
@@ -232,8 +260,8 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
             if expected not in str(exc):
                 fail(f"open Merkle question reported the wrong release refusal: {exc}")
 
-        # With the question resolved and its evidence retained, the next live
-        # refusal is still the absent exact-commit N5 closure artifact.
+        # With the correctness question resolved, the unmeasured release scale
+        # and carrier-size work is an independent refusal.
         try:
             module.create_manifest(
                 repo=repo_root,
@@ -243,6 +271,29 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                 mode="release",
                 n5_closure_path=None,
                 correctness_questions_path=resolved_questions,
+                measurement_gaps_path=live_gaps,
+            )
+            fail("current branch with open measurement gaps was release eligible")
+        except module.ManifestError as exc:
+            expected = (
+                "release-grade measurement refuses open measurement gaps: "
+                "carrier-scale-transport-unmeasured, release-scale-matrix-unmeasured"
+            )
+            if expected not in str(exc):
+                fail(f"open measurement gaps reported the wrong release refusal: {exc}")
+
+        # Resolving both registered measurement gaps with retained evidence
+        # exposes the next independent refusal, the exact-commit N5 closure.
+        try:
+            module.create_manifest(
+                repo=repo_root,
+                config=complete_config(),
+                criteria_path=criteria,
+                matrix_path=matrix,
+                mode="release",
+                n5_closure_path=None,
+                correctness_questions_path=resolved_questions,
+                measurement_gaps_path=resolved_gaps,
             )
             fail("current branch without an N5 closure artifact was release eligible")
         except module.ManifestError as exc:
@@ -258,6 +309,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
             mode="diagnostic",
             n5_closure_path=None,
             correctness_questions_path=live_questions,
+            measurement_gaps_path=live_gaps,
         )
         if diagnostic["release_evidence_eligible"]:
             fail("diagnostic scaffolding claimed release eligibility")
@@ -270,6 +322,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
             mode="release",
             n5_closure_path=closure_external,
             correctness_questions_path=resolved_questions,
+            measurement_gaps_path=resolved_gaps,
         )
         module.validate_manifest(manifest)
 
@@ -301,6 +354,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                 mode="release",
                 n5_closure_path=closure_external,
                 correctness_questions_path=resolved_questions,
+                measurement_gaps_path=resolved_gaps,
             )
             fail("release-grade run accepted a dirty tree")
         except module.ManifestError as exc:
@@ -309,5 +363,6 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
     finally:
         closure_external.unlink(missing_ok=True)
         resolved_questions.unlink(missing_ok=True)
+        resolved_gaps.unlink(missing_ok=True)
 
-print("N6_MANIFEST_OK: complete manifest and independent correctness, N5 closure, hash, and dirty-tree refusals")
+print("N6_MANIFEST_OK: complete manifest and independent correctness, measurement-gap, N5 closure, hash, and dirty-tree refusals")

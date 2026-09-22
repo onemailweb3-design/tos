@@ -43,6 +43,14 @@ if hardware.get("status") != "OWNER_DECISION_REQUIRED" or set(
     fail("release hardware proposal does not pin CPU governor and turbo/boost policy")
 if "throttling governor" not in hardware.get("rationale", ""):
     fail("release hardware proposal does not explain why frequency policy affects timing evidence")
+provided = hardware.get("provided_fields", {})
+if provided.get("network_link") != (
+    "100 Mbps symmetric (In 100.0 Mbps / Out 100.0 Mbps), "
+    "MAC fa:16:3e:7c:0e:03, /23 subnet"
+):
+    fail("release hardware proposal does not retain the owner-supplied network link")
+if hardware.get("status") != "OWNER_DECISION_REQUIRED":
+    fail("partial network information was mistaken for a complete release hardware profile")
 
 headroom = proposal["owner_decisions"]["headroom_fractions"]
 expected_headroom = {

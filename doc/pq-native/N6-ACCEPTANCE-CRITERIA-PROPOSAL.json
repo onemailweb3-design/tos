@@ -5,6 +5,9 @@
   "owner_decisions": {
     "release_hardware_profile": {
       "status": "OWNER_DECISION_REQUIRED",
+      "provided_fields": {
+        "network_link": "100 Mbps symmetric (In 100.0 Mbps / Out 100.0 Mbps), MAC fa:16:3e:7c:0e:03, /23 subnet"
+      },
       "required_fields": [
         "cpu_model",
         "cpu_governor",
@@ -13,7 +16,7 @@
         "storage",
         "network_link"
       ],
-      "rationale": "Release timing is attributable only when the CPU frequency policy is pinned. A throttling governor changes latency and tail variance, while turbo or boost changes the available peak; omitting either makes a later timing change indistinguishable from a platform-policy change."
+      "rationale": "Release timing is attributable only when the CPU frequency policy is pinned. A throttling governor changes latency and tail variance, while turbo or boost changes the available peak; omitting either makes a later timing change indistinguishable from a platform-policy change. The owner-supplied 100 Mbps symmetric deployment link is recorded, but the CPU, memory and storage portions remain outstanding, so the hardware profile is not accepted yet."
     },
     "headroom_fractions": {
       "status": "OWNER_ACCEPTED",

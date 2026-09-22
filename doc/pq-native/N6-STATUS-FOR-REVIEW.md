@@ -223,3 +223,40 @@ Mutation evidence:
 The N6.2 result above is diagnostic feasibility evidence only. No release-grade
 measurement, threshold verdict, launch-cap freeze, or Genesis release evidence
 has been produced on this branch.
+
+## Open release-measurement gaps
+
+`N6-OPEN-MEASUREMENT-GAPS.json` is a fail-closed release registry parallel to
+the correctness-question registry. Its required ids cannot be removed by
+deleting a gap, and a resolved entry must retain `resolved_by` evidence.
+Release mode currently refuses both registered gaps by name:
+
+- `release-scale-matrix-unmeasured`: the required 21/32/64/100 matrix remains
+  unchanged and unmeasured. This 6-core KVM guest has 11.68 GiB RAM; 21
+  colocated validators would reserve about 8.0 GiB for the N5 pending-finality
+  budget alone. Closure requires the section 0.5 topology: one validator per
+  reviewed host or VM, at the exact N5-complete measured commit.
+- `carrier-scale-transport-unmeasured`: closure requires a live overlay run at
+  a signer count producing a carrier near the 984260-byte ceiling, retaining
+  separate payload, queueing, propagation and verification evidence.
+
+The owner-supplied deployment link is 100 Mbps symmetric. A maximum carrier is
+7874080 bits: 78.7 ms at line rate and 157.5 ms after the accepted 0.50 network
+headroom. One transmission therefore consumes about 12.1% of the 1300 ms
+persisted-finality criterion and 39.4% of the 400 ms target block interval,
+before gossip fan-out. This is a launch-relevant measurement requirement, not
+a conclusion that the link fails.
+
+The separately named 4-validator tier is minimum BFT (`n = 3f + 1`, `f = 1`).
+It can establish protocol path, message flow and carrier transport at the
+minimum fault-tolerant configuration. It cannot characterize launch sizing or
+network capacity: its roughly ten-kilobyte certificate does not exercise the
+984260-byte ceiling, the two admission pools, the 400-carrier validator pool,
+or the section 0.11/0.12 scale-cliff question.
+
+Mutation evidence:
+
+| Mutation | Gate that went red | Exact named failure |
+|---|---|---|
+| Delete an open gap but retain its required id | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: open measurement gaps reported the wrong release refusal: measurement-gap registry required ids and entries differ` |
+| Mark both measurement gaps resolved with `resolved_by` evidence | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: open measurement gaps reported the wrong release refusal: release-grade measurement refuses commit ...: no N5 closure artifact was supplied for that exact commit` |

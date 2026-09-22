@@ -22,6 +22,10 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 REQUIRED_CORRECTNESS_QUESTION_IDS = ("merkle-base-state-mismatch",)
+REQUIRED_MEASUREMENT_GAP_IDS = (
+    "release-scale-matrix-unmeasured",
+    "carrier-scale-transport-unmeasured",
+)
 
 REQUIRED_SCALES = (21, 32, 64, 100)
 REQUIRED_NETWORK_PROFILES = ("baseline", "launch-wan", "degraded")
@@ -310,6 +314,49 @@ def validate_open_correctness_questions(path: Path, *, release: bool) -> None:
         )
 
 
+def validate_open_measurement_gaps(path: Path, *, release: bool) -> None:
+    try:
+        registry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError(f"measurement-gap registry is unreadable: {exc}") from exc
+    if not isinstance(registry, dict) or registry.get("schema_version") != SCHEMA_VERSION:
+        raise ManifestError("measurement-gap registry schema_version is not 1")
+    required = registry.get("required_gap_ids")
+    gaps = registry.get("gaps")
+    if not isinstance(required, list) or not all(isinstance(item, str) and item for item in required):
+        raise ManifestError("measurement-gap registry has invalid required_gap_ids")
+    if not isinstance(gaps, dict):
+        raise ManifestError("measurement-gap registry gaps is not an object")
+    for gap_id in REQUIRED_MEASUREMENT_GAP_IDS:
+        if gap_id not in required:
+            raise ManifestError(f"measurement-gap registry dropped required entry {gap_id}")
+    if set(required) != set(gaps):
+        raise ManifestError("measurement-gap registry required ids and entries differ")
+
+    open_gaps: list[str] = []
+    for gap_id, gap in gaps.items():
+        if not isinstance(gap, dict):
+            raise ManifestError(f"measurement gap {gap_id} is not an object")
+        for field in ("observation", "reason", "closure_condition", "status"):
+            if not isinstance(gap.get(field), str) or not gap[field]:
+                raise ManifestError(f"measurement gap {gap_id} lacks {field}")
+        status = gap["status"]
+        if status == "OPEN":
+            if gap.get("resolved_by") not in (None, ""):
+                raise ManifestError(f"open measurement gap {gap_id} already names resolved_by")
+            open_gaps.append(gap_id)
+        elif status == "RESOLVED":
+            if not isinstance(gap.get("resolved_by"), str) or not gap["resolved_by"]:
+                raise ManifestError(f"resolved measurement gap {gap_id} lacks resolved_by evidence")
+        else:
+            raise ManifestError(f"measurement gap {gap_id} has unknown status {status}")
+    if release and open_gaps:
+        raise ManifestError(
+            "release-grade measurement refuses open measurement gaps: "
+            + ", ".join(sorted(open_gaps))
+        )
+
+
 def _lookup(manifest: dict[str, Any], path: tuple[str, ...]) -> Any:
     value: Any = manifest
     for component in path:
@@ -347,6 +394,7 @@ def create_manifest(
     mode: str,
     n5_closure_path: Path | None,
     correctness_questions_path: Path | None = None,
+    measurement_gaps_path: Path | None = None,
 ) -> dict[str, Any]:
     if mode not in ("diagnostic", "release"):
         raise ManifestError(f"unknown measurement mode {mode}")
@@ -357,6 +405,9 @@ def create_manifest(
         if correctness_questions_path is None:
             raise ManifestError("release-grade measurement requires a correctness-question registry")
         validate_open_correctness_questions(correctness_questions_path, release=True)
+        if measurement_gaps_path is None:
+            raise ManifestError("release-grade measurement requires a measurement-gap registry")
+        validate_open_measurement_gaps(measurement_gaps_path, release=True)
         if n5_closure_path is None:
             raise ManifestError(
                 f"release-grade measurement refuses commit {commit}: "
@@ -367,6 +418,8 @@ def create_manifest(
             raise ManifestError("release-grade measurement refuses a dirty git tree")
     elif correctness_questions_path is not None:
         validate_open_correctness_questions(correctness_questions_path, release=False)
+    if mode != "release" and measurement_gaps_path is not None:
+        validate_open_measurement_gaps(measurement_gaps_path, release=False)
 
     load_acceptance_criteria(criteria_path, release=mode == "release")
 
@@ -404,6 +457,7 @@ def main() -> int:
     parser.add_argument("--mode", choices=("diagnostic", "release"), required=True)
     parser.add_argument("--n5-closure", type=Path)
     parser.add_argument("--correctness-questions", type=Path)
+    parser.add_argument("--measurement-gaps", type=Path)
     args = parser.parse_args()
     try:
         config = json.loads(args.config.read_text(encoding="utf-8"))
@@ -415,6 +469,7 @@ def main() -> int:
             mode=args.mode,
             n5_closure_path=args.n5_closure,
             correctness_questions_path=args.correctness_questions,
+            measurement_gaps_path=args.measurement_gaps,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
