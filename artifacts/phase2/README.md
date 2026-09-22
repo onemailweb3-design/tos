@@ -1,10 +1,12 @@
 # Phase-2 ceremony — open participation
 
-**Status: announcement published; preparing contribution 1. Parameters are not
-finalised and must not be deployed.**
+**Status: contribution 1 by tosman is signed and verified; registration remains
+open. Parameters are not finalised and must not be deployed.**
+
+[Contribution 1 and verification evidence](CONTRIBUTION-1.md).
 
 See [ANNOUNCEMENT.md](ANNOUNCEMENT.md) for the fixed parameters and open
-registration rules. The publication receipt is recorded before opening.
+registration rules. The publication receipt was recorded before opening.
 
 ## If you are going to contribute
 
@@ -90,9 +92,9 @@ acceptance conditions; neither needs to be arranged before the first contributio
 | Step | State |
 |---|---|
 | Publish fixed circuit, code revision, deadline and beacon | see published announcement |
-| Publish and retain announcement snapshot and publication receipt | release snapshot and receipt before opening |
+| Publish and retain announcement snapshot and publication receipt | completed before opening |
 | Register tosman and its new public signing key | public key and initial register published |
-| Open and accept the first signed contribution | after announcement publication |
+| Open and accept the first signed contribution | completed: tosman, not independent |
 | Register and accept additional participants | throughout the contribution window |
 | Close, apply the announced beacon, verify and accept | only after all final gates pass |
 
@@ -107,6 +109,6 @@ keys or contributions; publish additions with their history.
 - [roster.template.json](roster.template.json): registration format.
 - [keys/tosman.md](keys/tosman.md): first contributor's public signing identity.
 
-The published announcement and publication receipt will identify the opening.
+The published announcement and publication receipt identify the opening.
 The beacon and final verification results appear only after closing.
 Operator procedure: [runbook](../../doc/shielded-pool-phase2-runbook.md).
