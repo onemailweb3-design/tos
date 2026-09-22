@@ -299,6 +299,6 @@ int main() {
                 100.0 * static_cast<double>(size.bits) / static_cast<double>(message_bit_limit), message_bit_limit);
   }
 
-  std::printf("\VALIDATOR_STATE_MEASURE_DONE\n");
+  std::printf("\nVALIDATOR_STATE_MEASURE_DONE\n");
   return 0;
 }
