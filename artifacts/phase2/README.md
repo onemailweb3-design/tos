@@ -4,6 +4,9 @@
 open. Parameters are not finalised and must not be deployed.**
 
 [Contribution 1 and verification evidence](CONTRIBUTION-1.md).
+[Download the public contribution bundle](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-1);
+[server publication receipt](contribution-1-publication-receipt.json).
+The downloaded bundle matched SHA-256 `27bebf666928bbd0fac8b3dabe9fce9da581db77b0ed6bdaa57afb716c42072a`.
 
 See [ANNOUNCEMENT.md](ANNOUNCEMENT.md) for the fixed parameters and open
 registration rules. The publication receipt was recorded before opening.
