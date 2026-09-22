@@ -14,6 +14,11 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def collapsed(path: Path) -> str:
+    """Return source text with formatting-only whitespace made irrelevant."""
+    return re.sub(r"\s+", " ", path.read_text(encoding="utf-8")).strip()
+
+
 root = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]).resolve()
 proposal_path = root / "doc/pq-native/N6-ACCEPTANCE-CRITERIA-PROPOSAL.json"
 criteria_path = root / "doc/pq-native/N6-ACCEPTANCE-CRITERIA.json"
@@ -65,7 +70,7 @@ expected_facts = {
 if facts != expected_facts:
     fail("recorded source facts or their arithmetic changed without review")
 
-zerostate = (root / "crypto/smartcont/gen-zerostate.fif").read_text(encoding="utf-8")
+zerostate = collapsed(root / "crypto/smartcont/gen-zerostate.fif")
 if zerostate.count("<b 400 32 u, b> <s 0 rot 8 udict! drop") != 2:
     fail("authoritative masterchain/shard target_rate is no longer 400 ms")
 if zerostate.count("<b 1000 32 u, b> <s 1 rot 8 udict! drop") != 2:
@@ -73,7 +78,7 @@ if zerostate.count("<b 1000 32 u, b> <s 1 rot 8 udict! drop") != 2:
 if zerostate.count("<b x{22} s, 0 5 u, 2 2 u, 1 1 u, 4 32 u, swap dict, b>") != 2:
     fail("authoritative masterchain/shard Simplex v2 leader-window configuration changed")
 
-types = (root / "tos/tos-types.h").read_text(encoding="utf-8")
+types = collapsed(root / "tos/tos-types.h")
 if "duration_fn(8, standstill_timeout, 10'000)" not in types:
     fail("ConfigParam30 standstill timeout source changed")
 manager = (root / "validator/manager.cpp").read_text(encoding="utf-8")
@@ -82,18 +87,18 @@ if not re.search(r'create_actor<ValidateBroadcast>\("broadcast-sigcheck".*?Times
 lite = (root / "lite-client/lite-client.cpp").read_text(encoding="utf-8")
 if not re.search(r'ExtClient::send_query, "query".*?Timestamp::in\(10\.0\)', lite, re.S):
     fail("production lite query timeout is no longer ten seconds")
-limits = (root / "crypto/block/pq-signature-limits.h").read_text(encoding="utf-8")
+limits = collapsed(root / "crypto/block/pq-signature-limits.h")
 if "pq_block_finality_broadcast_max_bytes = 984260" not in limits:
     fail("maximum boxed finality carrier source changed")
-policy = (root / "validator/finality-cache-policy.h").read_text(encoding="utf-8")
+policy = collapsed(root / "validator/finality-cache-policy.h")
 for marker in (
     "pending_finality_minimum_charge_bytes = 4096",
     "pending_finality_public_candidate_slots = 16",
-    "pending_finality_max_validator_senders =\n    tos::pq::PQConsensusLimits{}.max_certificate_signers",
+    "pending_finality_max_validator_senders = tos::pq::PQConsensusLimits{}.max_certificate_signers",
 ):
     if marker not in policy:
         fail(f"pending-finality resource derivation source changed: {marker}")
-pq_consensus = (root / "crypto/pq/pq-consensus.h").read_text(encoding="utf-8")
+pq_consensus = collapsed(root / "crypto/pq/pq-consensus.h")
 if "max_certificate_signers = 400" not in pq_consensus:
     fail("structural validator-reserved sender count changed")
 
