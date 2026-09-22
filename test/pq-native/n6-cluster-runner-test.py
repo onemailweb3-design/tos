@@ -29,6 +29,11 @@ from tostester.n6_cluster import (  # noqa: E402
 from tostester.process_backend import LocalProcessBackend, RemoteCommandBackend  # noqa: E402
 
 
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
 def event(node: str, trace: str, stage: str, monotonic: int, wall: int, size: int | None = None):
     result = {
         "kind": "trace",
@@ -49,19 +54,32 @@ async def check_backends(directory: Path) -> None:
         "node-1", "/bin/sh", ["-c", "printf local"], directory, os.environ, capture_stdout=True
     )
     stdout, _ = await process.communicate()
-    assert process.returncode == 0 and stdout == b"local"
+    require(
+        process.returncode == 0 and stdout == b"local",
+        "local process backend did not execute the requested command",
+    )
     remote = RemoteCommandBackend({"node-1": [sys.executable, "-m", "tostester.remote_process"]})
     process = await remote.spawn(
         "node-1", "/bin/sh", ["-c", "printf remote"], directory, os.environ, capture_stdout=True
     )
     stdout, _ = await process.communicate()
-    assert process.returncode == 0 and stdout == b"remote"
-    assert local.manifest() == {"kind": "local-process"}
-    assert remote.manifest() == {
-        "kind": "remote-command",
-        "nodes": ["node-1"],
-        "provisioning": "external",
-    }
+    require(
+        process.returncode == 0 and stdout == b"remote",
+        "remote-command backend did not execute the requested command",
+    )
+    require(
+        local.manifest() == {"kind": "local-process"},
+        "local process backend manifest changed",
+    )
+    require(
+        remote.manifest()
+        == {
+            "kind": "remote-command",
+            "nodes": ["node-1"],
+            "provisioning": "external",
+        },
+        "remote-command backend manifest changed",
+    )
 
 
 class FakeBlockClient:
@@ -82,14 +100,20 @@ async def check_sustained_agreement() -> None:
     canonical = bytes.fromhex("11" * 32)
     clients = {name: FakeBlockClient(canonical) for name in ("node-a", "node-b", "node-c")}
     block_id = await require_agreed_masterchain_block(clients, 7)
-    assert ",7):" in block_id
+    require(",7):" in block_id, "agreed block id does not identify the requested height")
 
     clients["node-c"] = FakeBlockClient(bytes.fromhex("22" * 32))
     try:
         await require_agreed_masterchain_block(clients, 7)
     except RuntimeError as error:
-        assert "block-id disagreement at height 7" in str(error)
-        assert "node-a=" in str(error) and "node-c=" in str(error)
+        require(
+            "block-id disagreement at height 7" in str(error),
+            "block disagreement refusal does not name its height",
+        )
+        require(
+            "node-a=" in str(error) and "node-c=" in str(error),
+            "block disagreement refusal does not name the conflicting nodes",
+        )
     else:
         raise AssertionError("nodes on different masterchain blocks were reported as agreeing")
 
@@ -113,19 +137,38 @@ def check_sustained_summary() -> None:
         checked_from_height=0,
         agreed_block_ids={5: "block-5", 6: "block-6", 7: "block-7"},
     )
-    assert summary["masterchain_blocks_produced"] == 2
-    assert summary["per_node_final_height"] == {"node-a": 7, "node-b": 8}
-    assert summary["agreement"]["same_block_per_height"] is True
-    assert summary["agreement"]["checked_through_height"] == 7
-    assert summary["interval_distribution_ms"] == {
-        "count": 2,
-        "minimum": 400.0,
-        "p50": 400.0,
-        "p95": 1300.0,
-        "maximum": 1300.0,
-    }
-    assert summary["slow_intervals"] == [{"from_height": 6, "to_height": 7, "interval_ms": 1300.0}]
-    assert summary["release_evidence_eligible"] is False
+    require(summary["masterchain_blocks_produced"] == 2, "produced block count changed")
+    require(
+        summary["per_node_final_height"] == {"node-a": 7, "node-b": 8},
+        "per-node final heights were not retained",
+    )
+    require(
+        summary["agreement"]["same_block_per_height"] is True,
+        "same-block-per-height agreement was not recorded",
+    )
+    require(
+        summary["agreement"]["checked_through_height"] == 7,
+        "agreement range does not reach the final observed height",
+    )
+    require(
+        summary["interval_distribution_ms"]
+        == {
+            "count": 2,
+            "minimum": 400.0,
+            "p50": 400.0,
+            "p95": 1300.0,
+            "maximum": 1300.0,
+        },
+        "sustained interval distribution changed",
+    )
+    require(
+        summary["slow_intervals"] == [{"from_height": 6, "to_height": 7, "interval_ms": 1300.0}],
+        "slow interval was not retained individually",
+    )
+    require(
+        summary["release_evidence_eligible"] is False,
+        "co-located sustained observation became release eligible",
+    )
 
 
 def check_latency_profile_binding() -> None:
@@ -172,12 +215,15 @@ def main() -> int:
             + "\n"
         )
         evidence = analyze_live_finality([first, second])
-        assert evidence.sender_node == "node-a" and evidence.verifier_node == "node-b"
-        assert evidence.payload_bytes == 984260
-        assert (evidence.propagation_ns, evidence.queueing_ns, evidence.verification_ns) == (
-            30,
-            7,
-            12,
+        require(
+            evidence.sender_node == "node-a" and evidence.verifier_node == "node-b",
+            "live finality evidence does not cross distinct sender and verifier nodes",
+        )
+        require(evidence.payload_bytes == 984260, "live finality payload size changed")
+        require(
+            (evidence.propagation_ns, evidence.queueing_ns, evidence.verification_ns)
+            == (30, 7, 12),
+            "live finality timing stages changed",
         )
         milestones_path = root / "milestones.jsonl"
         milestones_path.write_text(
@@ -192,11 +238,15 @@ def main() -> int:
             + "\n"
         )
         milestones = analyze_consensus_milestones([milestones_path], 100)
-        assert (
-            milestones.time_to_first_proposal_ns,
-            milestones.time_to_first_notarization_certificate_ns,
-            milestones.time_to_first_final_certificate_ns,
-        ) == (10, 20, 30)
+        require(
+            (
+                milestones.time_to_first_proposal_ns,
+                milestones.time_to_first_notarization_certificate_ns,
+                milestones.time_to_first_final_certificate_ns,
+            )
+            == (10, 20, 30),
+            "consensus milestones are not distinct and ordered",
+        )
         validate_node_isolation(
             [
                 {
@@ -219,8 +269,14 @@ def main() -> int:
             ROOT / "test/pq-native/n6-scale-profiles/no-simulated-latency.json"
         )
         launch = load_latency_profile(ROOT / "test/pq-native/n6-scale-profiles/launch-default.json")
-        assert no_latency.application == "none" and no_latency.one_way_latency_ms == [0.0, 0.0]
-        assert launch.application == "external-network-shaping"
+        require(
+            no_latency.application == "none" and no_latency.one_way_latency_ms == [0.0, 0.0],
+            "no-simulated-latency profile changed",
+        )
+        require(
+            launch.application == "external-network-shaping",
+            "launch latency profile is no longer externally applied",
+        )
     print(
         "N6_CLUSTER_RUNNER_OK: local and remote-command backends share the manifest and evidence contract"
     )
