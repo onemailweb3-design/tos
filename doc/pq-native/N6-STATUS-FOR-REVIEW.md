@@ -302,14 +302,15 @@ validator rejects any cited result carrying the override before considering
 its scale list. A result without the override must still declare release
 eligibility and cover exactly 21/32/64/100.
 
-Instrument-validation evidence was collected from a dirty diagnostic worktree
-based on `f3d6c3403`; it is not release evidence and is recorded only to prove
-that the sweep argument controls the booted topology:
+Instrument-validation evidence was collected from a clean worktree at exact
+commit `e7f1106c1`; it remains diagnostic, co-located and ineligible for release
+evidence. It is recorded only to prove that the sweep argument controls the
+booted topology:
 
 | Requested validators | Actual processes | Unique ADNL identities | Unique ports | First proposal | First notarization | First FinalCert |
 |---:|---:|---:|---:|---:|---:|---:|
-| 4 | 6 (DHT + 4 validators + verifier) | 5 | 15 (`32002`-`32016`) | 5277.379 ms | 5310.007 ms | 5315.472 ms |
-| 7 | 9 (DHT + 7 validators + verifier) | 8 | 24 (`33002`-`33025`) | 5354.990 ms | 5408.777 ms | 5418.028 ms |
+| 4 | 6 (DHT + 4 validators + verifier) | 5 | 15 (`34002`-`34016`) | 5269.975 ms | 5299.334 ms | 5304.140 ms |
+| 7 | 9 (DHT + 7 validators + verifier) | 8 | 24 (`35002`-`35025`) | 5283.550 ms | 5346.614 ms | 5352.426 ms |
 
 The two runs had zero ADNL-identity intersection and zero port intersection.
 Their milestone rows differ, and each row is strictly ordered. Fixing the
