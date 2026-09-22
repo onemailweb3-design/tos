@@ -51,6 +51,7 @@ CONTRIBUTION = CRATE / 'src/contribution.rs'
 SECRET = CRATE / 'src/secret.rs'
 ENTROPY = CRATE / 'src/entropy.rs'
 RECORD = CRATE / 'src/record.rs'
+CROSSCHECK = CRATE / 'src/crosscheck.rs'
 
 # Deliberately not backed by a test. See the module docstring.
 UNTESTED = '<no test: rests on the security proof, not on this suite>'
@@ -132,6 +133,11 @@ CASES = [
          '    let mut seed = [0u8; 32];\n    let _ = entropy;\n    seed[0] = 1;',
          'verification_draws_its_weights_from_the_caller'),
 
+    Case('batch-weights-are-one', 'the batching weights are all one', CONTRIBUTION,
+         '    Ok((0..count).map(|_| Fr::rand(&mut rng)).collect())',
+         '    let _ = &mut rng;\n    Ok((0..count).map(|_| Fr::from(1u64)).collect())',
+         'the_weights_are_what_catches_a_compensating_pair'),
+
     # verify_chain's checks. Separate code from verify_step's, so separate
     # cases -- an auditor years from now runs this one and not the other.
     Case('chain-final-delta', "the audit does not tie the final key to the chain's end",
@@ -195,6 +201,52 @@ CASES = [
          '        write!(formatter, "Secret({})", self.value.into_bigint())',
          'secret::tests::the_value_is_not_in_the_debug_output'),
 
+    # The second implementation. A cross-check that cannot fail is not a
+    # cross-check: if the blst side agreed with arkworks by construction --
+    # by never objecting, or by comparing the wrong things -- the agreement
+    # tests would be green against a library that was not being asked.
+    Case('blst-pairing-order', 'the second pairing takes its arguments the other way round',
+         CROSSCHECK,
+         '        blst::blst_miller_loop(&mut right, &d, &c);',
+         '        blst::blst_miller_loop(&mut right, &b, &c);',
+         'both_accept_an_honest_chain'),
+    Case('blst-pairing-trivial', 'the blst pairing always agrees', CROSSCHECK,
+         '        Ok(blst::blst_fp12_finalverify(&left, &right))',
+         '        let _ = blst::blst_fp12_finalverify(&left, &right);\n        Ok(true)',
+         'both_refuse_every_forgery'),
+    # Not `both_accept_an_honest_chain`: an unweighted sum accepts an honest
+    # chain perfectly well, and catches every forgery that scales one point.
+    # A compensating pair is the only thing that tells the two apart, which is
+    # exactly why that test had to be written before this case could pass.
+    Case('blst-scalar-dropped', 'the batching weights are not applied', CROSSCHECK,
+         '            blst::blst_p1_mult(&mut term, &base, blst_scalar.b.as_ptr(), 255);',
+         '            term = base;',
+         'the_weights_are_what_catches_a_compensating_pair'),
+    Case('blst-skips-the-proof', 'the blst side does not check the proof of knowledge',
+         CROSSCHECK,
+         '        if !same_pairing(&contribution.s, &contribution.r_delta, &contribution.s_delta, '
+         '&challenge)?\n        {',
+         '        if false\n        {',
+         'both_refuse_a_forgery_aimed_at_each_check'),
+    Case('blst-skips-the-queries', 'the blst side does not check the query division',
+         CROSSCHECK,
+         '        if !same_pairing(&after_sum, &final_key.vk.delta_g2, &before_sum, '
+         '&initial.vk.delta_g2)? {',
+         '        if false {',
+         'both_refuse_every_forgery'),
+    Case('blst-skips-the-chain-link', 'the blst side does not link one delta to the previous',
+         CROSSCHECK,
+         '        if !same_pairing(&contribution.delta_g1, &challenge, &previous_g1, '
+         '&contribution.r_delta)? {',
+         '        if false {',
+         'both_refuse_a_forgery_aimed_at_each_check'),
+    Case('blst-skips-the-cross-group', 'the blst side does not compare delta across the groups',
+         CROSSCHECK,
+         '        if !same_pairing(\n            &contribution.delta_g1,\n            &generator_g2,\n'
+         '            &generator_g1,\n            &contribution.delta_g2,\n        )? {',
+         '        if false {',
+         'both_refuse_a_forgery_aimed_at_each_check'),
+
     # What a ceremony leaves on disk. None of this is cryptography and all of
     # it is what an auditor is handed, so a directory that lies quietly is as
     # bad as a pairing that passes wrongly.
@@ -242,11 +294,24 @@ def run_suite() -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env['PATH'] = str(Path.home() / '.cargo/bin') + os.pathsep + env.get('PATH', '')
     env['CARGO_TERM_COLOR'] = 'never'
-    # Both targets in one invocation: the entropy and secret checks are unit
-    # tests inside the library, the forgeries are an integration suite, and a
-    # mutation has to be shown against whichever one owns it.
+    # Three targets in one invocation: the entropy, secret and record checks
+    # are unit tests inside the library, the forgeries are one integration
+    # suite and the two-library agreement is another, and a mutation has to be
+    # shown against whichever one owns it.
+    #
+    # `crosscheck_agrees` was left out of this list when it was added, and
+    # every mutation of the blst implementation survived -- correctly, since
+    # nothing was running it. A second implementation nothing exercises is
+    # worse than none, because it reads like evidence.
+    #
+    # `--no-fail-fast` is load-bearing for the same reason. `cargo test` stops
+    # at the first failing target, so with two suites a mutation that turns
+    # both red would only ever report the first, and every case naming a test
+    # in the other one came back WRONG-TEST -- a report of the instrument
+    # stopping, not of the mutation surviving.
     return subprocess.run(
-        ['cargo', 'test', '--lib', '--test', 'phase2_contribution', '--', '--test-threads=4'],
+        ['cargo', 'test', '--no-fail-fast', '--lib', '--test', 'phase2_contribution',
+         '--test', 'crosscheck_agrees', '--', '--test-threads=4'],
         cwd=CRATE, capture_output=True, text=True, timeout=3600, env=env)
 
 

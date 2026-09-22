@@ -474,9 +474,10 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   pool does anything. The three engineering levers were measured and offered —
   a transfer ceiling of its own (−2.5%), a nullifier dictionary instead of an
   IMT (−400,000 gas, at a pool lifetime capped around 20–65k nullifiers), and
-  1-in/2-out instead of 2-in/3-out (−333,000 gas, and it must be decided
-  before the ceremony fixes the circuit) — and all three together still land
-  at 0.0347. So the basechain gas price was cut tenfold instead, `gas_price`
+  1-in/2-out instead of 2-in/3-out (−333,000 gas, a sum of measured
+  components rather than a measured 1-in/2-out transact, since no such circuit
+  has been built) — and all three together still land at 0.0347. **All three
+  were declined** and the basechain gas price was cut tenfold instead, `gas_price`
   4,369,067 to 436,907 and `flat_gas_price` 6,667 to 667, leaving forwarding,
   storage and masterchain gas alone.
 

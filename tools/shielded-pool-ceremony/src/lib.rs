@@ -39,7 +39,11 @@
 //!   construction of the circuit every caller uses, so two keys over "the same
 //!   circuit" cannot come out different;
 //! * [`record`] -- what a ceremony leaves on disk, which is everything an
-//!   auditor needs and nothing a participant has to keep secret.
+//!   auditor needs and nothing a participant has to keep secret;
+//! * [`crosscheck`] -- the same audit on **blst** rather than arkworks, with a
+//!   test requiring the two to agree on every chain the suite can build. A
+//!   pairing check that is consistently wrong passes its own tests; two
+//!   libraries are harder to be consistently wrong with.
 //!
 //! The binaries are the ceremony itself: `phase2-begin`, `phase2-contribute`,
 //! `phase2-finalise` and `phase2-verify`. Each rebuilds the starting key from
@@ -75,6 +79,7 @@
 
 pub mod committed;
 pub mod contribution;
+pub mod crosscheck;
 pub mod entropy;
 pub mod error;
 pub mod lagrange;

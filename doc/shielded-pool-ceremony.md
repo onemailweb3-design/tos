@@ -435,7 +435,7 @@ wearing the beacon's name would verify perfectly well.
 ### What the evidence is
 
 `test/shielded-pool/mutations-ceremony.py` weakens one check at a time and
-requires the suite to report it **by name**. 37 mutations; 36 are killed by the
+requires the suite to report it **by name**. 45 mutations; 44 are killed by the
 test aimed at them, and one is recorded as not test-backed.
 
 The by-name rule is not pedantry. Several checks here shadow each other, and
@@ -477,6 +477,74 @@ reason*. Writing it found a real hole:
 Closed by requiring, when the chain is empty, that the record's current key be
 the starting key this checkout rebuilt. The script now constructs exactly that
 directory and requires the refusal.
+
+### Two pairing libraries, asked the same questions
+
+The audit an outsider runs is arkworks all the way down: the pairings, the
+group law and the multiexponentiations are one library's, used one way, by one
+author. The tests show it accepts honest chains and refuses the forgeries aimed
+at it — and a pairing check that is *consistently* wrong would do both, while
+meaning something other than what is written down.
+
+So `crosscheck.rs` implements the same four checks against **blst**, the
+library the chain itself verifies proofs with, and `crosscheck_agrees.rs` puts
+every chain to both. The assertion is not "it was refused" but **"they
+agreed"**: honest chains of one, two and three contributions, one ending in a
+beacon, every forgery from the suite, each hand-built one-knob forgery, the
+identity substituted into each of a contribution's five points, and a sweep of
+72 perturbations that scale one field at a time. No disagreement.
+
+Independent: the pairing, the final exponentiation, the group law, the scalar
+multiplication — where a missing negation or a reversed argument hides, and
+where "it passes its own tests" is not evidence. The blst side compares two
+Miller loops with `blst_fp12_finalverify` where the arkworks side negates an
+input and asks whether the product is one, and it accumulates the batched sums
+one point at a time rather than through Pippenger.
+
+**Not** independent: the author, the repository, the point encoding (shared on
+purpose — it is normative) and the *meaning* of the checks. An error in what
+ought to be checked is reproduced faithfully on both sides. This narrows the
+gap that "a second verifier" names; it does not close it.
+
+#### What it found immediately
+
+Adding the second implementation to the battery was itself a test of the
+battery, and it failed it twice.
+
+First, **every one of the seven blst mutations survived** — because the battery
+was not running the agreement suite at all. The line that should have added it
+was written against the wrong file and `str.replace` did nothing, silently. A
+second implementation that nothing exercises is worse than none, because it
+reads like evidence.
+
+Then, with the suite running, six died and one lived: **dropping the scalar
+multiplication from the batched sum changed no verdict anywhere.** That is
+correct, and it says something about the suite rather than about blst. An
+*unweighted* sum accepts honest chains and catches every forgery that scales a
+single query point — which was all of them. The weights exist for a
+compensating pair: add a point to one query entry and subtract it from
+another, and the plain sum is unchanged while the weighted one differs by
+`(rho_i - rho_j) * v`. Nothing had ever built one, so nothing had ever shown
+the weights doing anything, **on either side**.
+
+`the_weights_are_what_catches_a_compensating_pair` builds one — asserting first
+that the plain sums really are equal, so the test is about weights and not
+about something else — and it kills three mutations: the blst scalar being
+dropped, the arkworks weights coming from a constant seed, and the arkworks
+weights being all one.
+
+It also corrected a name. The blst case was filed expecting
+`both_accept_an_honest_chain` to go red, and the battery refused it as
+`WRONG-TEST`: an honest chain does not care how it is weighted.
+
+And one more, which is the same failure as the first in a different costume.
+With two test targets, eight *arkworks*-side mutations came back `WRONG-TEST`,
+reporting that they had been caught by the agreement suite rather than by the
+test named for them. They had been caught by both — but **`cargo test` stops at
+the first failing target**, so the second suite never ran and its failures were
+not in the output to be found. `--no-fail-fast` is load-bearing here, and
+without it the battery was reporting the instrument stopping as though it were
+a result.
 
 ### Breaking something the wrong way proves nothing
 
@@ -724,23 +792,69 @@ would look as though something had checked it.
    *when* the beacon was chosen — and a beacon chosen after the contributions
    are in is decoration. That decision is the thing still outstanding.
 3. **A second verifier.** Someone outside this repository running the
-   acceptance gate against the produced key and getting the same digest.
+   acceptance gate against the produced key and getting the same digest. The
+   audit is now cross-checked against a second pairing library (see **Two
+   pairing libraries, asked the same questions**), which removes the
+   library-convention half of this. The half that remains — a second reading of
+   *what ought to be checked* — needs a person who did not write it.
 
 ## What must be decided before it starts
 
-A ceremony fixes the circuit. Two open questions change the circuit, so both
-have to be answered first:
+A ceremony fixes the circuit, so anything that changes the circuit has to be
+settled first — it becomes unfixable the moment the verifying key is frozen.
+This section listed two such questions. **One of them is not open.**
 
-* **Charging the recovery's compute to the recovered amount.** It removes
-  `withdrawal_fee`'s entire section 14.2 justification — the money is already
-  back in the pool when the note is minted — and would let the fee be sized for
-  whatever else it is for, or be near zero. It changes section 15.4 and the
-  circuit.
-* **1-in/2-out instead of 2-in/3-out.** Worth about 333,000 gas, and it is a
-  different circuit.
+### 1-in/2-out — decided, declined
 
-Neither is urgent on its own. Both become unfixable the moment the verifying
-key is frozen.
+Offered to the owner on 2026-09-21 as one of three levers for the gas price,
+and **declined with the other two**; the tenfold basechain price cut was taken
+instead. That is a decision to keep 2-in/3-out, and this document went on
+listing it as outstanding — which would have held up a ceremony for a question
+already answered. The record is
+`memo/privacy/measurements/gas-price-cut-20260921/`.
+
+Reopening it is possible and would be a new decision, so the numbers are worth
+stating plainly, including how they were arrived at:
+
+* the **−333,000 gas** is a **sum of separately measured components**, not a
+  measurement of a 1-in/2-out transact — one nullifier insertion (~204,000, the
+  refusal ladder's second row), one ML-DSA-44 authorization (~65,500, the
+  difference between its last two rows once the 204,493 proof is taken out) and
+  one commitment append. No 1-in/2-out circuit has ever been built, so nothing
+  has measured the whole;
+* it is **not a small change**. Section 10's public input vector is frozen at
+  eighteen elements and names two nullifiers, three note bodies, three output
+  data hashes and two authorization key hashes. One input and one output fewer
+  is fourteen, so the verifying key becomes 1,056 bytes rather than 1,248, and
+  the FunC verifier, the wire format, the wallet and the genesis state all move
+  with it;
+* the saving would also be slightly larger than 333,000, because `vk_x` is a
+  multiexponentiation over the public inputs and there would be four fewer.
+  Nobody has measured that either.
+
+### Charging the recovery's compute to the recovered amount — open
+
+This one is genuinely open, and it is the more consequential of the two.
+
+Section 14.2 makes `withdrawal_fee` cover the payout's forward fee **plus a
+whole bounded recovery**. The fee is written into the genesis config store and
+is immutable, while the check that enforces it reads the chain's **live**
+prices — so if governance ever raises the gas price past what the fee affords,
+every withdrawal fails at exit 243 permanently, while deposits and transfers
+carry on. Money goes in and cannot come out, with no recovery, because the fee
+cannot be changed. That is why 50,000,000 was re-derived and **kept** rather
+than lowered: it is sized against the highest price the chain could reach, and
+it survives about 3.4× the live price
+(`memo/privacy/measurements/withdrawal-fee-derivation-20260921/`).
+
+Charging the recovery's compute to the recovered amount — the money is back in
+the pool by the time the note is minted — removes the recovery term from that
+floor entirely. What remains is the forward fee, which prices bytes rather than
+work and was held fixed through the price cut. The cliff does not disappear,
+but the fee sized against it gets much smaller and the margin much larger.
+
+It changes section 15.4 and the circuit, so it has to be answered before a
+ceremony, and it is the only thing on this page that does.
 
 ## Running the checks
 
