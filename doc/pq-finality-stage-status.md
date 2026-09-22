@@ -452,11 +452,17 @@ API/tooling debt; none is silently promoted to a green claim.
    `test/integration/test_manager_session_identity.py` additionally provisions a
    real ML-DSA-44 consensus seed, writes the matching `validator_pq#b3` descriptor
    into a generated zerostate, starts the production DHT and validator-engine actors,
-   and observes the masterchain group ID logged by `ValidatorManagerImpl`.  With the
-   same validator identities, keys and consensus configuration, changing only the
-   zerostate `global_id` changes the observed session ID.  Replacing the manager's
+   and observes the masterchain group ID logged by `ValidatorManagerImpl`.  Three
+   startups make the attribution explicit: changing the node-local data directory
+   and port while restoring the first zerostate `global_id` preserves the observed
+   session ID, while changing `global_id` with those launch coordinates held fixed
+   changes it.  Replacing the manager's
    production `.global_id = global_id` assembly with zero makes the gate fail with
    `MANAGER_SESSION_IDENTITY_FAILURE: changing zerostate global_id did not change the manager-created group session`.
+   This actor gate varies exactly one of the derivation's seven input categories;
+   it does not vary the validator list or the selected Simplex configuration cell.
+   Those inputs and the complete formula remain pinned by the frozen-vector and
+   manager-assembly gates, not by this end-to-end actor observation.
    The older consensus end-to-end harness still pins `bus->session_id`; it coexists
    with this integration evidence but does not supply it.
 

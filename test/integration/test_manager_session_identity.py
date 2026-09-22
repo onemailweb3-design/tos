@@ -3,9 +3,10 @@
 
 This is deliberately a process integration test, not another call to the shared
 session helper.  Each run starts validator-engine and lets its real manager/DB
-startup path unpack the generated zerostate and create the validator group.  The
-same validator key and consensus configuration are used in both runs; only the
-zerostate global_id changes, so the observed group session must change with it.
+startup path unpack the generated zerostate and create the validator group.  A
+third control run separates the governing global_id from node-local launch
+coordinates: changing the port and data directory must not change the session,
+while changing global_id with those launch coordinates held fixed must change it.
 """
 
 from __future__ import annotations
@@ -98,13 +99,28 @@ async def main() -> int:
         second_global_id,
         args.timeout,
     )
+    local_coordinate_control = await observe_session(
+        install,
+        artifact_dir / "control-global-minus-239",
+        args.base_port + 100,
+        first_global_id,
+        args.timeout,
+    )
     summary = {
         "first_global_id": first_global_id,
         "first_session_id": first,
         "second_global_id": second_global_id,
         "second_session_id": second,
+        "local_coordinate_control_global_id": first_global_id,
+        "local_coordinate_control_session_id": local_coordinate_control,
     }
     (artifact_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    if first != local_coordinate_control:
+        raise RuntimeError(
+            "MANAGER_SESSION_IDENTITY_LOCAL_INPUT_FAILURE: changing the node-local port and "
+            "data directory changed the manager-created group session "
+            f"({first} != {local_coordinate_control})"
+        )
     if first == second:
         raise RuntimeError(
             "MANAGER_SESSION_IDENTITY_FAILURE: changing zerostate global_id did not change "
@@ -113,7 +129,8 @@ async def main() -> int:
     print(
         "MANAGER_SESSION_IDENTITY_OK: real ValidatorManagerImpl startup observed "
         f"global_id={first_global_id} session={first} and "
-        f"global_id={second_global_id} session={second}"
+        f"global_id={second_global_id} session={second}; changing only node-local launch "
+        f"coordinates preserved session={local_coordinate_control}"
     )
     return 0
 
