@@ -340,7 +340,9 @@ pub const RESERVE_FLOOR: u128 = 5_000_000_000;
 /// nothing else. Section 14.2 requires, and `payout_require_solvent` enforces
 /// at run time:
 ///
+/// ```text
 ///     withdrawal_fee >= payout_forward_fee(body)
+/// ```
 ///
 /// That term reads the chain's **live** configuration and this constant is
 /// **immutable**, so the check is on the deployment rather than on the
@@ -373,10 +375,12 @@ pub const RESERVE_FLOOR: u128 = 5_000_000_000;
 /// ones divided by six and rounded up, so six times today's is two nanotos
 /// over each).
 ///
+/// ```text
 ///     forwarding prices                 floor    20,000,000 covers it
 ///     today (TON's live)              885,601             22.6x
 ///     6x    (this chain, until        5,313,600            3.76x
 ///            2026-09-21)
+/// ```
 ///
 /// # Why 20,000,000
 ///
@@ -394,12 +398,14 @@ pub const RESERVE_FLOOR: u128 = 5_000_000_000;
 ///
 /// The alternatives, for a deployment that wants to weigh it again:
 ///
+/// ```text
 ///     fee            TOS   x today  x the 6x this chain ran at
 ///     50,000,000   0.050     56.5x                      9.41x
 ///     25,000,000   0.025     28.2x                      4.70x
 ///     20,000,000   0.020     22.6x                      3.76x   <- here
 ///     10,000,000   0.010     11.3x                      1.88x
 ///      5,313,601   0.0053     6.0x                      1.00x   at the cliff
+/// ```
 ///
 /// The profile still makes the mainnet fee an activation decision, and
 /// activation is when the price policy will be known.
