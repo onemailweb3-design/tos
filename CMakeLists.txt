@@ -1260,6 +1260,8 @@ add_test(NAME benchmark-exclusion-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-benchmark-exclusion.sh ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME frozen-boc-toolchain-resolution
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-frozen-boc-toolchain.sh ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME quic-ctest-isolation-source
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-quic-ctest-isolation.sh ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME regression-fixture-concurrency
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-regression-concurrency.sh
           ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
@@ -1273,9 +1275,16 @@ add_test(NAME regression-fixture-concurrency
 # only labelled here. All are tagged "network-safety" so the instrumented
 # network-safety workflow can select exactly this set.
 add_dependencies(all-tests test-quic-sender)
-add_test(NAME quic-inbound-stream-timeout COMMAND test-quic-sender -f AbandonedInboundStreamIsReaped)
-add_test(NAME quic-outbound-query-deadline COMMAND test-quic-sender -f PartialResponseDoesNotExtendDeadline)
-add_test(NAME quic-connection-count-cap COMMAND test-quic-sender -f MaxConnectionsRejectsBeyondCap)
+# Each filtered entry is a distinct process. Give it a disjoint database root
+# and a widely separated port range so parallel ctest cannot make one process
+# delete another's fixtures or bind its sockets. The ranges also leave room for
+# QuicSender::NODE_PORT_OFFSET and every next_port() allocation in each case.
+add_test(NAME quic-inbound-stream-timeout COMMAND test-quic-sender
+  -p 21000 -d tmp-dir-test-quic-inbound -f AbandonedInboundStreamIsReaped)
+add_test(NAME quic-outbound-query-deadline COMMAND test-quic-sender
+  -p 31000 -d tmp-dir-test-quic-outbound -f PartialResponseDoesNotExtendDeadline)
+add_test(NAME quic-connection-count-cap COMMAND test-quic-sender
+  -p 41000 -d tmp-dir-test-quic-cap -f MaxConnectionsRejectsBeyondCap)
 set_tests_properties(
   quic-inbound-stream-timeout
   quic-outbound-query-deadline
