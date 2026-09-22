@@ -54,6 +54,21 @@ the contributing host rather than taken on trust from the previous one.
 - Swap was disabled for the whole contribution and restored afterwards, with
   the swapfile then reporting no used pages.
 
+The contribution run and its `phase2-verify` output are in one log,
+[evidence/contribution-3.log](evidence/contribution-3.log), because they were a
+single scripted run with swap disabled across both. There is no separate
+`verify-3.log`.
+
+## Publication
+
+[Release](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-3),
+server-published at **2026-09-22T12:29:24Z**, tagged on this contribution's
+commit; the API response is retained in
+[contribution-3-publication-receipt.json](contribution-3-publication-receipt.json).
+The published attachment was downloaded again afterwards and compared byte for
+byte against the local archive; they are identical, and its SHA-256 is
+`3fe7f063eec267044d24371bfa21e2af91e7a62dcd0a70a3db9abac7f367263c`.
+
 ## What a third machine does and does not buy
 
 This contribution ran on a different host, from a different provider, than

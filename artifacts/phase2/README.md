@@ -13,6 +13,7 @@ count is not what the rule asks about.
 [Contribution 3 and verification evidence](CONTRIBUTION-3.md);
 [download the public bundle](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-3);
 [server publication receipt](contribution-3-publication-receipt.json).
+The bundle matched SHA-256 `3fe7f063eec267044d24371bfa21e2af91e7a62dcd0a70a3db9abac7f367263c`.
 
 [Contribution 2 and verification evidence](CONTRIBUTION-2.md);
 [download the public bundle](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-2);
