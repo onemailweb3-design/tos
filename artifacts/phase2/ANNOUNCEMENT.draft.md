@@ -6,9 +6,9 @@ repository can see it, and the publication record below is filled in. Until
 then no contribution may be taken, and `phase2-begin` must not be run against
 a directory intended for production.**
 
-Ceremony 1 is withdrawn; see [`../phase2/SUPERSEDED.md`](../phase2/SUPERSEDED.md)
-for what was wrong with it. Nothing from it carries forward except the
-tooling, the circuit and the phase-1 slice.
+An earlier ceremony was withdrawn; [`README.md`](README.md) says what was
+wrong with it. Nothing from it carries forward except the tooling, the
+circuit and the phase-1 slice.
 
 ---
 
@@ -193,7 +193,7 @@ carries no secret, and any transport will do.
 ```sh
 target/release/phase2-verify <ceremony-dir> --vk-out vk.bin
 python3 test/shielded-pool/verify-attestations.py <ceremony-dir> \
-    --roster artifacts/phase2-ceremony-2/roster.json
+    --roster artifacts/phase2/roster.json
 ```
 
 The first audits the mathematics and emits the 1,248 bytes. The second checks

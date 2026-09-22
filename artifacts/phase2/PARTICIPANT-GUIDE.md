@@ -7,9 +7,10 @@ repository before.
 You need about **25 minutes**, most of it waiting, and no prior knowledge of
 the cryptography.
 
-> **This guide describes ceremony 2.** Ceremony 1 was withdrawn — see
-> [`../phase2/SUPERSEDED.md`](../phase2/SUPERSEDED.md). Do not follow any
-> instructions inside `artifacts/phase2/`.
+> An earlier ceremony was withdrawn and its directory removed;
+> [`README.md`](README.md) says what was wrong with it. If you are holding
+> older instructions from somewhere else, discard them — this directory is
+> the ceremony.
 
 ---
 
@@ -293,7 +294,7 @@ verifies against the roster:
 ```sh
 cd ~/tos
 python3 test/shielded-pool/verify-attestations.py ~/ceremony \
-    --roster artifacts/phase2-ceremony-2/roster.json \
+    --roster artifacts/phase2/roster.json \
     --attestations ~ \
     --in-progress
 ```
@@ -360,7 +361,7 @@ scp user@your-vps:/home/user/ceremony-after-me.tar.gz .
 ```
 
 If you would rather open a pull request, fork the repository, copy the
-directory into `artifacts/phase2-ceremony-2/`, and push. Neither route is more
+directory into `artifacts/phase2/`, and push. Neither route is more
 trustworthy than the other: what makes the result checkable is the published
 attestation, not how the bytes travelled.
 

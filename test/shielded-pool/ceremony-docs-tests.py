@@ -34,10 +34,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 DOCS = [
     "artifacts/phase2/README.md",
-    "artifacts/phase2/SUPERSEDED.md",
-    "artifacts/phase2-ceremony-2/README.md",
-    "artifacts/phase2-ceremony-2/PARTICIPANT-GUIDE.md",
-    "artifacts/phase2-ceremony-2/ANNOUNCEMENT.draft.md",
+    "artifacts/phase2/PARTICIPANT-GUIDE.md",
+    "artifacts/phase2/ANNOUNCEMENT.draft.md",
     "doc/shielded-pool-phase2-runbook.md",
 ]
 
@@ -49,9 +47,9 @@ LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 # entry that is still here once the ceremony is running is a bug. They are
 # printed on every run for that reason.
 CREATED_WHEN_THE_CEREMONY_OPENS = {
-    "artifacts/phase2-ceremony-2/roster.json",
-    "artifacts/phase2-ceremony-2/ceremony",
-    "artifacts/phase2-ceremony-2/beacon.bin",
+    "artifacts/phase2/roster.json",
+    "artifacts/phase2/ceremony",
+    "artifacts/phase2/beacon.bin",
 }
 
 

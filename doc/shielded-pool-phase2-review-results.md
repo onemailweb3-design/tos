@@ -2,7 +2,12 @@
 
 > ## Disposition, added 2026-09-22 after the review landed
 >
-> The review is kept as written. What was done about it:
+> The review is kept as written, including its paths. Those beginning
+> `artifacts/phase2/` refer to the **first** ceremony, which was withdrawn and
+> whose directory was removed; its files remain in history at `7ec052e00` and
+> `7ed85e8dc`. `artifacts/phase2/` now holds the replacement ceremony.
+>
+> What was done about the review:
 >
 > | finding | status |
 > |---|---|
