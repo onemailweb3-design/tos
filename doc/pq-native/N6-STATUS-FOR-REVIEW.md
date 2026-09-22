@@ -32,6 +32,24 @@ Mutation evidence, run individually and restored before the next mutation:
 | Add `validator_id` to the registered `messages_total` labels | `n6-low-cardinality` | `N6_LOW_CARDINALITY_FAILURE: registered schema contains a forbidden high-cardinality label` |
 | Evaluate a lazy trace-id provider while measurement is disabled | `n6-disabled-instrumentation-cost` | `N6_DISABLED_INSTRUMENTATION_COST_FAILURE: disabled instrumentation evaluated the trace-id provider` |
 
+Release mode also consults
+`N6-OPEN-CORRECTNESS-QUESTIONS.json` before the N5-closure, dirty-tree and
+acceptance-criteria checks.  The registry retains every known question after
+resolution: an open entry carries its observation and closure condition, while
+a resolved entry must add `resolved_by` evidence rather than disappear.  The
+required-id list is cross-checked against the entries, and the initial Merkle
+base-state mismatch is also pinned by the manifest code, so deleting its entry
+or only one side of the registry fails closed.
+
+The seeded open question records the failure observed at `efd22ce46` in
+`validator/consensus/chain-state.cpp:123`: a candidate's state update was
+applied to a base root it was not produced against.  It closes only with
+run-derived evidence identifying whether production consensus or the fixture
+selected the mismatched pair, plus a regression guard for that demonstrated
+ordering.  Source inspection alone is not closure evidence.  While it remains
+open, RELEASE mode refuses by name with
+`release-grade measurement refuses open correctness questions: merkle-base-state-mismatch`.
+
 ## N6.1 acceptance criteria scaffolding
 
 Implementation commit:

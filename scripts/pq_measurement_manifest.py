@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
+REQUIRED_CORRECTNESS_QUESTION_IDS = ("merkle-base-state-mismatch",)
 
 REQUIRED_SCALES = (21, 32, 64, 100)
 REQUIRED_NETWORK_PROFILES = ("baseline", "launch-wan", "degraded")
@@ -263,6 +264,52 @@ def validate_n5_closure(path: Path, commit: str) -> None:
         raise ManifestError("N5 closure artifact lacks production CheckProof actor coverage")
 
 
+def validate_open_correctness_questions(path: Path, *, release: bool) -> None:
+    try:
+        registry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError(f"correctness-question registry is unreadable: {exc}") from exc
+    if not isinstance(registry, dict) or registry.get("schema_version") != SCHEMA_VERSION:
+        raise ManifestError("correctness-question registry schema_version is not 1")
+    required = registry.get("required_question_ids")
+    questions = registry.get("questions")
+    if not isinstance(required, list) or not all(isinstance(item, str) and item for item in required):
+        raise ManifestError("correctness-question registry has invalid required_question_ids")
+    if not isinstance(questions, dict):
+        raise ManifestError("correctness-question registry questions is not an object")
+    for question_id in REQUIRED_CORRECTNESS_QUESTION_IDS:
+        if question_id not in required:
+            raise ManifestError(f"correctness-question registry dropped required entry {question_id}")
+    if set(required) != set(questions):
+        raise ManifestError("correctness-question registry required ids and entries differ")
+
+    open_questions: list[str] = []
+    for question_id, question in questions.items():
+        if not isinstance(question, dict):
+            raise ManifestError(f"correctness question {question_id} is not an object")
+        for field in ("observation", "observed_commit", "location", "closure_condition", "status"):
+            if not isinstance(question.get(field), str) or not question[field]:
+                raise ManifestError(f"correctness question {question_id} lacks {field}")
+        commit = question["observed_commit"]
+        if len(commit) < 9 or len(commit) > 40 or any(ch not in "0123456789abcdef" for ch in commit):
+            raise ManifestError(f"correctness question {question_id} has invalid observed_commit")
+        status = question["status"]
+        if status == "OPEN":
+            if question.get("resolved_by") not in (None, ""):
+                raise ManifestError(f"open correctness question {question_id} already names resolved_by")
+            open_questions.append(question_id)
+        elif status == "RESOLVED":
+            if not isinstance(question.get("resolved_by"), str) or not question["resolved_by"]:
+                raise ManifestError(f"resolved correctness question {question_id} lacks resolved_by evidence")
+        else:
+            raise ManifestError(f"correctness question {question_id} has unknown status {status}")
+    if release and open_questions:
+        raise ManifestError(
+            "release-grade measurement refuses open correctness questions: "
+            + ", ".join(sorted(open_questions))
+        )
+
+
 def _lookup(manifest: dict[str, Any], path: tuple[str, ...]) -> Any:
     value: Any = manifest
     for component in path:
@@ -299,6 +346,7 @@ def create_manifest(
     matrix_path: Path,
     mode: str,
     n5_closure_path: Path | None,
+    correctness_questions_path: Path | None = None,
 ) -> dict[str, Any]:
     if mode not in ("diagnostic", "release"):
         raise ManifestError(f"unknown measurement mode {mode}")
@@ -306,6 +354,9 @@ def create_manifest(
     tree = _run_git(repo, "rev-parse", "HEAD^{tree}")
     dirty = bool(_run_git(repo, "status", "--porcelain", "--untracked-files=all"))
     if mode == "release":
+        if correctness_questions_path is None:
+            raise ManifestError("release-grade measurement requires a correctness-question registry")
+        validate_open_correctness_questions(correctness_questions_path, release=True)
         if n5_closure_path is None:
             raise ManifestError(
                 f"release-grade measurement refuses commit {commit}: "
@@ -314,6 +365,8 @@ def create_manifest(
         validate_n5_closure(n5_closure_path, commit)
         if dirty:
             raise ManifestError("release-grade measurement refuses a dirty git tree")
+    elif correctness_questions_path is not None:
+        validate_open_correctness_questions(correctness_questions_path, release=False)
 
     load_acceptance_criteria(criteria_path, release=mode == "release")
 
@@ -350,6 +403,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mode", choices=("diagnostic", "release"), required=True)
     parser.add_argument("--n5-closure", type=Path)
+    parser.add_argument("--correctness-questions", type=Path)
     args = parser.parse_args()
     try:
         config = json.loads(args.config.read_text(encoding="utf-8"))
@@ -360,6 +414,7 @@ def main() -> int:
             matrix_path=args.test_matrix,
             mode=args.mode,
             n5_closure_path=args.n5_closure,
+            correctness_questions_path=args.correctness_questions,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(

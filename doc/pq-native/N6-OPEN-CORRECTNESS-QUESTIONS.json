@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "required_question_ids": [
+    "merkle-base-state-mismatch"
+  ],
+  "questions": {
+    "merkle-base-state-mismatch": {
+      "closure_condition": "A run-evidenced diagnosis identifies whether the mismatched candidate state_update and base state are selected by production consensus or by the test fixture, followed by a guard that fails when that demonstrated ordering is reintroduced.",
+      "location": "validator/consensus/chain-state.cpp:123",
+      "observation": "A candidate state_update was applied to a base state root it was not produced against during test-consensus-simplex2-pq-finality-e2e-100 under whole-suite parallel load.",
+      "observed_commit": "efd22ce46",
+      "status": "OPEN"
+    }
+  }
+}
