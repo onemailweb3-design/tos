@@ -36,11 +36,6 @@ void install_sink(std::shared_ptr<Sink> value) {
   sink_enabled.store(static_cast<bool>(sink), std::memory_order_release);
 }
 
-std::shared_ptr<Sink> installed_sink() {
-  std::lock_guard guard(sink_mutex);
-  return sink;
-}
-
 ClockSample sample_clocks() {
   const auto monotonic = std::chrono::steady_clock::now().time_since_epoch();
   const auto wall = std::chrono::system_clock::now().time_since_epoch();

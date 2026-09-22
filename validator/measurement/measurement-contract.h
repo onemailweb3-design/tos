@@ -95,7 +95,6 @@ class Sink {
 // null sink disables collection.  Serializers always finish producing bytes
 // before the observer sees their immutable Slice.
 void install_sink(std::shared_ptr<Sink> sink);
-std::shared_ptr<Sink> installed_sink();
 
 ClockSample sample_clocks();
 td::Result<std::int64_t> monotonic_duration_ns(const ClockSample& start, const ClockSample& finish);
