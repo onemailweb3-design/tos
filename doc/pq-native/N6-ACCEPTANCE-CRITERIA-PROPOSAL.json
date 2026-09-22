@@ -16,15 +16,24 @@
       "rationale": "Release timing is attributable only when the CPU frequency policy is pinned. A throttling governor changes latency and tail variance, while turbo or boost changes the available peak; omitting either makes a later timing change indistinguishable from a platform-policy change."
     },
     "headroom_fractions": {
-      "finality_window": "OWNER_DECISION_REQUIRED",
-      "block_signature_timeout": "OWNER_DECISION_REQUIRED",
-      "lite_query_timeout": "OWNER_DECISION_REQUIRED",
-      "authority_slot": "OWNER_DECISION_REQUIRED",
-      "cpu": "OWNER_DECISION_REQUIRED",
-      "rss": "OWNER_DECISION_REQUIRED",
-      "network": "OWNER_DECISION_REQUIRED",
-      "disk_busy": "OWNER_DECISION_REQUIRED",
-      "finalization_backpressure": "OWNER_DECISION_REQUIRED"
+      "status": "OWNER_ACCEPTED",
+      "values": {
+        "finality_window": 0.50,
+        "block_signature_timeout": 0.50,
+        "lite_query_timeout": 0.50,
+        "authority_slot": 0.80,
+        "cpu": 0.35,
+        "rss": 0.30,
+        "network": 0.50,
+        "disk_busy": 0.40,
+        "finalization_backpressure": 0.90
+      },
+      "rationale": {
+        "timing_windows": "Normal operation must complete within half of the finality, block-signature, and lite-query timeout envelopes; the remaining half is recovery margin rather than operating budget. The same finality-window fraction makes loss of finalized-height progress visible halfway to the standstill timeout.",
+        "authority_slot": "Authority classification may consume at most one fifth of a ConfigParam30 target block slot, leaving the rest of that slot for consensus work.",
+        "resources": "CPU, RSS, network, and disk headroom implement section 4.3's refusal to accept a release profile that operates a processor, memory budget, link, or storage device at its limit.",
+        "finalization_backpressure": "Only ten percent of observations may be backpressured because backpressure occurring at all is already close to the progress failure it is meant to prevent."
+      }
     }
   },
   "source_facts": {
@@ -64,38 +73,46 @@
       "rationale": "Consensus cost must pass alone and with reviewed fractions of the authoritative gas, byte and collated-data limits."
     },
     "max_p99_persisted_finality_ms": {
-      "proposal": "floor(2600 * (1 - headroom_fractions.finality_window))",
+      "proposal": 1300,
+      "formula": "floor(2600 * (1 - headroom_fractions.finality_window))",
       "hard_envelope_ms": 2600,
       "rationale": "The normal persisted-finality SLO must finish, including persistence, before ConfigParam30's first leader window (first-block timeout plus four target-rate slots); the owner-selected reserve is recovery headroom."
     },
     "max_p99_block_signature_verify_ms": {
-      "proposal": "floor(2000 * (1 - headroom_fractions.block_signature_timeout))",
+      "proposal": 1000,
+      "formula": "floor(2000 * (1 - headroom_fractions.block_signature_timeout))",
       "hard_envelope_ms": 2000,
       "rationale": "The production signature/context path has a two-second deadline that also covers proof and state work, so signature verification must leave an explicit fraction of it unused."
     },
     "max_p99_lite_verify_ms": {
-      "proposal": "floor(10000 * (1 - headroom_fractions.lite_query_timeout))",
+      "proposal": 5000,
+      "formula": "floor(10000 * (1 - headroom_fractions.lite_query_timeout))",
       "hard_envelope_ms": 10000,
       "rationale": "The production lite query deadline is ten seconds and includes transport and proof-chain work; the verification threshold reserves the owner-reviewed remainder for those costs."
     },
     "max_cpu_fraction": {
-      "proposal": "1 - headroom_fractions.cpu",
+      "proposal": 0.65,
+      "formula": "1 - headroom_fractions.cpu",
       "rationale": "CPU occupancy is capped below the reviewed hardware profile so proof/restart recovery is not attempted at saturation."
     },
     "max_rss_fraction": {
-      "proposal": "1 - headroom_fractions.rss",
+      "proposal": 0.70,
+      "formula": "1 - headroom_fractions.rss",
       "rationale": "RSS includes the 409452160-byte hostile-input finality cap and must retain reviewed memory for the database, actors and recovery."
     },
     "max_network_fraction": {
-      "proposal": "1 - headroom_fractions.network",
+      "proposal": 0.50,
+      "formula": "1 - headroom_fractions.network",
       "rationale": "Network occupancy is relative to the reviewed hardware profile's link capacity and reserves bandwidth for retransmission, catch-up and finality recovery."
     },
     "max_disk_busy_fraction": {
-      "proposal": "1 - headroom_fractions.disk_busy",
+      "proposal": 0.60,
+      "formula": "1 - headroom_fractions.disk_busy",
       "rationale": "Disk occupancy is relative to the reviewed storage profile and leaves capacity for proof persistence, archive reconstruction and restart recovery."
     },
     "max_finalization_backpressure_fraction": {
-      "proposal": "1 - headroom_fractions.finalization_backpressure",
+      "proposal": 0.10,
+      "formula": "1 - headroom_fractions.finalization_backpressure",
       "rationale": "The permitted backpressured fraction must leave an owner-reviewed progress margin rather than accepting a run that spends nearly all of its time throttled."
     },
     "max_pending_finality_bytes": {
@@ -107,7 +124,8 @@
       "rationale": "This is the conservative structural count floor(15748160/4096) + floor(393704000/4096) from the two disjoint byte pools and minimum per-entry charge."
     },
     "max_authority_classification_p99_ms": {
-      "proposal": "floor(400 * (1 - headroom_fractions.authority_slot))",
+      "proposal": 80,
+      "formula": "floor(400 * (1 - headroom_fractions.authority_slot))",
       "hard_envelope_ms": 400,
       "rationale": "Admission classification precedes retained work and must fit inside one ConfigParam30 target-rate slot while reserving time for all remaining consensus work."
     },
@@ -116,7 +134,8 @@
       "rationale": "No positive long-run memory slope is safe; bounded caches may fill and drain but cannot grow with run duration."
     },
     "max_finalized_height_stall_ms": {
-      "proposal": "floor(10000 * (1 - headroom_fractions.finality_window))",
+      "proposal": 5000,
+      "formula": "floor(10000 * (1 - headroom_fractions.finality_window))",
       "hard_envelope_ms": 10000,
       "rationale": "ConfigParam30 declares standstill after ten seconds; the acceptance threshold must detect loss of progress before that recovery trigger, with owner-selected headroom."
     },

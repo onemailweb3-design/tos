@@ -44,6 +44,28 @@ if hardware.get("status") != "OWNER_DECISION_REQUIRED" or set(
 if "throttling governor" not in hardware.get("rationale", ""):
     fail("release hardware proposal does not explain why frequency policy affects timing evidence")
 
+headroom = proposal["owner_decisions"]["headroom_fractions"]
+expected_headroom = {
+    "finality_window": 0.50,
+    "block_signature_timeout": 0.50,
+    "lite_query_timeout": 0.50,
+    "authority_slot": 0.80,
+    "cpu": 0.35,
+    "rss": 0.30,
+    "network": 0.50,
+    "disk_busy": 0.40,
+    "finalization_backpressure": 0.90,
+}
+if headroom.get("status") != "OWNER_ACCEPTED" or headroom.get("values") != expected_headroom:
+    fail("owner-accepted headroom fractions changed or are not marked accepted")
+if set(headroom.get("rationale", {})) != {
+    "timing_windows",
+    "authority_slot",
+    "resources",
+    "finalization_backpressure",
+}:
+    fail("owner-accepted headroom fractions do not carry the required rationale")
+
 required_criteria = set(criteria) - {"threshold_rationale"}
 proposed_criteria = proposal.get("proposed_criteria", {})
 if set(proposed_criteria) != required_criteria:
@@ -131,6 +153,29 @@ if (
         "pending-finality candidate proposal is not derived from the byte pools and minimum charge"
     )
 
+expected_resolved_proposals = {
+    "max_p99_persisted_finality_ms": (1300, "floor(2600 * (1 - headroom_fractions.finality_window))"),
+    "max_p99_block_signature_verify_ms": (
+        1000,
+        "floor(2000 * (1 - headroom_fractions.block_signature_timeout))",
+    ),
+    "max_p99_lite_verify_ms": (5000, "floor(10000 * (1 - headroom_fractions.lite_query_timeout))"),
+    "max_authority_classification_p99_ms": (
+        80,
+        "floor(400 * (1 - headroom_fractions.authority_slot))",
+    ),
+    "max_finalized_height_stall_ms": (5000, "floor(10000 * (1 - headroom_fractions.finality_window))"),
+    "max_cpu_fraction": (0.65, "1 - headroom_fractions.cpu"),
+    "max_rss_fraction": (0.70, "1 - headroom_fractions.rss"),
+    "max_network_fraction": (0.50, "1 - headroom_fractions.network"),
+    "max_disk_busy_fraction": (0.60, "1 - headroom_fractions.disk_busy"),
+    "max_finalization_backpressure_fraction": (0.10, "1 - headroom_fractions.finalization_backpressure"),
+}
+for name, (value, formula) in expected_resolved_proposals.items():
+    entry = proposed_criteria[name]
+    if entry.get("proposal") != value or entry.get("formula") != formula:
+        fail(f"{name} no longer matches the owner-accepted headroom derivation")
+
 print(
-    "N6_THRESHOLD_PROPOSAL_OK: every criterion has a top-down rationale; live criteria remain owner-blocked"
+    "N6_THRESHOLD_PROPOSAL_OK: owner-accepted headroom is resolved; live criteria remain hardware-profile blocked"
 )

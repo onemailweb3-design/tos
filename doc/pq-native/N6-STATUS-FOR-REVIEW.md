@@ -62,19 +62,25 @@ The criteria file hash at the N6.1 implementation commit is
 authoritative ConfigParam30 timings, production verifier/query deadlines and
 the enforced N5 pending-finality resource bounds. It does not populate the
 live criteria and does not use an N6 measurement as the source of a threshold.
-Exactly two decision classes remain with the owner: the target release
-hardware profile and the headroom fractions applied to the source envelopes.
+The owner has accepted the nine headroom fractions recorded in the proposal;
+their formulas resolve to the proposed timing, utilization and backpressure
+limits there. The target release hardware profile remains outstanding.
 The hardware profile must name the CPU governor and whether turbo/boost is
 enabled, in addition to CPU model, memory, storage and network link. A
 throttling governor changes sustained latency and tail variance, so a release
 timing claim without that frequency policy cannot be attributed to the code.
+The live criteria intentionally retain `OWNER_REVIEW_REQUIRED` and zero
+thresholds until that profile is supplied. Accepted fractions alone are not a
+complete acceptance contract, so they are not copied piecemeal into the live
+file.
 
-Frequency-policy mutation evidence:
+Proposal mutation evidence:
 
 | Mutation | Gate that went red | Exact named failure |
 |---|---|---|
 | Remove `turbo_or_boost_enabled` from the proposed release-hardware profile | `n6-threshold-proposal` | `N6_THRESHOLD_PROPOSAL_FAILURE: release hardware proposal does not pin CPU governor and turbo/boost policy` |
 | Omit the observed governor from the diagnostic result | `n6-microbench-results` | `N6_MICROBENCH_RESULTS_FAILURE: CPU affinity/frequency/governor provenance is incomplete` |
+| Change the accepted headroom status back to undecided | `n6-threshold-proposal` | `N6_THRESHOLD_PROPOSAL_FAILURE: owner-accepted headroom fractions changed or are not marked accepted` |
 
 The design document names `memo/pq-native/N6-ACCEPTANCE-CRITERIA.json`; the
 canonical implementation intentionally lives at
@@ -102,6 +108,20 @@ The worst expected launch proof measurement is the 100-signer row. Its actual
 serialized BlockProof size and single-thread callback stall are facts in the
 JSON result; they are not a worker-pool decision. That decision remains
 `OPEN_UNTIL_OWNER_ACCEPTS_NONZERO_CRITERIA` and no production offload was made.
+
+The accepted authority-classification proposal is 80 ms, derived as one fifth
+of the 400 ms target block slot. The committed diagnostic 400-validator memo
+miss has p99 `387.511 us` in `N6-MICROBENCH-RESULTS.json`, giving about 206x
+margin. (The earlier conversational estimate of about 220 us and 360x is not
+the committed result, so it is not used as durable evidence.) This large
+margin is a feasibility finding: the proposed launch requirement is
+comfortably achievable. It is not permission to tighten the criterion toward
+the observed run, which would violate the top-down rule and
+`thresholds_moved_to_fit_results`. Nor is it evidence that authority
+classification did not regress: a criterion with this margin would still pass
+after a hundred-fold slowdown. Launch acceptance criteria decide whether the
+release still has its required operating envelope; section 13's regression
+detectors must make smaller performance changes visible.
 
 Mutation evidence:
 
