@@ -3,6 +3,11 @@ set -euo pipefail
 
 root="${1:-.}"
 
+if ! command -v rg >/dev/null 2>&1; then
+  echo "quorum static check failed: ripgrep is required but not installed" >&2
+  exit 1
+fi
+
 paths=(
   "$root/validator/consensus"
   "$root/validator/impl"
