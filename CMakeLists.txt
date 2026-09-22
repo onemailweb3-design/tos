@@ -1101,7 +1101,9 @@ endif()
 
 set(TEST_OPTIONS "--regression ${CMAKE_CURRENT_SOURCE_DIR}/test/regression-tests.ans --filter -Bench")
 separate_arguments(TEST_OPTIONS)
-tos_test(test-ed25519)
+set(BENCHMARK_FILTER "--filter -Bench")
+separate_arguments(BENCHMARK_FILTER)
+tos_test(test-ed25519 ${BENCHMARK_FILTER})
 tos_test(test-bigint)
 tos_test(test-vm ${TEST_OPTIONS})
 tos_test(test-fift ${TEST_OPTIONS})
@@ -1111,7 +1113,7 @@ tos_test(test-net)
 tos_test(test-tdactor)
 
 #BEGIN toslib
-tos_test(test-tdutils)
+tos_test(test-tdutils ${BENCHMARK_FILTER})
 tos_test(test-toslib-offline)
 #END toslib
 
@@ -1250,6 +1252,8 @@ tos_test(test-tddb ${TEST_OPTIONS})
 set_tests_properties(test-tddb PROPERTIES ENVIRONMENT
   "TOS_ROCKSDB_BLOCK_CACHE_SIZE=33554432;TOS_ROCKSDB_CRITICAL_WRITE_BUFFER_SIZE=67108864;TOS_ROCKSDB_CRITICAL_WRITE_BUFFER_ALLOW_STALL=1;TOS_ROCKSDB_GLOBAL_WRITE_BUFFER_SIZE=134217728;TOS_ROCKSDB_GLOBAL_WRITE_BUFFER_ALLOW_STALL=1")
 tos_test(test-db ${TEST_OPTIONS})
+add_test(NAME benchmark-exclusion-source
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-benchmark-exclusion.sh ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Network-safety regressions. test-quic-sender is a multi-suite binary (it also
 # holds large-scale/fairness suites that must not gate every change), so the
