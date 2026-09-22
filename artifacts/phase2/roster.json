@@ -15,6 +15,16 @@
         "https://github.com/gtosnetwork-dotcom",
         "https://github.com/tosnetwork/tos/blob/f5a45898fa810f1bea5bbcaf4f0803be0b2bfb4b/artifacts/phase2/keys/tosman.pub"
       ]
+    },
+    {
+      "name": "tosdev2",
+      "affiliation": "community",
+      "independent_of_operator": false,
+      "key": {
+        "type": "ssh",
+        "principal": "tosdev2",
+        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINx6XqU3Sb5onu45b+zca46ExobrX/IpTA5ko01ciP4+ tosdev2"
+      }
     }
   ]
 }
