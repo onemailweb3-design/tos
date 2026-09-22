@@ -1,0 +1,20 @@
+{
+  "protocol": "tos-shielded-pool-v1-phase2",
+  "ceremony": "ceremony-2",
+  "participants": [
+    {
+      "name": "tosman",
+      "affiliation": "operator",
+      "independent_of_operator": false,
+      "key": {
+        "type": "ssh",
+        "principal": "tosman",
+        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIApCRsJsUd45qwDhqmolpkAYJRJGL949F1qdUZSPYy6q tosman TOS phase2 ceremony signing"
+      },
+      "published_at": [
+        "https://github.com/gtosnetwork-dotcom",
+        "https://github.com/tosnetwork/tos/blob/f5a45898fa810f1bea5bbcaf4f0803be0b2bfb4b/artifacts/phase2/keys/tosman.pub"
+      ]
+    }
+  ]
+}

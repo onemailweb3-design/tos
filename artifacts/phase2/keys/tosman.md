@@ -9,11 +9,11 @@
   agent on the operator's machine.
 
 This is a newly generated key, published before any replacement-ceremony
-contribution. It is not a pre-existing public identity key. The contributor
-explicitly requested a new key; the final announcement must disclose this
-choice and reconcile its key-age requirements before opening the ceremony.
+contribution. It is not a pre-existing public identity key. Newly generated
+keys are accepted under the open-participation policy; no minimum key age
+is required.
 
 Only the public key is published. This record is not a contribution,
 attestation, complete participant roster, or ceremony-opening announcement.
-The participant roster and announcement still require completion and public
-archival before the first contribution.
+The announcement must be published before the first contribution. The
+participant register remains open during the contribution window.

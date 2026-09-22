@@ -1,32 +1,20 @@
 {
   "_comment": [
-    "TEMPLATE. Copy to roster.json, fill in, and pin its sha256 in the",
-    "announcement BEFORE the ceremony opens. A participant added afterwards",
-    "cannot be shown not to have been added because of what the earlier",
-    "contributions were.",
-    "",
-    "Every key must be one that was already publicly that person's before this",
-    "ceremony. A key minted for the occasion produces a signature anyone could",
-    "have made -- worth exactly what no signature is worth, while looking like",
-    "more. 'published_at' is where a stranger can see that the key was theirs;",
-    "it is not fetched by the verifier, it is for the human reading the roster.",
-    "",
-    "The key material is carried inline rather than as a fingerprint, so",
-    "verification never depends on fetching anything: a verifier that has to go",
-    "and get a key has made that fetch the weakest thing in the chain.",
-    "",
-    "'independent_of_operator' is the field the whole roster exists for. It is",
-    "a claim this tooling cannot check -- only that someone made it and signed.",
-    "Set it false for anyone who shares a failure mode with the party deploying",
-    "the pool: same company, same machine, same person. An automated agent on",
-    "the operator's machine IS the operator.",
-    "",
+    "TEMPLATE. Copy to roster.json and register participants as they join.",
+    "The register is open during the announced contribution window.",
+    "Existing and newly generated signing keys are allowed; no minimum key age.",
+    "Publish public keys under the participant identity before acceptance.",
+    "Record the register revision and digest with each accepted contribution.",
+    "Append new identities; do not rewrite accepted identities or keys.",
+    "Key material is inline so verification does not depend on fetching it.",
+    "published_at records public identity evidence for human review.",
+    "independent_of_operator is a JSON boolean declaration, not verified fact.",
+    "An agent on the operator machine must be declared non-independent.",
+    "Independent participation is a final acceptance gate, not an opening gate.",
     "Delete this _comment before publishing."
   ],
-
   "protocol": "tos-shielded-pool-v1-phase2",
   "ceremony": "ceremony-2",
-
   "participants": [
     {
       "name": "TO FIX -- the name this person is publicly known by",

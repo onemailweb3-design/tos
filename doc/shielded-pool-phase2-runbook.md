@@ -12,8 +12,9 @@ checked afterwards**. None of that is in the code, and none of it can be.
 
 ## What makes it formal
 
-Three things, in this order. A ceremony missing any of them is a rehearsal
-that produced a file.
+Publish the rules before opening, then accept signed contributions. Final
+acceptance follows verification; opening does not require a complete list of
+participants or preselected outside verifiers.
 
 1. **Announced before it opens.** The circuit, the phase-1 slice, the starting
    key's digest and the beacon are public *before* anyone contributes. A
@@ -22,7 +23,8 @@ that produced a file.
 2. **Published as it runs.** Each contribution's digests and the contributor's
    signed statement go out as they happen, not in a bundle at the end.
 3. **Verified by people who did not run it.** By someone outside the team,
-   reproducing the digests from the published record.
+   reproducing the digests from the published record. This is a final
+   acceptance condition; verifiers need not be named before opening.
 
 ---
 
@@ -51,7 +53,7 @@ So:
 
 A suggested shape, not a rule: three at the very least, seven to ten as a
 target, at least one outside the team, everybody publishing an attestation
-from an identity that was already publicly theirs.
+with a public identity-to-key binding. New signing keys are allowed.
 
 For comparison, the phase-1 slice this deployment inherits — Zcash Sapling —
 carries 87 attested human contributions. **Phase 1's trust surface is already
@@ -70,8 +72,8 @@ Publish all of this, and do not change any of it afterwards.
 | starting key | its SHA-256 | printed by `phase2-begin` |
 | transcript | the opening digest | printed by `phase2-begin` |
 | **beacon** | **the source, the exact height or round, and who will witness it** | your decision |
-| participants | who, if the list is fixed in advance | your decision |
-| verifiers | who will check afterwards | your decision |
+| registration | open during the contribution window; append participants as they join | published policy |
+| verification | anyone may verify; outside results required before final acceptance | published policy |
 
 ### The beacon is the one that cannot be fixed later
 
@@ -104,9 +106,9 @@ announcement, and was withdrawn for it.
 
 So: announce a height that has not been reached, and **express the closing
 deadline in blocks too** — contributions close when the chain reaches some
-height strictly below the beacon's, by a margin of a day or so. Then "every
-contribution was in before the beacon could be computed" is structural rather
-than probabilistic, and an outside auditor can check it. A calendar deadline
+height strictly below the beacon's, by a margin of a day or so. The height gap is a schedule, not a cryptographic guarantee of
+unpredictability. Retain independently observable publication evidence for
+the closed pre-beacon transcript and each accepted contribution. A calendar deadline
 has to be trusted, and a fast stretch of mining can move the beacon inside the
 contribution window with nobody noticing.
 
@@ -149,12 +151,16 @@ secret — goes to the next participant by any means at all.
 They appear in the record, and nothing ties the record to a person who can be
 asked. Decide before opening whether such a contribution is acceptable.
 
-The key they sign with must be one that was **already publicly theirs**, and
-must appear on the roster pinned by the announcement. A key minted for the
-occasion produces a signature anyone could have made — worth exactly what no
-signature is worth, while looking like more. The contribution script refuses
-to generate one, and `verify-attestations.py` refuses a signature from a key
-the roster does not carry.
+Existing and newly generated signing keys are accepted. Publish the public
+key under the participant's identity, then add it to the append-only
+`roster.json` register before accepting the contribution. Record the register
+revision and SHA-256 with each accepted contribution. Registration remains
+open until the contribution deadline; no complete advance list is required.
+Previously accepted identities and keys must not be silently rewritten.
+
+The contribution script uses the supplied key. `verify-attestations.py`
+checks signatures against inline registered keys; it does not enforce key
+age, publication time or register history. Those facts are recorded publicly.
 
 ---
 
@@ -198,8 +204,8 @@ private transfer.
 and third are arithmetic, and arithmetic is identical whoever performed it: a
 ceremony run entirely by one person under nine invented names passes both. The
 second checks that each attestation names the contribution the chain actually
-contains, that its signature verifies under a key on the roster pinned before
-the ceremony opened, and that at least one verified participant is declared
+contains, that its signature verifies under a registered key, and that at
+least one verified participant is declared
 independent of the operator. It refuses a ceremony that has none.
 
 Signature checking is `ssh-keygen -Y verify` and `gpg --verify`, run as
@@ -213,9 +219,9 @@ reproduces or it does not, and it does not depend on either of them being
 trustworthy.
 
 This is work an automated agent can do usefully, because nothing about it
-requires the agent to be trusted. Contributing is not: an agent on an
-operator's machine shares that operator's failure modes and adds nothing to
-the trust set.
+requires the agent to be trusted. An agent can also execute a contribution on the operator's behalf. That
+contribution is valid but shares the operator's failure modes and must not be
+counted as an independent participant.
 
 ---
 
@@ -245,12 +251,10 @@ detectable from the artifacts afterwards:
   contributor could read it;
 - **a contribution accepted after the announced closing height**, or a closing
   deadline extended rather than the ceremony re-announced;
-- **the roster changed after the announcement**, so a participant cannot be
-  shown not to have been added because of what the earlier contributions were;
+- a previously accepted identity or signing key silently replaced in the
+  register, or an accepted contribution removed from the published chain;
 - every participant under one party's control;
 - participants who published nothing, so nobody can be asked;
-- **a participant signing with a key created for the ceremony**, which proves
-  only that somebody had a keyboard;
 - a participant who ran a binary somebody handed them rather than building
   from the announced commit;
 - verification done only by the people who ran it.
@@ -258,8 +262,7 @@ detectable from the artifacts afterwards:
 The record proves the arithmetic. It cannot prove any of the above, which is
 why they are written down here instead.
 
-Three of the entries above are checkable by `verify-attestations.py` — the
-roster ones and the key one — and the rest are not checkable by anything,
-which is the distinction worth keeping in mind. A tool that could check them
-all would be a tool that could tell an honest ceremony from a performance of
-one, and no such tool exists.
+`verify-attestations.py` checks signature validity, record binding, key
+uniqueness and declared independence. It cannot establish actual independence,
+secret destruction, publication timing or register history. Keep the public
+evidence needed to review those claims separately.

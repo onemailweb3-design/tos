@@ -72,32 +72,38 @@ No contribution carries over. The starting key is the same digest, but that
 is a property of the construction — it is a function of the circuit and the
 phase-1 slice, not of any ceremony.
 
-## What has to happen before this opens
+## Open participation
 
-In this order. The order is the point: each step is only worth something if
-the ones before it are already public.
+The operator has removed the requirements to fix the entire participant list,
+use old signing keys, or name outside verifiers before opening. Participants
+may join throughout the contribution window, and newly generated signing keys
+are accepted. Register each public key and identity before accepting its
+contribution, then publish the register revision and digest with that contribution.
 
-| # | step | who | state |
-|---|---|---|---|
-| 1 | attestation verification exists and can fail | done | `test/shielded-pool/verify-attestations.py`, 23 cases |
-| 2 | recruit participants, at least one independent of the operator | **operator** | **blocked — needs people** |
-| 3 | collect each participant's already-public signing key into `roster.json` | operator | blocked on 2 |
-| 4 | fix the beacon height and the closing height | operator | **confirmed 2026-09-22**: close 970,141, beacon 970,285 |
-| 5 | publish the announcement, archive it, record where and when | operator | blocked on 2–3 |
-| 6 | run `phase2-begin`, publish the starting digests | operator | blocked on 5 |
-| 7 | contributions, in any order, each signed | participants | blocked on 6 |
-| 8 | close at the announced beacon, verify from outside | verifiers | blocked on 7 |
+An operator contribution can be first. It is valid but does not count as an
+independent participant. Outside participation and verification remain final
+acceptance conditions; neither needs to be arranged before the first contribution.
 
-## What is in here
+| Step | State |
+|---|---|
+| Publish fixed circuit, code revision, deadline and beacon | prepare completed announcement from the draft |
+| Publish and retain announcement snapshot and publication receipt | before opening |
+| Register tosman and its new public signing key | public key and initial register published |
+| Open and accept the first signed contribution | after announcement publication |
+| Register and accept additional participants | throughout the contribution window |
+| Close, apply the announced beacon, verify and accept | only after all final gates pass |
 
-```
-ANNOUNCEMENT.draft.md    the announcement, with every undecided field marked TO FIX
-PARTICIPANT-GUIDE.md     how to contribute, from a bare VPS, one command at a time
-roster.template.json     the participant roster to fill in and pin
-```
+The confirmed heights remain **970141** (close) and **970285** (beacon).
+The initial register is not a closed list. Never rewrite accepted identities,
+keys or contributions; publish additions with their history.
 
-`roster.json`, `ceremony/`, `beacon.bin` and `attestation-N.txt` appear as the
-steps above are taken. There is nowhere in any of them for a secret to go,
-which is why they live in a public repository while the ceremony runs.
+## Files
 
-Procedure for the operator: [`../../doc/shielded-pool-phase2-runbook.md`](../../doc/shielded-pool-phase2-runbook.md).
+- [ANNOUNCEMENT.draft.md](ANNOUNCEMENT.draft.md): announcement template.
+- [PARTICIPANT-GUIDE.md](PARTICIPANT-GUIDE.md): contribution instructions.
+- [roster.template.json](roster.template.json): registration format.
+- [keys/tosman.md](keys/tosman.md): first contributor's public signing identity.
+
+The published announcement and publication receipt will identify the opening.
+The beacon and final verification results appear only after closing.
+Operator procedure: [runbook](../../doc/shielded-pool-phase2-runbook.md).

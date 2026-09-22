@@ -32,13 +32,12 @@ does not compile.
 ### Two things this guide cannot give you
 
 - **If you are the operator** (the person deploying the pool), running this on
-  your own VPS adds nothing to the trust set. Your contribution is recorded
-  and counts for nothing on its own, because the property claimed is that
-  *someone else* could not compel or observe you. Do it anyway — but the
-  ceremony still needs an outsider.
-- **Your signing key must be one that was already publicly yours**, or at
-  least published and pinned in `roster.json` *before* the ceremony opened.
-  Section 5 covers both cases.
+  your own VPS is a valid contribution, but does not add an independent
+  participant. You can contribute first; an outside contribution remains a
+  condition of final acceptance, not a condition of opening.
+- **Existing and newly generated signing keys are both accepted.** Publish
+  the public key under your identity and register it before your contribution
+  is accepted. The register remains open during the contribution window.
 
 ---
 
@@ -128,9 +127,9 @@ toolchain by checksum, so this is not "whatever Rust was newest today".
 
 ## 5. Your signing identity
 
-A signature is worth exactly what the identity behind it is worth. A key
-created five minutes ago, signing a statement, proves only that somebody had a
-keyboard.
+A signature binds a statement to a key. Publishing that key under your
+account links it to your claimed identity; it does not prove independence or
+secret destruction. There is no minimum key age.
 
 ### 5a. If you already have a published SSH key (the easy case)
 
@@ -154,7 +153,7 @@ chmod 600 ~/.ssh/tos_signing_key
 
 ### 5b. If you have no published key
 
-Generate one **and then publish it**, before the ceremony opens:
+Generate one **and then publish it**, before your contribution is accepted:
 
 ```sh
 ssh-keygen -t ed25519 -f ~/.ssh/tos_signing_key -C "your-name-or-handle"
@@ -172,15 +171,15 @@ cat ~/.ssh/tos_signing_key.pub
 Now make it publicly yours: add it to your GitHub account under
 **Settings → SSH and GPG keys**, so it appears at
 `https://github.com/<your-username>.keys`. Send that URL and the key line to
-the operator so it goes into `roster.json` **before the announcement is
-published**.
-
-A key added to the roster afterwards proves nothing — it cannot be shown not
-to have been added to suit the contributions already made.
+the operator so it goes into `roster.json`. A public repository record or your
+own website can also publish the key; adding it as a GitHub authentication
+key is optional. New participants may register while the ceremony is open.
+Each accepted contribution records the register revision used to verify it;
+existing accepted identities and keys must not be silently replaced.
 
 ### 5c. PGP instead
 
-If you would rather use a PGP key that is already yours, skip the above and
+If you would rather use an existing or new PGP key, skip the above and
 use `--sign-with gpg:<your-key-id>` in section 7. Give the operator your
 40-character fingerprint and your exported public key.
 
@@ -317,7 +316,8 @@ the operator — it is written to say exactly which rule failed.
 Two refusals that are not your fault:
 
 - *"the roster could not be read"* — `roster.json` has not been published
-  yet. The ceremony should not be open. Ask the operator.
+  yet or you have the wrong revision. Obtain the published register before
+  handing on your contribution.
 - *"no verified contribution comes from a participant declared independent"*
   — you forgot `--in-progress`.
 

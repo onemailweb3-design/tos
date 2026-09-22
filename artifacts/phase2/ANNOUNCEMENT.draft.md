@@ -1,229 +1,85 @@
-# Phase-2 ceremony 2 — announcement (DRAFT, not yet published)
+# Phase-2 ceremony 2 — open-participation announcement draft
 
-**This file is a draft. It is not an announcement until every field marked
-`TO FIX` carries a value, it has been published where people outside this
-repository can see it, and the publication record below is filled in. Until
-then no contribution may be taken, and `phase2-begin` must not be run against
-a directory intended for production.**
+This draft is superseded only by a published `ANNOUNCEMENT.md`. Publish the
+completed announcement separately before `phase2-begin` or contribution 1.
+The publication record must identify a publicly retrievable snapshot and a
+third-party publication timestamp, for example a public GitHub release with
+its announcement attached. A locally assigned Git commit date is not enough.
 
-An earlier ceremony was withdrawn; [`README.md`](README.md) says what was
-wrong with it. Nothing from it carries forward except the tooling, the
-circuit and the phase-1 slice.
+## Fixed parameters
 
----
-
-## 1. The beacon — a block that does not exist yet
-
-This is the field ceremony 1 got wrong, so it is first.
-
-| | |
+| Field | Value |
 |---|---|
-| source | **Bitcoin**, the block at height **970,285** |
-| its hash | **does not exist.** That is the point |
-| bytes that will be used | the 64 lowercase ASCII hex characters of that block's hash, exactly, no newline |
-| witnesses | `blockstream.info` and `mempool.space`, independently, plus any full node |
+| Code revision participants build | TO FIX — clean published commit |
+| Circuit | 18,107 constraints, 19 instance variables, QAP domain 2^15 |
+| Phase-1 slice SHA-256 | `1bfd7acdb3ecbfaaa695ab159a7a643a2eb58203a4d93361040c6bd4c2aa3d6e` |
+| Starting key SHA-256 | `018853105392e4e0ef82ae59514f137b1f1a19892023b70b72ef58941b017c04` |
+| Opening transcript | `7dcfafe1626b5586d5713654c55cc0887590fd789c391ecf1e28bfaf93e66287` |
+| Contributions close | Bitcoin height **970141** |
+| Beacon | Bitcoin block **970285** |
+| Beacon encoding | 64 lowercase ASCII hex characters of the block hash, no newline |
+| Beacon witnesses | blockstream.info and mempool.space; independent full nodes may also verify |
 
-### Why this height, derived rather than picked
+Both heights were confirmed by the operator on 2026-09-22. Verify that neither
+has been reached before publication. The 144-block gap is a schedule, not a
+cryptographic guarantee of unpredictability. Tools do not enforce this timing.
+Do not extend the deadline or change the beacon after opening. At close,
+publish the ordered contribution digests and pre-beacon transcript with the
+observed chain height and hash, before the beacon becomes known.
 
-| | height | how it is obtained |
-|---|---|---|
-| announcement anchor | 968,125 | the chain tip when this was written |
-| **contributions close** | **970,141** | anchor + 2,016 — fourteen days of blocks at 144/day |
-| **beacon** | **970,285** | close + 144 — one further day of blocks |
+## Open participation
 
-The anchor block's hash is
-`0000000000000000000069c13457832a58fd579fe3d654ce239a5a5a8b54400f`,
-read independently from both witnesses on 2026-09-22 and identical from each.
-This is an anchor for observers to check, not a publication timestamp. A copy
-written after the ceremony could include the same hash. The publication record
-must independently establish that the complete announcement and pinned roster
-were public before the first contribution and before the closing height.
+Anyone may register and contribute during the announced window. The complete
+participant list is **not** fixed before opening. `roster.json` is an append-only
+public register of names, affiliations, independence declarations, public
+signing keys and public identity evidence. Register a participant before their
+contribution is accepted, and publish the register revision and SHA-256 with
+each accepted contribution. Do not remove or rewrite accepted identities or
+keys; retain prior revisions so earlier signatures remain attributable.
 
-### The property this buys, stated exactly
+Existing and **newly generated signing keys are accepted**, with no minimum
+age. Publish the public key under the contributor's account and verify each
+attestation against the registered key. A signature proves control of that
+key, not actual independence or secret destruction.
 
-**Contributions close when the observed chain reaches height 970,141. The
-beacon is the block 144 further on.** This separates the scheduled contribution
-window from the beacon height without relying on an estimate of block times.
-Unpredictability still depends on the beacon source and its chain assumptions;
-the height gap is not a cryptographic proof that nobody knew the output.
+The first registered contributor is **tosman**, GitHub account
+https://github.com/gtosnetwork-dotcom. The new Ed25519 public key was published
+in commit `f5a45898fa810f1bea5bbcaf4f0803be0b2bfb4b`. Its fingerprint is
+`SHA256:vKF/wb8PUVfv4CorGJcKJl4sHgNygoenLQnP4OIFhJQ`. Execution is delegated
+to an agent on the operator's machine and is declared **not independent**.
+This is a valid operator contribution; it does not add an independent party.
 
-The ceremony record contains no timestamps, and neither the contribution CLI
-nor the attestation verifier enforces this deadline. The operator must close
-intake at the announced height and retain independently observable publication
-evidence for every accepted contribution. At close, publish and archive the
-ordered contribution digests and final pre-beacon transcript, with the observed
-chain height and hash. Verifiers must check this evidence separately from the
-pairing and signature checks. If the timing cannot be established, or the
-beacon becomes known before intake closes, do not finalise this ceremony.
+No outside verifier needs to be selected before opening. Anyone may verify
+at any time. Independent participation and outside verification remain final
+acceptance conditions, not barriers to the first contribution. Until those
+conditions and final beacon verification are met, do not deploy the parameters.
 
-### These two heights are confirmed; the anchor decays
+## Contribution and verification
 
-The operator confirmed 970,141 and 970,285 on 2026-09-22, when the tip was
-968,125. Both are absolute heights and neither moves.
+Build from the pinned code revision. The contribution scalar is generated
+inside the Rust contributor using the operating-system random source and is
+wiped by the implementation; no scalar file is produced. This does not prove
+that operating-system memory, swap or machine snapshots contained no copies.
+The signing key is separate and must be retained for identity/signatures.
 
-**What decays is the fourteen days.** They are measured from the anchor, not
-from publication, so every day this stays unpublished is a day taken off the
-contribution window rather than added to the end. If publication slips far
-enough that the window is no longer long enough to recruit and collect
-contributions, **re-derive both heights from a fresh anchor and re-confirm** —
-do not publish this with the old numbers and hope. A window that expires with
-contributions outstanding forces the ceremony to be abandoned and re-announced,
-which costs everyone more than re-deriving two integers now.
+Publish each accepted contribution, its signed attestation, register revision,
+and digests as it is accepted. Later participants extend the published chain.
+Use `phase2-verify` for the mathematics and
+`test/shielded-pool/verify-attestations.py --in-progress` with the ceremony and
+register paths for signature checks while open. The final check omits
+`--in-progress` and requires a verified contribution declared independent of
+the operator. The declaration itself needs human review.
 
-### The deadline cannot be extended
+See [PARTICIPANT-GUIDE.md](PARTICIPANT-GUIDE.md) and the
+[operator runbook](../../doc/shielded-pool-phase2-runbook.md).
 
-If the participants are not finished when the chain reaches 970,141, **this
-ceremony is abandoned and re-announced**, with a new anchor and a new height.
-It is not extended. Extending a deadline after seeing which contributions
-arrived is the same adaptive choice the beacon exists to remove, performed on
-the other end. Fourteen days is chosen to make this unlikely, not to make it
-impossible — if it happens, it costs everyone a second two minutes.
+## Publication record
 
-### What a beacon still does not do
+- Announcement URL and archived snapshot: TO FIX before opening.
+- Server-reported publication time (UTC): TO FIX before opening.
+- Observed Bitcoin tip height and hash from both witnesses: TO FIX before opening.
 
-Its scalar is public. It adds no secrecy, and it **does not rescue a ceremony
-whose participants all colluded** — the final `delta` is every contribution
-multiplied together with a value anyone can compute. Security rests on one
-participant having destroyed their scalar. The beacon only ensures nobody
-could aim at a `delta` prepared in advance.
-
----
-
-## 2. The circuit and the phase-1 string
-
-| | |
-|---|---|
-| repository code commit | `TO FIX — the clean, published code revision participants will build` |
-| circuit | 18,107 constraints, 19 instance variables, QAP domain 2^15 |
-| phase 1 | Zcash Sapling, slice sha256 `1bfd7acdb3ecbfaaa695ab159a7a643a2eb58203a4d93361040c6bd4c2aa3d6e` |
-| inheriting | 87 attested human contributions and a public random beacon |
-| starting key sha256 | `018853105392e4e0ef82ae59514f137b1f1a19892023b70b72ef58941b017c04` |
-| opening transcript | `7dcfafe1626b5586d5713654c55cc0887590fd789c391ecf1e28bfaf93e66287` |
-
-Pin the code revision before publishing this announcement. The announcement's
-own publication commit is separate; a document cannot contain its own final
-Git commit ID.
-
-The starting key is a function of the circuit and the slice, so it is the same
-value ceremony 1 published — that is a property of the construction, not
-anything carried over. Every participant rebuilds it before contributing and
-must get this digest; anyone who does not is contributing to something other
-than this circuit and should stop.
-
----
-
-## 3. The participants, fixed before this opens
-
-The roster is `roster.json`, sha256 `TO FIX` — built from
-[`roster.template.json`](roster.template.json), which is what is in this
-directory until the participants are known.
-
-**The roster is pinned by this announcement and does not change afterwards.**
-A participant added after contributions began cannot be shown not to have been
-added because of what the earlier contributions were.
-
-| | |
-|---|---|
-| participants | `TO FIX — names, affiliations, and the public key each will sign with` |
-| at least one independent of the operator | `TO FIX — required; the ceremony is refused without it` |
-| verifiers | `TO FIX — who checks afterwards, from outside` |
-
-Each participant's key must be one that was **already publicly theirs** before
-this ceremony — a GitHub SSH key, a published PGP key, a key on a personal
-domain. The roster carries the key material inline rather than a fingerprint,
-so verification does not depend on fetching anything.
-`test/shielded-pool/verify-attestations.py` refuses a roster that carries a
-fingerprint alone, a roster that lists one key under two names, and a ceremony
-in which no verified contribution comes from someone declared independent of
-the operator.
-
-### What counts as independent
-
-Two participants who cannot fail independently are one participant. Two people
-at the same company on the same machine image, or two agents on one operator's
-laptop, are one. An automated agent running on the operator's machine is the
-operator, and its contribution is recorded as such and counts for nothing —
-that is not modesty, it is the definition of the property being claimed.
-
----
-
-## 4. Publication record
-
-**`TO FIX` — filled in when this is published, before contribution 1.**
-
-| | |
-|---|---|
-| published at | `TO FIX — URL` |
-| published on | `TO FIX — date and time, UTC` |
-| chain tip at publication | `TO FIX — height and hash, from both witnesses` |
-| archived copy | `TO FIX — an archive.org or equivalent snapshot URL` |
-
-Ceremony 1's announcement and its first contribution went out in the same
-push, minutes apart, so "announced first" could only be asserted by the party
-who wrote both. The archive snapshot exists to make this one checkable by
-someone who does not trust this repository's history.
-
----
-
-## 5. How to take part
-
-Read `doc/shielded-pool-phase2-runbook.md`. In short: from a clean checkout at
-the commit above, on your own machine,
-
-```sh
-./scripts/shielded-pool-phase2-contribute.sh <ceremony-dir> \
-    --sign-with ssh:<your-key-file>        # or gpg:<your-key-id>
-```
-
-It builds from source rather than running a binary somebody handed you, which
-is the point rather than an inconvenience: your contribution is worth
-something only if the scalar was destroyed, and that is a property of source
-you can read. Two files, about 280 lines, are the whole of that discipline:
-
-- `tools/shielded-pool-ceremony/src/secret.rs`
-- `tools/shielded-pool-ceremony/src/entropy.rs`
-
-Your scalar is drawn inside the contributor, used, and wiped. It is never a
-return value, never written to a file, and cannot be printed — the type
-holding it has no `Display` and its `Debug` prints a placeholder. Ordinary
-formatting does not compile; debug formatting emits only the placeholder.
-
-Publish your attestation. Then hand the directory on: it is about 6 MB, it
-carries no secret, and any transport will do.
-
----
-
-## 6. What will be checked afterwards, by people who did not run it
-
-```sh
-target/release/phase2-verify <ceremony-dir> --vk-out vk.bin
-python3 test/shielded-pool/verify-attestations.py <ceremony-dir> \
-    --roster artifacts/phase2/roster.json
-```
-
-The first audits the mathematics and emits the 1,248 bytes. The second checks
-that a person stands behind each contribution — that each attestation names
-the contribution the chain actually contains, that its signature verifies
-under a key on the roster above, and that at least one verified participant is
-independent of the operator.
-
-**What each verifier publishes is the verifying key's SHA-256.** Two people
-who never spoke reproducing the same digest from the same record is the
-strongest thing this process produces: it is a computation, so it either
-reproduces or it does not, and it does not depend on either of them being
-trustworthy.
-
----
-
-## 7. What would invalidate this ceremony
-
-Each of these turns it back into a rehearsal, and **none of them is detectable
-from the artifacts afterwards** — which is why they are written down before it
-opens:
-
-- any contribution accepted after the chain reached height 970,141;
-- the beacon height changed, for any reason, after this is published;
-- the roster changed after this is published;
-- every participant under one party's control;
-- a participant signing with a key created for this ceremony;
-- the deadline extended rather than the ceremony re-announced.
+The initial announcement snapshot is retained unchanged. The publication
+receipt may be recorded separately after the hosting service assigns its
+publication time, before the first contribution. Later registration is allowed
+under the rules above and does not change the fixed ceremony parameters.

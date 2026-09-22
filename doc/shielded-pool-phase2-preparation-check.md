@@ -63,7 +63,12 @@ passes here. No secret-formatting mutation was run. Signing tests use temporary
 keys under automatically cleaned temporary directories, never production
 identity keys. No signing key material is retained in this report.
 
-## Fixed schedule and remaining inputs
+## Fixed schedule and remaining inputs (historical snapshot)
+
+The prerequisites below describe the earlier fixed-roster draft. The operator
+has since adopted open participation: new keys and later registration are
+allowed, and outside verifiers need not be named before opening. See the
+current announcement and runbook; these old prerequisites are not active gates.
 
 The existing operator-confirmed schedule is unchanged: contributions close at
 **970141**, beacon at **970285**. During this preparation, both Blockstream and

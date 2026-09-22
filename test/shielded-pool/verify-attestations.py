@@ -7,8 +7,8 @@ ceremony run entirely by one person under nine invented names, because the
 arithmetic of a contribution is identical whoever made it. The security
 argument is not arithmetic -- it is that **at least one participant destroyed
 a scalar without the others being able to compel or observe them** -- and the
-only evidence for that is a statement by someone who existed before the
-ceremony and can be asked afterwards.
+signed statements provide accountability, not proof of secret destruction or
+independence. Newly generated signing keys are permitted.
 
 This checks those statements. It is the half that was missing: contributions
 could be signed since the script was written, and nothing anywhere verified a
@@ -27,12 +27,12 @@ reader cannot do reliably:
    -- the canonical verifiers, run as subprocesses. A signature parser
    written here could accept something they would reject, and a home-made
    parser that is wrong in the permissive direction is worse than no check;
-3. **the signer is on the roster that was pinned before the ceremony
-   opened.** A signature from a key minted for the occasion is worth what no
-   signature is worth while looking like more, so the key must appear in a
-   roster published in advance, with the public key material inline. Keys are
-   imported into a throwaway keyring: the verifier never consults the
-   operator's own, or "did it verify" would depend on whose machine ran it.
+3. **the signer is on the published participant register.** Registration is
+   open during the contribution window, and new signing keys are allowed.
+   Each accepted contribution publishes the register revision used to verify
+   it. Public key material is inline; verification uses a throwaway keyring,
+   never the operator's personal keyring. This tool does not verify publication
+   times or the append-only history of the register.
 
 And one property of the ceremony as a whole:
 
