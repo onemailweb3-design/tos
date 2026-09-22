@@ -48,7 +48,20 @@ constexpr const char *pending_finality_rejection_name(PendingFinalityRejection r
 }
 enum class PendingFinalityCapacity { Shared, ValidatorReserved };
 enum class PendingFinalityFailureAction { Retry, DiscardPermanent, DiscardExpired };
-using PendingFinalityAttemptToken = std::uint64_t;
+struct PendingFinalityAttemptToken {
+  std::uint64_t queue_generation{0};
+  std::uint64_t attempt_generation{0};
+
+  explicit operator bool() const {
+    return queue_generation != 0 && attempt_generation != 0;
+  }
+  friend bool operator==(PendingFinalityAttemptToken lhs, PendingFinalityAttemptToken rhs) {
+    return lhs.queue_generation == rhs.queue_generation && lhs.attempt_generation == rhs.attempt_generation;
+  }
+  friend bool operator!=(PendingFinalityAttemptToken lhs, PendingFinalityAttemptToken rhs) {
+    return !(lhs == rhs);
+  }
+};
 
 struct PendingFinalityFailureResult {
   PendingFinalityFailureAction action{PendingFinalityFailureAction::DiscardPermanent};
@@ -179,6 +192,9 @@ constexpr PendingFinalityAdmission pending_finality_admission(bool has_cached, b
 template <class Evidence, class Sender>
 class PendingFinalityCandidates {
  public:
+  explicit PendingFinalityCandidates(std::uint64_t queue_generation) : queue_generation_(queue_generation) {
+  }
+
   struct Entry {
     Evidence evidence;
     Sender sender;
@@ -286,11 +302,11 @@ class PendingFinalityCandidates {
     if (entries_.front().retry_not_before > now) {
       return {};
     }
-    if (next_attempt_token_ == std::numeric_limits<PendingFinalityAttemptToken>::max()) {
+    if (next_attempt_generation_ == std::numeric_limits<std::uint64_t>::max()) {
       return {};
     }
     processing_ = true;
-    processing_token_ = next_attempt_token_++;
+    processing_token_ = {queue_generation_, next_attempt_generation_++};
     return {&entries_.front(), processing_token_};
   }
 
@@ -304,12 +320,12 @@ class PendingFinalityCandidates {
       entry.retry_not_before = std::min(now + entry.retry_delay, entry.expires_at);
       entry.retry_delay = std::min(entry.retry_delay * 2, pending_finality_max_retry_seconds);
       processing_ = false;
-      processing_token_ = 0;
+      processing_token_ = {};
       return {action, entry.retry_not_before};
     } else {
       entries_.pop_front();
       processing_ = false;
-      processing_token_ = 0;
+      processing_token_ = {};
       return {action, 0};
     }
   }
@@ -322,7 +338,7 @@ class PendingFinalityCandidates {
                    entries_.end());
     if (processing_front_expired) {
       processing_ = false;
-      processing_token_ = 0;
+      processing_token_ = {};
     }
     return old_size - entries_.size();
   }
@@ -337,7 +353,7 @@ class PendingFinalityCandidates {
       entries_.clear();
     }
     processing_ = false;
-    processing_token_ = 0;
+    processing_token_ = {};
     return true;
   }
 
@@ -354,7 +370,7 @@ class PendingFinalityCandidates {
       return false;
     }
     processing_ = false;
-    processing_token_ = 0;
+    processing_token_ = {};
     return true;
   }
 
@@ -371,14 +387,15 @@ class PendingFinalityCandidates {
   }
 
   bool is_processing(PendingFinalityAttemptToken token) const {
-    return processing_ && !entries_.empty() && token != 0 && processing_token_ == token;
+    return processing_ && !entries_.empty() && static_cast<bool>(token) && processing_token_ == token;
   }
 
  private:
   std::deque<Entry> entries_;
   bool processing_ = false;
-  PendingFinalityAttemptToken processing_token_{0};
-  PendingFinalityAttemptToken next_attempt_token_{1};
+  const std::uint64_t queue_generation_;
+  PendingFinalityAttemptToken processing_token_{};
+  std::uint64_t next_attempt_generation_{1};
 };
 
 template <class BlockKey, class Sender, class Evidence>
@@ -425,7 +442,10 @@ class PendingFinalityStore {
                   : PendingFinalityRejection::SharedBudget};
     }
     if (it == entries_.end()) {
-      it = entries_.emplace(block, Candidates{}).first;
+      if (next_queue_generation_ == std::numeric_limits<std::uint64_t>::max()) {
+        return {PendingFinalityAdmission::Keep, PendingFinalityRejection::Policy};
+      }
+      it = entries_.emplace(block, Candidates{next_queue_generation_++}).first;
     }
     return {it->second.admit(std::move(evidence), std::move(sender), charge, capacity, verified, is_final, expires_at),
             PendingFinalityRejection::None};
@@ -491,6 +511,7 @@ class PendingFinalityStore {
 
  private:
   std::map<BlockKey, Candidates> entries_;
+  std::uint64_t next_queue_generation_{1};
 };
 
 }  // namespace tos::validator

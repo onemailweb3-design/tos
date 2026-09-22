@@ -219,6 +219,60 @@ int main() {
     return 1;
   }
 
+  auto check_recreated_queue_stale_attempt = [](bool late_success) {
+    tos::validator::PendingFinalityStore<int, int, int> store;
+    store.admit(0, 10, 1, 4096, SharedCapacity, false, true, 1);
+    auto *first_queue = store.get_if_exists(0);
+    auto attempt_a = first_queue->begin_processing(0);
+    if (!attempt_a || store.erase_expired(1) != 1 || store.get_if_exists(0) != nullptr) {
+      std::cerr << "PENDING_FINALITY_QUEUE_REUSE_SETUP_FAILURE: expired queue Q1 was not destroyed\n";
+      return false;
+    }
+    if (!store.admit(0, 11, 2, 4096, SharedCapacity, false, true, NoExpiry).admitted()) {
+      std::cerr << "PENDING_FINALITY_QUEUE_REUSE_SETUP_FAILURE: replacement queue Q2 was not created\n";
+      return false;
+    }
+    auto *second_queue = store.get_if_exists(0);
+    auto attempt_b = second_queue->begin_processing(1);
+    if (!attempt_b || attempt_b->evidence != 2) {
+      std::cerr << "PENDING_FINALITY_QUEUE_REUSE_SETUP_FAILURE: candidate B did not begin in Q2\n";
+      return false;
+    }
+
+    bool stale_ignored = false;
+    if (late_success) {
+      const bool marked = second_queue->mark_front_verified(attempt_a.token);
+      const bool completed = second_queue->complete_front(attempt_a.token, true);
+      stale_ignored = !marked && !completed && second_queue->size() == 1 &&
+                      second_queue->is_processing(attempt_b.token) && !attempt_b->verified &&
+                      attempt_b->evidence == 2;
+      if (!stale_ignored) {
+        std::cerr << "PENDING_FINALITY_QUEUE_REUSE_SUCCESS_FAILURE: Q1's late success mutated Q2 candidate B\n";
+      }
+    } else {
+      second_queue->resolve_front_failure(attempt_a.token, tos::ErrorCode::protoviolation, 1);
+      stale_ignored = second_queue->size() == 1 && second_queue->is_processing(attempt_b.token) &&
+                      attempt_b->evidence == 2;
+      if (!stale_ignored) {
+        std::cerr << "PENDING_FINALITY_QUEUE_REUSE_PERMANENT_FAILURE: Q1's late permanent error removed Q2 candidate B\n";
+      }
+    }
+    if (!stale_ignored) {
+      return false;
+    }
+    if (!second_queue->mark_front_verified(attempt_b.token) || !attempt_b->verified ||
+        !second_queue->complete_front(attempt_b.token, true) || !second_queue->empty()) {
+      std::cerr << "PENDING_FINALITY_QUEUE_REUSE_CURRENT_FAILURE: Q2 candidate B's own result did not land\n";
+      return false;
+    }
+    return true;
+  };
+  const bool recreated_queue_permanent_ignored = check_recreated_queue_stale_attempt(false);
+  const bool recreated_queue_success_ignored = check_recreated_queue_stale_attempt(true);
+  if (!recreated_queue_permanent_ignored || !recreated_queue_success_ignored) {
+    return 1;
+  }
+
   auto peer = tos::PublicKeyHash::zero();
   auto missing_remote_bytes = tos::validator::prepare_pending_finality_ingress(&peer, 0);
   if (missing_remote_bytes.admitted() ||
@@ -643,6 +697,7 @@ int main() {
   std::cout << "PENDING_FINALITY_RETRY_DEADLINE_OK: transient evidence freed its slot after "
             << tos::validator::pending_finality_retention_seconds << " seconds\n";
   std::cout << "PENDING_FINALITY_STALE_ATTEMPT_OK: late failure and success tokens could not mutate the replacement front\n";
+  std::cout << "PENDING_FINALITY_QUEUE_REUSE_OK: destroyed and recreated block queues use distinct attempt namespaces\n";
   std::cout << "PENDING_FINALITY_INGRESS_OK: missing accounting fails closed and authenticated senders retain attribution\n";
   std::cout << "PENDING_FINALITY_TRANSPORT_DEDUP_OK: evidence-distinct finalities have distinct transport ids\n";
   std::cout << "PENDING_FINALITY_SENDER_ISOLATION_OK: four bad arrivals from one sender did not exclude another sender\n";
