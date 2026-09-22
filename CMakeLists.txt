@@ -802,6 +802,12 @@ target_link_libraries(test-pending-finality-cache PRIVATE full-node tos_block to
                       tos_pq_consensus tl_lite_api tdutils)
 target_compile_definitions(test-pending-finality-cache PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
 
+add_executable(test-measurement-contract test/test-td-main.cpp test/pq-native/measurement-contract-test.cpp)
+target_include_directories(test-measurement-contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                           ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
+target_link_libraries(test-measurement-contract PRIVATE full-node validator-measurement tos_block tos_crypto
+                      tos_pq_consensus tl_api tl_lite_api tdutils)
+
 add_executable(test-pq-lite-forward-proof test/pq-native/pq-lite-forward-proof-test.cpp)
 target_include_directories(test-pq-lite-forward-proof PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                            ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
@@ -1201,6 +1207,16 @@ tos_test(test-pq-network-parser-resource)
 tos_test(test-pq-signature-persistence)
 tos_test(test-validator-transport-authority)
 tos_test(test-pending-finality-cache)
+add_dependencies(all-tests test-measurement-contract)
+add_test(NAME n6-metric-schema COMMAND test-measurement-contract --filter MetricSchema)
+add_test(NAME n6-monotonic-timestamps COMMAND test-measurement-contract --filter MonotonicTimestamps)
+add_test(NAME n6-low-cardinality COMMAND test-measurement-contract --filter LowCardinality)
+add_test(NAME n6-size-accounting COMMAND test-measurement-contract --filter SizeAccounting)
+add_test(NAME n6-instrumentation-byte-equivalence
+  COMMAND test-measurement-contract --filter InstrumentationByteEquivalence)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME n6-manifest-completeness
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/measurement-manifest-test.py)
 add_test(NAME finality-evidence-admission-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-evidence-admission.sh ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME pending-finality-retry-policy-source

@@ -17,6 +17,7 @@
 #include "auto/tl/tos_api.hpp"
 #include "block/block-auto.h"
 #include "block/block-parse.h"
+#include "measurement/measurement-contract.h"
 #include "td/utils/Time.h"
 #include "td/utils/lz4.h"
 #include "td/utils/overloaded.h"
@@ -187,8 +188,10 @@ td::Result<BlockBroadcast> get_block_broadcast_without_data(const tos_api::tosNo
 }
 
 td::BufferSlice serialize_block_finality_broadcast(const BlockFinalityBroadcast& broadcast) {
-  return create_serialize_tl_object<tos_api::tosNode_blockFinalityBroadcast>(create_tl_block_id(broadcast.block_id),
-                                                                             broadcast.sig_set->tl());
+  auto serialized = create_serialize_tl_object<tos_api::tosNode_blockFinalityBroadcast>(
+      create_tl_block_id(broadcast.block_id), broadcast.sig_set->tl());
+  measurement::record_serialized_size(measurement::SerializedArtifact::block_finality_broadcast, serialized.size());
+  return serialized;
 }
 
 td::Bits256 block_finality_broadcast_transport_id(const BlockFinalityBroadcast& broadcast) {
