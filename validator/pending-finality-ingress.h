@@ -7,7 +7,10 @@
 
 #include <cstddef>
 #include <deque>
+#include <limits>
+#include <map>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "keys/keys.hpp"
@@ -92,37 +95,51 @@ inline bool pending_finality_sender_is_validator(const PendingBlockFinalitySende
 struct PendingFinalityAuthorityKey {
   ShardIdFull shard;
   CatchainSeqno catchain_seqno;
-  td::uint32 validator_set_hash;
 
   bool operator==(const PendingFinalityAuthorityKey &other) const {
-    return shard == other.shard && catchain_seqno == other.catchain_seqno &&
-           validator_set_hash == other.validator_set_hash;
+    return shard == other.shard && catchain_seqno == other.catchain_seqno;
   }
 };
 
-// Repeated unverified broadcasts normally name the same validator coordinates.
-// Cache the locally derived transport roots so a flood pays the validator-set
-// computation once per coordinate triple instead of once per arrival. The
-// manager clears this memo when its trusted masterchain state changes, so a
+struct PendingFinalityAuthoritySet {
+  td::uint32 validator_set_hash;
+  std::vector<PublicKeyHash> roots;
+};
+
+constexpr bool pending_finality_catchain_is_current_or_next(CatchainSeqno current, CatchainSeqno claimed) {
+  if (claimed == current) {
+    return true;
+  }
+  return current != std::numeric_limits<CatchainSeqno>::max() && claimed == current + 1;
+}
+
+// For each shard, only current and next catchain coordinates can be legitimate
+// at one trusted state, which is why each shard has exactly two entries. The
+// attacker-controlled set hash is deliberately not part of the key: entries
+// store locally computed hashes beside their roots, so cycling claimed hashes
+// is a cheap comparison rather than another validator-set computation. The
+// manager clears the memo when its trusted masterchain state changes, so a
 // cached negative result cannot survive the state update that makes a set known.
 class PendingFinalityAuthorityMemo {
  public:
   template <class Loader>
-  bool contains(const PendingFinalityAuthorityKey &key, const PublicKeyHash &peer, Loader &&loader) {
-    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+  bool contains(const PendingFinalityAuthorityKey &key, td::uint32 claimed_validator_set_hash,
+                const PublicKeyHash &peer, Loader &&loader) {
+    auto &entries = entries_[key.shard];
+    for (auto it = entries.begin(); it != entries.end(); ++it) {
       if (it->key == key) {
-        auto roots = std::move(it->roots);
-        entries_.erase(it);
-        entries_.push_back({key, std::move(roots)});
-        return contains_peer(entries_.back().roots, peer);
+        auto sets = std::move(it->sets);
+        entries.erase(it);
+        entries.push_back({key, std::move(sets)});
+        return contains_peer(entries.back().sets, claimed_validator_set_hash, peer);
       }
     }
-    auto roots = loader();
-    if (entries_.size() == max_entries) {
-      entries_.pop_front();
+    auto sets = loader();
+    if (entries.size() == max_entries_per_shard) {
+      entries.pop_front();
     }
-    entries_.push_back({key, std::move(roots)});
-    return contains_peer(entries_.back().roots, peer);
+    entries.push_back({key, std::move(sets)});
+    return contains_peer(entries.back().sets, claimed_validator_set_hash, peer);
   }
 
   void clear() {
@@ -130,26 +147,49 @@ class PendingFinalityAuthorityMemo {
   }
 
   std::size_t size() const {
-    return entries_.size();
+    std::size_t result = 0;
+    for (const auto &[unused, entries] : entries_) {
+      (void)unused;
+      result += entries.size();
+    }
+    return result;
   }
 
  private:
   struct Entry {
     PendingFinalityAuthorityKey key;
-    std::vector<PublicKeyHash> roots;
+    std::vector<PendingFinalityAuthoritySet> sets;
   };
 
-  static bool contains_peer(const std::vector<PublicKeyHash> &roots, const PublicKeyHash &peer) {
-    for (const auto &root : roots) {
-      if (root == peer) {
-        return true;
+  static bool contains_peer(const std::vector<PendingFinalityAuthoritySet> &sets,
+                            td::uint32 claimed_validator_set_hash, const PublicKeyHash &peer) {
+    for (const auto &set : sets) {
+      if (set.validator_set_hash == claimed_validator_set_hash) {
+        for (const auto &root : set.roots) {
+          if (root == peer) {
+            return true;
+          }
+        }
       }
     }
     return false;
   }
 
-  static constexpr std::size_t max_entries = 2;
-  std::deque<Entry> entries_;
+  static constexpr std::size_t max_entries_per_shard = 2;
+  std::map<ShardIdFull, std::deque<Entry>> entries_;
 };
+
+template <class Loader>
+bool pending_finality_sender_is_validator(PendingFinalityAuthorityMemo &memo, ShardIdFull shard,
+                                          CatchainSeqno current_catchain_seqno,
+                                          CatchainSeqno claimed_catchain_seqno,
+                                          td::uint32 claimed_validator_set_hash, const PublicKeyHash &peer,
+                                          Loader &&loader) {
+  if (!pending_finality_catchain_is_current_or_next(current_catchain_seqno, claimed_catchain_seqno)) {
+    return false;
+  }
+  return memo.contains({shard, claimed_catchain_seqno}, claimed_validator_set_hash, peer,
+                       std::forward<Loader>(loader));
+}
 
 }  // namespace tos::validator

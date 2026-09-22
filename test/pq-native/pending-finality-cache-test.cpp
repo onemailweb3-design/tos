@@ -198,30 +198,37 @@ int main() {
     return 1;
   }
   tos::validator::PendingFinalityAuthorityMemo authority_memo;
-  tos::validator::PendingFinalityAuthorityKey authority_key{
-      fixture.id.shard_full(), fixture.validator_set->get_catchain_seqno(),
-      fixture.validator_set->get_validator_set_hash()};
+  const auto current_catchain_seqno = fixture.validator_set->get_catchain_seqno();
+  const auto validator_set_hash = fixture.validator_set->get_validator_set_hash();
   std::size_t authority_computations = 0;
   for (int i = 0; i < 64; ++i) {
-    if (!authority_memo.contains(authority_key, validator_peer, [&] {
+    auto claimed_catchain_seqno = static_cast<tos::CatchainSeqno>(current_catchain_seqno + (i % 3));
+    auto claimed_validator_set_hash = static_cast<td::uint32>(validator_set_hash + i);
+    bool classified = tos::validator::pending_finality_sender_is_validator(
+        authority_memo, fixture.id.shard_full(), current_catchain_seqno, claimed_catchain_seqno,
+        claimed_validator_set_hash, validator_peer, [&] {
           ++authority_computations;
-          return std::vector<tos::PublicKeyHash>{validator_peer};
-        })) {
-      std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: repeated validator coordinates lost their authority\n";
+          return std::vector<tos::validator::PendingFinalityAuthoritySet>{
+              {validator_set_hash, {validator_peer}}};
+        });
+    if (classified != (i == 0)) {
+      std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: attacker-controlled coordinates changed authority\n";
       return 1;
     }
   }
-  if (authority_computations != 1 || authority_memo.size() != 1) {
-    std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: 64 repeated arrivals computed the validator set "
+  if (authority_computations != 2 || authority_memo.size() != 2) {
+    std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: 64 cycled claims computed the validator set "
               << authority_computations << " times\n";
     return 1;
   }
   authority_memo.clear();
-  authority_memo.contains(authority_key, validator_peer, [&] {
-    ++authority_computations;
-    return std::vector<tos::PublicKeyHash>{validator_peer};
-  });
-  if (authority_computations != 2) {
+  tos::validator::pending_finality_sender_is_validator(
+      authority_memo, fixture.id.shard_full(), current_catchain_seqno, current_catchain_seqno, validator_set_hash,
+      validator_peer, [&] {
+        ++authority_computations;
+        return std::vector<tos::validator::PendingFinalityAuthoritySet>{{validator_set_hash, {validator_peer}}};
+      });
+  if (authority_computations != 3) {
     std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: trusted-state invalidation retained a stale classification\n";
     return 1;
   }
@@ -403,7 +410,7 @@ int main() {
             << " validator_reserved=" << tos::validator::pending_finality_validator_reserved_budget_bytes
             << " per_sender=1048576 minimum_charge=4096 validator_shares="
             << tos::validator::pending_finality_max_validator_senders << "\n";
-  std::cout << "PENDING_FINALITY_AUTHORITY_MEMO_OK: repeated_arrivals=64 computations=1 entries=1\n";
+  std::cout << "PENDING_FINALITY_AUTHORITY_MEMO_OK: cycled_claims=64 computations=2 entries=2\n";
   std::cout << "PENDING_FINALITY_CLASSIFICATION_COST: validators=400 average_us=" << measured_microseconds
             << " copied_pq_key_bytes_per_set="
             << measured_validator_count * tos::pq::mldsa44_public_key_bytes << " iterations=" << measurement_iterations

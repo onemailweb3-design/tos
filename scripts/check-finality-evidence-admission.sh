@@ -46,11 +46,14 @@ require_marker validator/manager.cpp \
   'if (!admission.admitted()) {' \
   'manager no longer stops after the pending store rejects evidence'
 require_marker validator/manager.cpp \
-  'pending_finality_authority_memo_.contains(authority_key, ingress.sender.peer' \
+  'pending_finality_sender_is_validator(' \
   'manager no longer memoizes authenticated-sender classification by validator coordinates'
-require_marker validator/manager.cpp \
-  'set->get_validator_set_hash() != authority_key.validator_set_hash' \
-  'manager grants reserved capacity without matching the evidence validator-set hash'
+require_marker validator/pending-finality-ingress.h \
+  'pending_finality_catchain_is_current_or_next(current_catchain_seqno, claimed_catchain_seqno)' \
+  'manager authority classification no longer rejects implausible catchain claims before set computation'
+require_marker validator/pending-finality-ingress.h \
+  'set.validator_set_hash == claimed_validator_set_hash' \
+  'authority memo no longer compares the claimed set hash with the locally computed hash'
 require_marker validator/manager.cpp \
   'pending_finality_authority_memo_.clear()' \
   'manager no longer invalidates authority classifications when trusted state changes'

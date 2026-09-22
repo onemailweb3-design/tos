@@ -715,28 +715,36 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
       pending_finality_authority_memo_state_ = last_masterchain_block_id_;
     }
     auto state = Ref<MasterchainStateQ>(last_masterchain_state_);
-    PendingFinalityAuthorityKey authority_key{block_id.shard_full(), finality.sig_set->get_catchain_seqno(),
-                                               finality.sig_set->get_validator_set_hash()};
+    const auto shard = block_id.shard_full();
+    const auto claimed_catchain_seqno = finality.sig_set->get_catchain_seqno();
+    const auto claimed_validator_set_hash = finality.sig_set->get_validator_set_hash();
+    const auto current_catchain_seqno = state->get_shard_cc_seqno(shard);
     // test-pending-finality-cache measured one uncached 400-validator shard-set
     // computation at 390 us and 524800 copied PQ-key bytes on the development
     // host (20-run average). Checking current plus next can therefore copy
-    // 1049600 bytes per miss. The two-entry memo makes repeated arrivals for
-    // the same claimed coordinates pay that cost once, and is reset above when
+    // 1049600 bytes per miss. A cheap local cc_seqno check admits only current
+    // and next, so the two-entry memo covers the complete legitimate window.
+    // The attacker-claimed set hash is compared with the computed hash stored
+    // inside an entry and cannot create cache keys. The memo is reset above when
     // the trusted masterchain state changes.
-    validator_capacity = pending_finality_authority_memo_.contains(authority_key, ingress.sender.peer, [&] {
-      std::vector<PublicKeyHash> roots;
+    validator_capacity = pending_finality_sender_is_validator(
+        pending_finality_authority_memo_, shard, current_catchain_seqno, claimed_catchain_seqno,
+        claimed_validator_set_hash, ingress.sender.peer, [&] {
+      std::vector<PendingFinalityAuthoritySet> sets;
       auto append_matching_set = [&](const Ref<block::ValidatorSet> &set) {
-        if (set.is_null() || set->get_catchain_seqno() != authority_key.catchain_seqno ||
-            set->get_validator_set_hash() != authority_key.validator_set_hash) {
+        if (set.is_null() || set->get_catchain_seqno() != claimed_catchain_seqno) {
           return;
         }
+        std::vector<PublicKeyHash> roots;
         for (const auto &validator : set->export_vector()) {
           roots.push_back(validator_transport_root(validator));
         }
+        sets.push_back(
+            {set->get_validator_set_hash(), canonical_validator_transport_roots(std::move(roots))});
       };
-      append_matching_set(state->get_next_validator_set(authority_key.shard, authority_key.catchain_seqno));
-      append_matching_set(state->get_validator_set(authority_key.shard, authority_key.catchain_seqno));
-      return canonical_validator_transport_roots(std::move(roots));
+      append_matching_set(state->get_next_validator_set(shard, claimed_catchain_seqno));
+      append_matching_set(state->get_validator_set(shard, claimed_catchain_seqno));
+      return sets;
     });
   }
   const auto capacity = validator_capacity ? PendingFinalityCapacity::ValidatorReserved
