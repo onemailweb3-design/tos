@@ -212,6 +212,20 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
         encoding="utf-8",
     )
     resolved_gaps = Path(raw).parent / f"measurement-gaps-{Path(raw).name}.json"
+    scale_result = Path(raw).parent / f"scale-result-{Path(raw).name}.json"
+
+    def write_scale_result(*, local_override: bool, release_eligible: bool, scales: list[int]) -> None:
+        scale_result.write_text(
+            json.dumps(
+                {
+                    "local_colocation_diagnostic_override": local_override,
+                    "release_evidence_eligible": release_eligible,
+                    "required_release_scales_measured": scales,
+                }
+            ),
+            encoding="utf-8",
+        )
+
     resolved_gaps.write_text(
         json.dumps(
             {
@@ -221,17 +235,21 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                     "carrier-scale-transport-unmeasured",
                 ],
                 "gaps": {
-                    gap_id: {
+                    "release-scale-matrix-unmeasured": {
                         "observation": "fixture observation",
                         "reason": "fixture reason",
                         "closure_condition": "fixture closure condition",
                         "status": "RESOLVED",
                         "resolved_by": "fixture run evidence",
-                    }
-                    for gap_id in (
-                        "release-scale-matrix-unmeasured",
-                        "carrier-scale-transport-unmeasured",
-                    )
+                        "evidence_results": [str(scale_result)],
+                    },
+                    "carrier-scale-transport-unmeasured": {
+                        "observation": "fixture observation",
+                        "reason": "fixture reason",
+                        "closure_condition": "fixture closure condition",
+                        "status": "RESOLVED",
+                        "resolved_by": "fixture run evidence",
+                    },
                 },
             }
         ),
@@ -282,8 +300,52 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
             if expected not in str(exc):
                 fail(f"open measurement gaps reported the wrong release refusal: {exc}")
 
-        # Resolving both registered measurement gaps with retained evidence
+        # A human cannot close the release scale gap by citing the explicit
+        # co-located diagnostic escape hatch.
+        write_scale_result(local_override=True, release_eligible=False, scales=[4, 7])
+        try:
+            module.create_manifest(
+                repo=repo_root,
+                config=complete_config(),
+                criteria_path=criteria,
+                matrix_path=matrix,
+                mode="release",
+                n5_closure_path=None,
+                correctness_questions_path=resolved_questions,
+                measurement_gaps_path=resolved_gaps,
+            )
+            fail("co-located diagnostic evidence closed the release scale gap")
+        except module.ManifestError as exc:
+            expected = (
+                "release-scale-matrix-unmeasured cannot be resolved by "
+                "local_colocation_diagnostic_override evidence"
+            )
+            if expected not in str(exc):
+                fail(f"co-located release-scale evidence reported the wrong refusal: {exc}")
+
+        # Removing the override marker is not sufficient: the result must also
+        # be independently eligible for release evidence.
+        write_scale_result(local_override=False, release_eligible=False, scales=[21, 32, 64, 100])
+        try:
+            module.create_manifest(
+                repo=repo_root,
+                config=complete_config(),
+                criteria_path=criteria,
+                matrix_path=matrix,
+                mode="release",
+                n5_closure_path=None,
+                correctness_questions_path=resolved_questions,
+                measurement_gaps_path=resolved_gaps,
+            )
+            fail("diagnostic evidence without the override closed the release scale gap")
+        except module.ManifestError as exc:
+            expected = "release-scale-matrix-unmeasured evidence is not release_evidence_eligible"
+            if expected not in str(exc):
+                fail(f"diagnostic release-scale evidence reported the wrong refusal: {exc}")
+
+        # Resolving both registered measurement gaps with eligible evidence
         # exposes the next independent refusal, the exact-commit N5 closure.
+        write_scale_result(local_override=False, release_eligible=True, scales=[21, 32, 64, 100])
         try:
             module.create_manifest(
                 repo=repo_root,
@@ -364,5 +426,6 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
         closure_external.unlink(missing_ok=True)
         resolved_questions.unlink(missing_ok=True)
         resolved_gaps.unlink(missing_ok=True)
+        scale_result.unlink(missing_ok=True)
 
 print("N6_MANIFEST_OK: complete manifest and independent correctness, measurement-gap, N5 closure, hash, and dirty-tree refusals")

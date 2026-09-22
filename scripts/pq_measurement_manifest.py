@@ -348,6 +348,50 @@ def validate_open_measurement_gaps(path: Path, *, release: bool) -> None:
         elif status == "RESOLVED":
             if not isinstance(gap.get("resolved_by"), str) or not gap["resolved_by"]:
                 raise ManifestError(f"resolved measurement gap {gap_id} lacks resolved_by evidence")
+            if gap_id == "release-scale-matrix-unmeasured":
+                evidence_results = gap.get("evidence_results")
+                if (
+                    not isinstance(evidence_results, list)
+                    or not evidence_results
+                    or not all(isinstance(item, str) and item for item in evidence_results)
+                ):
+                    raise ManifestError(
+                        "resolved measurement gap release-scale-matrix-unmeasured lacks evidence_results"
+                    )
+                measured_scales: set[int] = set()
+                for raw_result in evidence_results:
+                    result_path = Path(raw_result)
+                    if not result_path.is_absolute():
+                        result_path = path.parent / result_path
+                    try:
+                        result = json.loads(result_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError) as exc:
+                        raise ManifestError(
+                            f"release-scale evidence result {raw_result} is unreadable: {exc}"
+                        ) from exc
+                    if result.get("local_colocation_diagnostic_override") is True:
+                        raise ManifestError(
+                            "release-scale-matrix-unmeasured cannot be resolved by "
+                            "local_colocation_diagnostic_override evidence"
+                        )
+                    if result.get("local_colocation_diagnostic_override") is not False:
+                        raise ManifestError(
+                            "release-scale evidence does not state local_colocation_diagnostic_override=false"
+                        )
+                    if result.get("release_evidence_eligible") is not True:
+                        raise ManifestError(
+                            "release-scale-matrix-unmeasured evidence is not release_evidence_eligible"
+                        )
+                    scales = result.get("required_release_scales_measured")
+                    if not isinstance(scales, list) or any(
+                        isinstance(scale, bool) or not isinstance(scale, int) for scale in scales
+                    ):
+                        raise ManifestError("release-scale evidence has invalid measured scales")
+                    measured_scales.update(scales)
+                if measured_scales != set(REQUIRED_SCALES):
+                    raise ManifestError(
+                        "release-scale evidence does not cover required scales 21/32/64/100"
+                    )
         else:
             raise ManifestError(f"measurement gap {gap_id} has unknown status {status}")
     if release and open_gaps:

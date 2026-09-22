@@ -259,7 +259,9 @@ Mutation evidence:
 | Mutation | Gate that went red | Exact named failure |
 |---|---|---|
 | Delete an open gap but retain its required id | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: open measurement gaps reported the wrong release refusal: measurement-gap registry required ids and entries differ` |
-| Mark both measurement gaps resolved with `resolved_by` evidence | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: open measurement gaps reported the wrong release refusal: release-grade measurement refuses commit ...: no N5 closure artifact was supplied for that exact commit` |
+| Close the release-scale gap with a result carrying `local_colocation_diagnostic_override=true` | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: co-located release-scale evidence reported the wrong refusal: release-scale-matrix-unmeasured cannot be resolved by local_colocation_diagnostic_override evidence` |
+| Cite a result with the override false but diagnostic eligibility | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: diagnostic release-scale evidence reported the wrong refusal: release-scale-matrix-unmeasured evidence is not release_evidence_eligible` |
+| Mark both gaps resolved with eligible full-scale evidence | `n6-manifest-completeness` | The measurement-gap refusal disappears and the independent next refusal is `no N5 closure artifact was supplied for that exact commit` |
 
 ## N6.5 scale-sweep instrument
 
@@ -294,6 +296,25 @@ instrument validation on a capable development host. It is false by default,
 is not used by the registered 4-validator gate, and sets
 `local_colocation_diagnostic_override=true` in its result. Such a run remains
 ineligible for release evidence and cannot satisfy a required release scale.
+That statement is enforced at the gap consumer: resolving
+`release-scale-matrix-unmeasured` requires result files, and the manifest
+validator rejects any cited result carrying the override before considering
+its scale list. A result without the override must still declare release
+eligibility and cover exactly 21/32/64/100.
+
+Instrument-validation evidence was collected from a dirty diagnostic worktree
+based on `f3d6c3403`; it is not release evidence and is recorded only to prove
+that the sweep argument controls the booted topology:
+
+| Requested validators | Actual processes | Unique ADNL identities | Unique ports | First proposal | First notarization | First FinalCert |
+|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 6 (DHT + 4 validators + verifier) | 5 | 15 (`32002`-`32016`) | 5277.379 ms | 5310.007 ms | 5315.472 ms |
+| 7 | 9 (DHT + 7 validators + verifier) | 8 | 24 (`33002`-`33025`) | 5354.990 ms | 5408.777 ms | 5418.028 ms |
+
+The two runs had zero ADNL-identity intersection and zero port intersection.
+Their milestone rows differ, and each row is strictly ordered. Fixing the
+driver's boot argument to the first requested scale makes the fast gate fail
+on the second point with `requested scale 7 booted 4 validators`.
 
 This tier proves only minimum-BFT protocol progress, message flow and carrier
 transport. It makes no launch-sizing, carrier-ceiling, network-capacity or
