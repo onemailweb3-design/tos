@@ -63,6 +63,23 @@ condition. It extends the chain and nothing more.
   970141. Block 970285 does not exist. These are contributor observations, not
   independent publication evidence.
 
+## Publication
+
+[Release](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-2),
+server-published at **2026-09-22T12:00:46Z**; the API response is retained in
+[contribution-2-publication-receipt.json](contribution-2-publication-receipt.json).
+The published attachment was downloaded again afterwards and compared byte for
+byte against the local archive; they are identical, and its SHA-256 is
+`b7ccbe20ec1d6e7a07a8f89b3ebc3ada636718cc52ec86304f9a572586071413`.
+
+A first release of this tag, made a minute earlier at 2026-09-22T11:59:50Z,
+placed the tag on the default branch instead of the contribution commit, which
+is not where a ceremony tag belongs. It was deleted with its tag and recreated
+against `b12c646143f5181b354e38c361d92ef30b9064c7`. The archive bytes and
+digest are unchanged; only the publication timestamp moved. The deleted tag
+was public for about a minute, and deleting it does not remove it from anyone
+who fetched in that window.
+
 ## What this contribution does not establish
 
 Stated here because none of it is visible in the artifacts afterwards.

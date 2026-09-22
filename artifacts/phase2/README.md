@@ -9,7 +9,11 @@ Because no contribution yet comes from a party outside the operator's control,
 is the correct answer today, and it stays correct until somebody outside
 contributes.
 
-[Contribution 2 and verification evidence](CONTRIBUTION-2.md).
+[Contribution 2 and verification evidence](CONTRIBUTION-2.md);
+[download the public bundle](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-2);
+[server publication receipt](contribution-2-publication-receipt.json).
+The bundle matched SHA-256 `b7ccbe20ec1d6e7a07a8f89b3ebc3ada636718cc52ec86304f9a572586071413`.
+
 [Contribution 1 and verification evidence](CONTRIBUTION-1.md).
 [Download the public contribution bundle](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-1);
 [server publication receipt](contribution-1-publication-receipt.json).
