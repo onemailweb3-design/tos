@@ -45,7 +45,7 @@ ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::Bl
   while (auto candidate = candidates->begin_processing(0)) {
     result.attempted.push_back(candidate->evidence.get());
     bool accepted = block::verify_pq_finality(context, *candidate->evidence, block::FinalityRole::Final).is_ok();
-    candidates->complete_front(accepted);
+    candidates->complete_front(candidate.token, accepted);
     if (accepted) {
       result.accepted = true;
       return result;
@@ -135,8 +135,9 @@ int main() {
   tos::validator::PendingFinalityStore<int, int, int> permanent_failure;
   permanent_failure.admit(0, 0, 7, 4096, SharedCapacity, false, true, NoExpiry);
   auto* permanent_candidates = permanent_failure.get_if_exists(0);
-  permanent_candidates->begin_processing(0);
-  if (permanent_candidates->resolve_front_failure(tos::ErrorCode::protoviolation, 0).action !=
+  auto permanent_attempt = permanent_candidates->begin_processing(0);
+  if (!permanent_attempt ||
+      permanent_candidates->resolve_front_failure(permanent_attempt.token, tos::ErrorCode::protoviolation, 0).action !=
           tos::validator::PendingFinalityFailureAction::DiscardPermanent ||
       !permanent_candidates->empty()) {
     std::cerr << "PENDING_FINALITY_PERMANENT_FAILURE: inconsistent evidence was retained for retry\n";
@@ -149,11 +150,12 @@ int main() {
   auto* expired_candidates = expired_failure.get_if_exists(0);
   double retry_time = 0;
   while (retry_time < tos::validator::pending_finality_retention_seconds) {
-    if (expired_candidates->begin_processing(retry_time) == nullptr) {
+    auto attempt = expired_candidates->begin_processing(retry_time);
+    if (!attempt) {
       std::cerr << "PENDING_FINALITY_RETRY_DEADLINE_FAILURE: candidate was unavailable at its scheduled retry\n";
       return 1;
     }
-    auto failure = expired_candidates->resolve_front_failure(tos::ErrorCode::notready, retry_time);
+    auto failure = expired_candidates->resolve_front_failure(attempt.token, tos::ErrorCode::notready, retry_time);
     if (failure.action != tos::validator::PendingFinalityFailureAction::Retry || failure.retry_at <= retry_time ||
         failure.retry_at > tos::validator::pending_finality_retention_seconds) {
       std::cerr << "PENDING_FINALITY_RETRY_DEADLINE_FAILURE: backoff escaped the retention deadline\n";
@@ -165,6 +167,55 @@ int main() {
       tos::validator::pending_finality_failure_action(tos::ErrorCode::notready, retry_time, retry_time) !=
           tos::validator::PendingFinalityFailureAction::DiscardExpired) {
     std::cerr << "PENDING_FINALITY_RETRY_DEADLINE_FAILURE: expired candidate retained its sender slot\n";
+    return 1;
+  }
+
+  auto check_stale_attempt = [](bool late_success) {
+    tos::validator::PendingFinalityStore<int, int, int> store;
+    store.admit(0, 10, 1, 4096, SharedCapacity, false, true, 1);
+    store.admit(0, 11, 2, 4096, SharedCapacity, false, true, NoExpiry);
+    auto *candidates = store.get_if_exists(0);
+    auto attempt_a = candidates->begin_processing(0);
+    if (!attempt_a || attempt_a->evidence != 1 || candidates->erase_expired(1) != 1) {
+      std::cerr << "PENDING_FINALITY_STALE_ATTEMPT_SETUP_FAILURE: could not expire in-flight candidate A\n";
+      return false;
+    }
+    auto attempt_b = candidates->begin_processing(1);
+    if (!attempt_b || attempt_b->evidence != 2) {
+      std::cerr << "PENDING_FINALITY_STALE_ATTEMPT_SETUP_FAILURE: candidate B did not begin after A expired\n";
+      return false;
+    }
+
+    bool stale_ignored = false;
+    if (late_success) {
+      const bool marked = candidates->mark_front_verified(attempt_a.token);
+      const bool completed = candidates->complete_front(attempt_a.token, true);
+      stale_ignored = !marked && !completed && candidates->size() == 1 && candidates->is_processing(attempt_b.token) &&
+                      !attempt_b->verified && attempt_b->evidence == 2;
+      if (!stale_ignored) {
+        std::cerr << "PENDING_FINALITY_STALE_ATTEMPT_SUCCESS_FAILURE: A's late success mutated candidate B\n";
+      }
+    } else {
+      candidates->resolve_front_failure(attempt_a.token, tos::ErrorCode::protoviolation, 1);
+      stale_ignored = candidates->size() == 1 && candidates->is_processing(attempt_b.token) &&
+                      attempt_b->evidence == 2;
+      if (!stale_ignored) {
+        std::cerr << "PENDING_FINALITY_STALE_ATTEMPT_PERMANENT_FAILURE: A's late permanent error removed candidate B\n";
+      }
+    }
+    if (!stale_ignored) {
+      return false;
+    }
+    if (!candidates->mark_front_verified(attempt_b.token) || !attempt_b->verified ||
+        !candidates->complete_front(attempt_b.token, true) || !candidates->empty()) {
+      std::cerr << "PENDING_FINALITY_CURRENT_ATTEMPT_FAILURE: candidate B's own result did not land\n";
+      return false;
+    }
+    return true;
+  };
+  const bool stale_permanent_ignored = check_stale_attempt(false);
+  const bool stale_success_ignored = check_stale_attempt(true);
+  if (!stale_permanent_ignored || !stale_success_ignored) {
     return 1;
   }
 
@@ -489,13 +540,13 @@ int main() {
     std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: non-validator peers exhausted validator reserved capacity\n";
     return 1;
   }
-  auto* reserved_candidate = authority_reservation_gate.get_if_exists(100)->begin_processing(0);
+  auto reserved_candidate = authority_reservation_gate.get_if_exists(100)->begin_processing(0);
   if (reserved_candidate == nullptr ||
       block::verify_pq_finality(context, *reserved_candidate->evidence, block::FinalityRole::Final).is_error()) {
     std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: admitted validator evidence was not accepted\n";
     return 1;
   }
-  authority_reservation_gate.get_if_exists(100)->complete_front(true);
+  authority_reservation_gate.get_if_exists(100)->complete_front(reserved_candidate.token, true);
 
   tos::validator::PendingFinalityStore<int, int, td::Ref<block::BlockSignatureSet>> retry_then_accept;
   if (!retry_then_accept.admit(0, 0, valid, 4096, ValidatorCapacity, false, true, NoExpiry).admitted()) {
@@ -503,8 +554,9 @@ int main() {
     return 1;
   }
   auto* retry_candidates = retry_then_accept.get_if_exists(0);
-  if (retry_candidates->begin_processing(0) == nullptr ||
-      retry_candidates->resolve_front_failure(tos::ErrorCode::notready, 0).action !=
+  auto first_retry_attempt = retry_candidates->begin_processing(0);
+  if (!first_retry_attempt ||
+      retry_candidates->resolve_front_failure(first_retry_attempt.token, tos::ErrorCode::notready, 0).action !=
           tos::validator::PendingFinalityFailureAction::Retry ||
       retry_candidates->empty()) {
     std::cerr << "PENDING_FINALITY_RETRY_FAILURE: valid evidence was discarded while required state was not ready\n";
@@ -514,13 +566,13 @@ int main() {
     std::cerr << "PENDING_FINALITY_RETRY_FAILURE: retained evidence retried before its backoff elapsed\n";
     return 1;
   }
-  auto* retried = retry_candidates->begin_processing(tos::validator::pending_finality_initial_retry_seconds);
+  auto retried = retry_candidates->begin_processing(tos::validator::pending_finality_initial_retry_seconds);
   if (retried == nullptr ||
       block::verify_pq_finality(context, *retried->evidence, block::FinalityRole::Final).is_error()) {
     std::cerr << "PENDING_FINALITY_RETRY_FAILURE: retained evidence was not valid on the later attempt\n";
     return 1;
   }
-  retry_candidates->complete_front(true);
+  retry_candidates->complete_front(retried.token, true);
   if (!retry_candidates->empty()) {
     std::cerr << "PENDING_FINALITY_RETRY_FAILURE: a later successful attempt did not accept the evidence\n";
     return 1;
@@ -547,7 +599,7 @@ int main() {
   auto* isolated_candidates = isolated_store.get_if_exists(0);
   while (auto pending = isolated_candidates->begin_processing(0)) {
     bool accepted = block::verify_pq_finality(context, *pending->evidence, block::FinalityRole::Final).is_ok();
-    isolated_candidates->complete_front(accepted);
+    isolated_candidates->complete_front(pending.token, accepted);
     if (accepted) {
       isolated_accepted = true;
       break;
@@ -590,6 +642,7 @@ int main() {
   std::cout << "PENDING_FINALITY_PERMANENT_OK: protocol violation was discarded without retry\n";
   std::cout << "PENDING_FINALITY_RETRY_DEADLINE_OK: transient evidence freed its slot after "
             << tos::validator::pending_finality_retention_seconds << " seconds\n";
+  std::cout << "PENDING_FINALITY_STALE_ATTEMPT_OK: late failure and success tokens could not mutate the replacement front\n";
   std::cout << "PENDING_FINALITY_INGRESS_OK: missing accounting fails closed and authenticated senders retain attribution\n";
   std::cout << "PENDING_FINALITY_TRANSPORT_DEDUP_OK: evidence-distinct finalities have distinct transport ids\n";
   std::cout << "PENDING_FINALITY_SENDER_ISOLATION_OK: four bad arrivals from one sender did not exclude another sender\n";

@@ -34,7 +34,7 @@ if grep -qF 'pending->complete_front(false);' "$root/validator/manager.cpp"; the
 fi
 
 require_marker validator/manager.cpp \
-  'pending->resolve_front_failure(error.code(), td::Time::now())' \
+  'pending->resolve_front_failure(attempt_token, error.code(), td::Time::now())' \
   'manager no longer applies the bounded transient/permanent failure decision'
 require_marker validator/manager.cpp \
   'schedule_pending_block_finality_retry(block_id, failure.retry_at);' \
@@ -49,17 +49,34 @@ require_marker validator/manager.cpp \
   'error.code() == ErrorCode::notready || error.code() == ErrorCode::timeout' \
   'proof-creation failures no longer distinguish transient local state from bad block bytes'
 require_marker validator/manager.cpp \
-  'failed_pending_block_finality(block_id, std::move(error), "create block proof")' \
+  'failed_pending_block_finality(block_id, attempt_token, std::move(error), "create block proof")' \
   'transient proof-creation failure no longer uses the bounded retry decision'
 require_marker validator/manager.cpp \
-  'failed_pending_block_finality(block_id, result.move_as_error(), "verify signatures")' \
+  'failed_pending_block_finality(block_id, attempt_token, result.move_as_error(), "verify signatures")' \
   'signature-check failure no longer uses the bounded retry decision'
 require_marker validator/manager.cpp \
-  'failed_pending_block_finality(block_id, result.move_as_error(), "apply verified evidence")' \
+  'failed_pending_block_finality(block_id, attempt_token, result.move_as_error(), "apply verified evidence")' \
   'apply failure no longer uses the bounded retry decision'
 require_marker validator/manager.cpp \
   'finality->verified || !broadcast.sig_set->is_pq()' \
   'verified evidence is reverified instead of resuming its interrupted apply'
+require_marker validator/manager.cpp \
+  'const auto attempt_token = finality.token;' \
+  'manager no longer captures the immutable processing-attempt token'
+token_checks=$(grep -cF 'pending->is_processing(attempt_token)' "$root/validator/manager.cpp")
+if [ "$token_checks" -ne 3 ]; then
+  echo "PENDING_FINALITY_RETRY_SOURCE_FAILURE: expected 3 callback attempt-token guards, found $token_checks (validator/manager.cpp)" >&2
+  failed=1
+fi
+require_marker validator/manager.cpp \
+  'pending->mark_front_verified(attempt_token)' \
+  'signature success can mark a front candidate without matching its attempt token'
+require_marker validator/manager.cpp \
+  'pending->complete_front(attempt_token, true)' \
+  'apply success can complete a front candidate without matching its attempt token'
+require_marker validator/manager.cpp \
+  'pending->cancel_processing(attempt_token)' \
+  'proof-construction failure can cancel a different processing attempt'
 require_regex validator/validate-broadcast.cpp \
   'ErrorCode::protoviolation,\s*"catchain seqno in block header and signature set does not match"' \
   'catchain-seqno mismatch is no longer a permanent protocol violation'

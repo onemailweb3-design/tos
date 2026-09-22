@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <limits>
 #include <map>
@@ -47,6 +48,7 @@ constexpr const char *pending_finality_rejection_name(PendingFinalityRejection r
 }
 enum class PendingFinalityCapacity { Shared, ValidatorReserved };
 enum class PendingFinalityFailureAction { Retry, DiscardPermanent, DiscardExpired };
+using PendingFinalityAttemptToken = std::uint64_t;
 
 struct PendingFinalityFailureResult {
   PendingFinalityFailureAction action{PendingFinalityFailureAction::DiscardPermanent};
@@ -55,7 +57,10 @@ struct PendingFinalityFailureResult {
 
 // The retention bound is wall-clock time because notready waits on network,
 // database and chain-progress events rather than on a bounded computation. It
-// matches the manager's existing 60-second block-data wait on this path. An
+// starts at admission, not at each attempt: this deadline protects retained
+// memory, and restarting it could let repeated attempts extend an attacker's
+// occupancy indefinitely. It matches the manager's existing 60-second
+// block-data wait on this path. An
 // exponential retry delay avoids a tight actor loop while still probing state
 // changes throughout that window. The expiry timer independently frees the
 // sender slot even if no triggering event ever arrives.
@@ -186,6 +191,24 @@ class PendingFinalityCandidates {
     double retry_delay{pending_finality_initial_retry_seconds};
   };
 
+  struct ProcessingAttempt {
+    const Entry *entry{nullptr};
+    PendingFinalityAttemptToken token{0};
+
+    explicit operator bool() const {
+      return entry != nullptr;
+    }
+    const Entry *operator->() const {
+      return entry;
+    }
+    friend bool operator==(ProcessingAttempt attempt, std::nullptr_t) {
+      return !attempt;
+    }
+    friend bool operator!=(ProcessingAttempt attempt, std::nullptr_t) {
+      return static_cast<bool>(attempt);
+    }
+  };
+
   PendingFinalityAdmission admission(bool verified, bool is_final) const {
     bool cached_is_verified = false;
     bool cached_is_final = false;
@@ -255,20 +278,24 @@ class PendingFinalityCandidates {
     return result;
   }
 
-  const Entry *begin_processing(double now) {
+  ProcessingAttempt begin_processing(double now) {
     erase_expired(now);
     if (processing_ || entries_.empty()) {
-      return nullptr;
+      return {};
     }
     if (entries_.front().retry_not_before > now) {
-      return nullptr;
+      return {};
+    }
+    if (next_attempt_token_ == std::numeric_limits<PendingFinalityAttemptToken>::max()) {
+      return {};
     }
     processing_ = true;
-    return &entries_.front();
+    processing_token_ = next_attempt_token_++;
+    return {&entries_.front(), processing_token_};
   }
 
-  PendingFinalityFailureResult resolve_front_failure(int error_code, double now) {
-    if (!processing_ || entries_.empty()) {
+  PendingFinalityFailureResult resolve_front_failure(PendingFinalityAttemptToken token, int error_code, double now) {
+    if (!is_processing(token)) {
       return {};
     }
     auto &entry = entries_.front();
@@ -277,10 +304,12 @@ class PendingFinalityCandidates {
       entry.retry_not_before = std::min(now + entry.retry_delay, entry.expires_at);
       entry.retry_delay = std::min(entry.retry_delay * 2, pending_finality_max_retry_seconds);
       processing_ = false;
+      processing_token_ = 0;
       return {action, entry.retry_not_before};
     } else {
       entries_.pop_front();
       processing_ = false;
+      processing_token_ = 0;
       return {action, 0};
     }
   }
@@ -293,13 +322,14 @@ class PendingFinalityCandidates {
                    entries_.end());
     if (processing_front_expired) {
       processing_ = false;
+      processing_token_ = 0;
     }
     return old_size - entries_.size();
   }
 
-  void complete_front(bool accepted) {
-    if (!processing_ || entries_.empty()) {
-      return;
+  bool complete_front(PendingFinalityAttemptToken token, bool accepted) {
+    if (!is_processing(token)) {
+      return false;
     }
     bool accepted_final = accepted && entries_.front().is_final;
     entries_.pop_front();
@@ -307,16 +337,25 @@ class PendingFinalityCandidates {
       entries_.clear();
     }
     processing_ = false;
+    processing_token_ = 0;
+    return true;
   }
 
-  void mark_front_verified() {
-    if (processing_ && !entries_.empty()) {
-      entries_.front().verified = true;
+  bool mark_front_verified(PendingFinalityAttemptToken token) {
+    if (!is_processing(token)) {
+      return false;
     }
+    entries_.front().verified = true;
+    return true;
   }
 
-  void cancel_processing() {
+  bool cancel_processing(PendingFinalityAttemptToken token) {
+    if (!is_processing(token)) {
+      return false;
+    }
     processing_ = false;
+    processing_token_ = 0;
+    return true;
   }
 
   bool empty() const {
@@ -331,9 +370,15 @@ class PendingFinalityCandidates {
     return processing_;
   }
 
+  bool is_processing(PendingFinalityAttemptToken token) const {
+    return processing_ && !entries_.empty() && token != 0 && processing_token_ == token;
+  }
+
  private:
   std::deque<Entry> entries_;
   bool processing_ = false;
+  PendingFinalityAttemptToken processing_token_{0};
+  PendingFinalityAttemptToken next_attempt_token_{1};
 };
 
 template <class BlockKey, class Sender, class Evidence>

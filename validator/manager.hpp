@@ -619,12 +619,15 @@ class ValidatorManagerImpl : public ValidatorManager {
   void add_shard_block_description(td::Ref<ShardTopBlockDescription> desc);
   void add_cached_block_data(BlockIdExt block_id, td::BufferSlice data);
   void try_process_pending_block_finality(BlockIdExt block_id);
-  void failed_pending_block_finality(BlockIdExt block_id, td::Status error, td::Slice operation);
+  void failed_pending_block_finality(BlockIdExt block_id, PendingFinalityAttemptToken attempt_token, td::Status error,
+                                     td::Slice operation);
   void schedule_pending_block_finality_retry(BlockIdExt block_id, double retry_at);
   void expire_pending_block_finality(BlockIdExt block_id);
   void checked_pending_block_finality(BlockIdExt block_id, BlockBroadcast broadcast, BroadcastSource source,
-                                      bool was_final, td::Result<td::Unit> result);
-  void processed_pending_block_finality(BlockIdExt block_id, bool was_final, td::Result<td::Unit> result);
+                                      bool was_final, PendingFinalityAttemptToken attempt_token,
+                                      td::Result<td::Unit> result);
+  void processed_pending_block_finality(BlockIdExt block_id, bool was_final,
+                                        PendingFinalityAttemptToken attempt_token, td::Result<td::Unit> result);
   void preload_msg_queue_to_masterchain(td::Ref<ShardTopBlockDescription> desc, td::Promise<td::Unit> promise);
   void loaded_msg_queue_to_masterchain(td::Ref<ShardTopBlockDescription> desc, td::Ref<OutMsgQueueProof> res,
                                        td::Promise<td::Unit> promise);

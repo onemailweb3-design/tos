@@ -993,9 +993,10 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
   }
 
   auto finality = pending->begin_processing(td::Time::now());
-  if (finality == nullptr) {
+  if (!finality) {
     return;
   }
+  const auto attempt_token = finality.token;
   td::Result<td::BufferSlice> proof =
       block_id.is_masterchain()
           ? WaitBlockData::generate_proof(block_id, block.ok()->root_cell(), finality->evidence.sig_set,
@@ -1004,12 +1005,12 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
   if (proof.is_error()) {
     auto error = proof.move_as_error();
     if (error.code() == ErrorCode::notready || error.code() == ErrorCode::timeout) {
-      failed_pending_block_finality(block_id, std::move(error), "create block proof");
+      failed_pending_block_finality(block_id, attempt_token, std::move(error), "create block proof");
     } else {
       // A proof-construction failure describes the cached block bytes, not the
       // independently received finality evidence. Retain the latter for a
       // correct block arrival, but remove the bad block candidate.
-      pending->cancel_processing();
+      pending->cancel_processing(attempt_token);
       VLOG(VALIDATOR_WARNING) << "failed to create pending block proof for " << block_id.to_str() << ": " << error;
       if (block_id.is_masterchain()) {
         cached_masterchain_block_candidates_.erase(block_id);
@@ -1029,17 +1030,18 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
     auto broadcast_for_validation = broadcast.clone();
     validate_block_broadcast_signatures(
         std::move(broadcast_for_validation),
-        [SelfId = actor_id(this), block_id, broadcast = std::move(broadcast), finality_source,
-         was_final](td::Result<td::Unit> result) mutable {
+        [SelfId = actor_id(this), block_id, broadcast = std::move(broadcast), finality_source, was_final,
+         attempt_token](td::Result<td::Unit> result) mutable {
           td::actor::send_closure(SelfId, &ValidatorManagerImpl::checked_pending_block_finality, block_id,
-                                  std::move(broadcast), finality_source, was_final, std::move(result));
+                                  std::move(broadcast), finality_source, was_final, attempt_token, std::move(result));
         });
     return;
   }
   new_block_broadcast(std::move(broadcast), signatures_checked, finality_source,
-                      [SelfId = actor_id(this), block_id, was_final](td::Result<td::Unit> result) mutable {
+                      [SelfId = actor_id(this), block_id, was_final,
+                       attempt_token](td::Result<td::Unit> result) mutable {
                         td::actor::send_closure(SelfId, &ValidatorManagerImpl::processed_pending_block_finality,
-                                                block_id, was_final, std::move(result));
+                                                block_id, was_final, attempt_token, std::move(result));
                       });
 }
 
@@ -1064,12 +1066,14 @@ void ValidatorManagerImpl::expire_pending_block_finality(BlockIdExt block_id) {
   }
 }
 
-void ValidatorManagerImpl::failed_pending_block_finality(BlockIdExt block_id, td::Status error, td::Slice operation) {
+void ValidatorManagerImpl::failed_pending_block_finality(BlockIdExt block_id,
+                                                         PendingFinalityAttemptToken attempt_token,
+                                                         td::Status error, td::Slice operation) {
   auto pending = pending_block_finality_.get_if_exists(block_id);
-  if (pending == nullptr || !pending->processing()) {
+  if (pending == nullptr || !pending->is_processing(attempt_token)) {
     return;
   }
-  auto failure = pending->resolve_front_failure(error.code(), td::Time::now());
+  auto failure = pending->resolve_front_failure(attempt_token, error.code(), td::Time::now());
   if (failure.action == PendingFinalityFailureAction::Retry) {
     VLOG(VALIDATOR_DEBUG) << "transient failure while attempting to " << operation << " for pending block finality "
                           << block_id.to_str() << ": " << error;
@@ -1089,35 +1093,42 @@ void ValidatorManagerImpl::failed_pending_block_finality(BlockIdExt block_id, td
 
 void ValidatorManagerImpl::checked_pending_block_finality(BlockIdExt block_id, BlockBroadcast broadcast,
                                                            BroadcastSource source, bool was_final,
+                                                           PendingFinalityAttemptToken attempt_token,
                                                            td::Result<td::Unit> result) {
   auto pending = pending_block_finality_.get_if_exists(block_id);
-  if (pending == nullptr || !pending->processing()) {
+  if (pending == nullptr || !pending->is_processing(attempt_token)) {
     return;
   }
   if (result.is_error()) {
-    failed_pending_block_finality(block_id, result.move_as_error(), "verify signatures");
+    failed_pending_block_finality(block_id, attempt_token, result.move_as_error(), "verify signatures");
     return;
   }
-  pending->mark_front_verified();
+  if (!pending->mark_front_verified(attempt_token)) {
+    return;
+  }
   new_block_broadcast(std::move(broadcast), true, source,
-                      [SelfId = actor_id(this), block_id, was_final](td::Result<td::Unit> apply_result) mutable {
+                      [SelfId = actor_id(this), block_id, was_final,
+                       attempt_token](td::Result<td::Unit> apply_result) mutable {
                         td::actor::send_closure(SelfId, &ValidatorManagerImpl::processed_pending_block_finality,
-                                                block_id, was_final, std::move(apply_result));
+                                                block_id, was_final, attempt_token, std::move(apply_result));
                       });
 }
 
 void ValidatorManagerImpl::processed_pending_block_finality(BlockIdExt block_id, bool was_final,
+                                                             PendingFinalityAttemptToken attempt_token,
                                                              td::Result<td::Unit> result) {
   auto pending = pending_block_finality_.get_if_exists(block_id);
-  if (pending == nullptr || !pending->processing()) {
+  if (pending == nullptr || !pending->is_processing(attempt_token)) {
     return;
   }
   bool accepted = result.is_ok();
   if (!accepted) {
-    failed_pending_block_finality(block_id, result.move_as_error(), "apply verified evidence");
+    failed_pending_block_finality(block_id, attempt_token, result.move_as_error(), "apply verified evidence");
     return;
   }
-  pending->complete_front(true);
+  if (!pending->complete_front(attempt_token, true)) {
+    return;
+  }
   if (was_final) {
     if (block_id.is_masterchain()) {
       cached_masterchain_block_candidates_.erase(block_id);
