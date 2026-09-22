@@ -34,6 +34,16 @@ Run from the repository:
 It needs a build with the node binaries (`ninja validator-engine dht-server
 lite-client`) and the Rust fixture generator; pass --build-dir for a build tree
 elsewhere, and --fixture to reuse one that has already been generated.
+
+From a git worktree it also needs `tosapi`, which is generated rather than
+committed and so exists only where it has been generated:
+
+    uv run python test/tostester/generate_tl.py
+
+Without it the run dies at import with `ModuleNotFoundError: No module named
+'tosapi'`, which reads like a broken harness and is a missing generated
+module. The schemas it is built from are committed, so that one command is all
+it takes.
 """
 
 from __future__ import annotations
@@ -106,7 +116,7 @@ def log(message: str) -> None:
 # The fixture: the bytes a node needs, built by the crosscheck crate.
 
 
-def build_fixture(out: Path, build: Path, refuse: bool) -> Path:
+def build_fixture(out: Path, build: Path, refuse: bool, transfer: bool) -> Path:
     log("building the deployment fixture from the crosscheck crate ...")
     crate = REPO / "tools/shielded-pool-circuit/crosscheck"
     cargo = Path.home() / ".cargo/bin/cargo"
@@ -122,6 +132,8 @@ def build_fixture(out: Path, build: Path, refuse: bool) -> Path:
                str(REPO), str(out)]
     if refuse:
         command.append("--refuse")
+    if transfer:
+        command.append("--transfer")
     result = subprocess.run(
         command,
         cwd=crate,
@@ -342,8 +354,14 @@ def check_recovery(lite, rpc_address, account, fixture, fixture_dir, step, build
 
     # And the pool owes the recovered money again: section 15.4's whole point
     # is that a refused payout does not leave the value unaccounted for.
+    #
+    # What it owes is what the note is worth, which is what the bounce
+    # delivered less the pool's charge for putting it back -- not the
+    # delivered value. That figure comes from the predictor rather than being
+    # recomputed here, because this was the third place the subtraction had to
+    # happen and the first two had already been missed.
     before = int(step["expect"]["liability_before_recovery"])
-    compare("native_liability", str(before + recovered),
+    compare("native_liability", str(before + int(predicted["minted_nanotos"])),
             lite.get_method(account, "native_liability"), failures)
     return bounce
 
@@ -460,7 +478,7 @@ async def run(args) -> int:
     fixture_dir = (
         Path(args.fixture)
         if args.fixture
-        else build_fixture(workdir / "fixture", build, args.refuse)
+        else build_fixture(workdir / "fixture", build, args.refuse, args.transfer)
     )
     fixture = load_fixture(fixture_dir)
     # Section 9's intent window is an hour, so a fixture is perishable: its
@@ -704,10 +722,28 @@ async def run(args) -> int:
                     f"which is more than the {deployed} it was deployed with: the money did "
                     f"not come back"
                 )
-            if not refuses and balance < paid:
+            if not refuses and paid > 0 and balance < paid:
                 failures.append(
                     f"the destination holds {balance} nanotos, which is less than the "
                     f"{paid} the withdrawal was supposed to pay it"
+                )
+            # A transfer pays nobody, and "nobody was paid" is the claim that
+            # has to be checked rather than assumed. Every root moving
+            # correctly is exactly what a transfer and a withdrawal have in
+            # common, so the roots cannot tell them apart; the destination's
+            # balance can.
+            #
+            # Not `== deployed`. That was the first form of this check and it
+            # failed on a run where nothing was wrong: an account pays for its
+            # own deployment and its own storage, so it had 2,114 nanotos less
+            # than it was given. Value arriving can only push the balance up,
+            # so "no more than it started with" is the claim that distinguishes
+            # a transfer, and it is the one that is true.
+            if paid == 0 and balance > deployed:
+                failures.append(
+                    f"nothing was supposed to leave the pool, and the destination holds "
+                    f"{balance} nanotos, more than the {deployed} it was deployed with: "
+                    f"something paid it"
                 )
         finally:
             for task in tasks:
@@ -750,6 +786,13 @@ def main() -> int:
         action="store_true",
         help="build a fixture whose payout destination refuses the money, so the "
              "withdrawal bounces and the pool has to mint a recovery note",
+    )
+    parser.add_argument(
+        "--transfer",
+        action="store_true",
+        help="spend two notes into three, paying nobody. The only money path "
+             "that had never run on a chain: the same handler takes a cheaper "
+             "branch, and an argument that it must therefore work is not a run",
     )
     args = parser.parse_args()
     try:
