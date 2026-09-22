@@ -1286,6 +1286,24 @@ add_test(NAME regression-fixture-concurrency
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-regression-concurrency.sh
           ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
+# Keep cheap source-only policy checks visible on every branch and pull
+# request, independently of the native build.  The workflow selects this
+# label, so a newly labelled guard joins it without a second YAML inventory.
+# regression-fixture-concurrency is intentionally absent: despite its name it
+# executes test-fift and test-cells, and therefore requires build artifacts.
+set_tests_properties(
+  test-quorum-static-grep
+  finality-evidence-admission-source
+  pending-finality-retry-policy-source
+  benchmark-exclusion-source
+  frozen-boc-toolchain-resolution
+  quic-ctest-isolation-source
+  validator-session-assembly-source
+  jsonrpc-route-gating
+  n6-manifest-completeness
+  n6-acceptance-criteria
+  PROPERTIES LABELS "source-guard")
+
 # Network-safety regressions. test-quic-sender is a multi-suite binary (it also
 # holds large-scale/fairness suites that must not gate every change), so the
 # individual safety cases are registered here as filtered CTest entries rather

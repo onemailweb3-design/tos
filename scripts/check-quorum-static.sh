@@ -4,7 +4,6 @@ set -euo pipefail
 root="${1:-.}"
 
 paths=(
-  "$root/validator-session"
   "$root/validator/consensus"
   "$root/validator/impl"
   "$root/crypto/block"
