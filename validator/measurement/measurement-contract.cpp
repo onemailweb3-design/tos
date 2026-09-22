@@ -1,6 +1,7 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -12,15 +13,27 @@ namespace {
 
 std::mutex sink_mutex;
 std::shared_ptr<Sink> sink;
+std::atomic<bool> sink_enabled{false};
 
 constexpr std::array<std::string_view, 5> forbidden_label_keys = {"validator_id", "block_hash", "candidate_hash",
                                                                   "session_id", "peer_id"};
+
+std::shared_ptr<Sink> enabled_sink() {
+  // Production leaves measurement disabled.  Keep that path to one atomic
+  // read and a branch: no mutex, shared_ptr refcount traffic, or clock reads.
+  if (!sink_enabled.load(std::memory_order_acquire)) {
+    return {};
+  }
+  std::lock_guard guard(sink_mutex);
+  return sink;
+}
 
 }  // namespace
 
 void install_sink(std::shared_ptr<Sink> value) {
   std::lock_guard guard(sink_mutex);
   sink = std::move(value);
+  sink_enabled.store(static_cast<bool>(sink), std::memory_order_release);
 }
 
 std::shared_ptr<Sink> installed_sink() {
@@ -45,18 +58,21 @@ td::Result<std::int64_t> monotonic_duration_ns(const ClockSample& start, const C
 }
 
 void record_trace(TraceId trace_id, TraceStage stage) {
-  record_trace_at(std::move(trace_id), stage, sample_clocks());
+  auto current = enabled_sink();
+  if (current) {
+    current->record_trace({.trace_id = std::move(trace_id), .stage = stage, .clock = sample_clocks()});
+  }
 }
 
 void record_trace_at(TraceId trace_id, TraceStage stage, ClockSample clock) {
-  auto current = installed_sink();
+  auto current = enabled_sink();
   if (current) {
     current->record_trace({.trace_id = std::move(trace_id), .stage = stage, .clock = clock});
   }
 }
 
 void record_serialized_size(SerializedArtifact artifact, std::size_t exact_bytes) {
-  auto current = installed_sink();
+  auto current = enabled_sink();
   if (current) {
     current->record_size({.artifact = artifact, .exact_bytes = exact_bytes});
   }
