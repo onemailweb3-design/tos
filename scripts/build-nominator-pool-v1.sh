@@ -12,6 +12,9 @@ set -euo pipefail
 # operator tool's embedded copy.
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# These defaults are only a convenience for a developer invoking this script
+# directly. This tree has no CMake frozen-artifact rule for the nominator pool;
+# callers that require a particular toolchain must pass both paths explicitly.
 FUNC_BIN=${FUNC_BIN:-"$REPO_ROOT/build/crypto/func"}
 FIFT_BIN=${FIFT_BIN:-"$REPO_ROOT/build/crypto/fift"}
 OUTPUT=${1:-"$REPO_ROOT/crypto/smartcont/artifacts/nominator-pool-v1.boc"}
