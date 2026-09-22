@@ -34,6 +34,17 @@ reader cannot do reliably:
    never the operator's personal keyring. This tool does not verify publication
    times or the append-only history of the register.
 
+A signature is only as good as the identity behind it, so the register entry
+is also reported: whether it carries **public identity evidence** -- somewhere
+outside this repository where a reader can see that the key is that person's.
+An entry without it passes every other check exactly as a well-evidenced one
+does, because a name, a boolean and a parseable key are all the other checks
+look at. That is reported rather than refused: it is a weakness in an entry,
+not a broken ceremony, and the ceremony this tool guards currently has one.
+Refusing would be the wrong instrument; staying silent was the wrong one too,
+and staying silent is what it did until a contributor wrote the absence into
+their own attestation because no tool would.
+
 And one property of the ceremony as a whole:
 
 4. **at least one verified participant is independent of the operator.**
@@ -377,6 +388,26 @@ def verify_gpg(document: Path, signature: Path, roster: dict, keyring: Path) -> 
     return fingerprints[fingerprint]
 
 
+def has_identity_evidence(who: dict) -> bool:
+    """Whether a register entry points anywhere a reader could check the key.
+
+    `published_at` is a list of places outside this repository where the key
+    can be seen to be that person's -- an account page, a keyserver, a
+    personal domain. It is not fetched: whether a URL resolves today says
+    little, and a verifier that depended on fetching would fail differently on
+    every machine. What is checked is that the entry names somewhere at all.
+
+    Deliberately not a refusal. An entry without evidence is a weak entry, not
+    a broken ceremony, and refusing would fail a published ceremony over a
+    field its own announcement introduced late. But it was silent before, and
+    silence is the failure this repository keeps paying for: it took a
+    contributor writing "no tool in this repository reports that absence" into
+    their own attestation for the gap to be visible at all.
+    """
+    where = who.get("published_at")
+    return isinstance(where, list) and any(str(item).strip() for item in where)
+
+
 def find_signature(directory: Path, index: int) -> Path | None:
     for suffix in (".sig", ".asc"):
         candidate = directory / f"attestation-{index}.txt{suffix}"
@@ -484,14 +515,26 @@ def main() -> int:
                 if who["independent_of_operator"]
                 else "NOT independent of the operator"
             )
-            print(f"  {index}  signed by {name} -- {independence}")
+            evidence = "" if has_identity_evidence(who) else ", NO PUBLIC IDENTITY EVIDENCE"
+            print(f"  {index}  signed by {name} -- {independence}{evidence}")
             standing.append((index, name))
 
     signed = [name for _, name in standing if name]
     independent = [n for n in signed if by_name[n]["independent_of_operator"]]
+    unevidenced = sorted({n for n in signed if not has_identity_evidence(by_name[n])})
 
     print()
     print(f"{len(contributions)} contribution(s), {len(signed)} verified against the roster")
+
+    if unevidenced:
+        print()
+        print(
+            f"NO PUBLIC IDENTITY EVIDENCE for: {', '.join(unevidenced)}. The register "
+            "carries no published_at for these keys, so a reader cannot trace the "
+            "signature to anyone who can be asked afterwards, and being able to ask is "
+            "the whole of what an attestation is worth. Their signatures still verify: "
+            "what is missing is the person, not the cryptography."
+        )
 
     if not independent:
         complaint = (

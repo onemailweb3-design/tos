@@ -597,8 +597,66 @@ def case_in_progress_still_catches_a_stranger(scratch: Path) -> tuple:
     )
 
 
+def case_missing_identity_evidence_is_reported(scratch: Path) -> tuple:
+    """A register entry with nowhere to check the key is named in the output.
+
+    The default fixture roster carries no `published_at` at all, so this case
+    would pass for the wrong reason if it only asserted the warning appears.
+    The companion case below adds evidence and requires the warning to go
+    away, which is what makes this pair mean anything.
+    """
+    setup = build(scratch)
+    result = run(setup, "--in-progress")
+    if result.returncode != 0:
+        return "a key with no identity evidence is reported", None, result, "accepted"
+    # Both the per-contribution marker and the summary, asserted separately.
+    # Matching the bare phrase is not enough: it appears on each contribution
+    # line too, so deleting the entire summary block left this green until a
+    # falsification trial removed the block and nothing went red.
+    if ", NO PUBLIC IDENTITY EVIDENCE" not in result.stdout:
+        return "a key with no identity evidence is reported", None, result, "marked on its line"
+    summary = result.stdout.split("NO PUBLIC IDENTITY EVIDENCE for:")
+    if len(summary) < 2:
+        return "a key with no identity evidence is reported", None, result, "summarised"
+    if "the outside participant" not in summary[1]:
+        return "a key with no identity evidence is reported", None, result, "named in the summary"
+    return "a key with no identity evidence is reported", None, result, None
+
+
+def case_identity_evidence_silences_it(scratch: Path) -> tuple:
+    setup = build(scratch)
+    roster_data = json.loads(setup["roster"].read_text())
+    for who in roster_data["participants"]:
+        who["published_at"] = ["https://example.invalid/" + who["key"]["principal"]]
+    setup["roster"].write_text(json.dumps(roster_data, indent=2))
+    result = run(setup, "--in-progress")
+    if result.returncode != 0:
+        return "identity evidence silences the warning", None, result, "accepted"
+    if "NO PUBLIC IDENTITY EVIDENCE" in result.stdout:
+        return "identity evidence silences the warning", None, result, "silent"
+    return "identity evidence silences the warning", None, result, None
+
+
+def case_empty_published_at_is_not_evidence(scratch: Path) -> tuple:
+    """An empty list, or a list of blanks, is not somewhere to look."""
+    setup = build(scratch)
+    roster_data = json.loads(setup["roster"].read_text())
+    roster_data["participants"][0]["published_at"] = []
+    roster_data["participants"][1]["published_at"] = ["   "]
+    setup["roster"].write_text(json.dumps(roster_data, indent=2))
+    result = run(setup, "--in-progress")
+    if result.returncode != 0:
+        return "an empty published_at is not evidence", None, result, "accepted"
+    if "NO PUBLIC IDENTITY EVIDENCE" not in result.stdout:
+        return "an empty published_at is not evidence", None, result, "reported"
+    return "an empty published_at is not evidence", None, result, None
+
+
 CASES = [
     case_script_template_parses,
+    case_missing_identity_evidence_is_reported,
+    case_identity_evidence_silences_it,
+    case_empty_published_at_is_not_evidence,
     case_in_progress_reports_independence,
     case_in_progress_still_catches_a_forgery,
     case_in_progress_still_catches_a_stranger,
