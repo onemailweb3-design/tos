@@ -101,8 +101,21 @@ CASES = [
 
     # Section 16.3, in the handler.
     Case('handler-mints-what-left', 'the note is for what went out, not what came back', POOL,
-         '  int recovered_amount = msg_value;', '  int recovered_amount = 9000000000;',
-         RECOVERED_TEST),
+         '  int recovered_amount = msg_value - charge;',
+         '  int recovered_amount = 9000000000;', RECOVERED_TEST),
+
+    # Section 15.4's charge. The recovery pays for itself out of what it is
+    # returning; before it did, an immutable fee pre-paid it on every
+    # withdrawal including the ones that never bounce.
+    Case('charge-not-applied', 'the charge is quoted and not taken', POOL,
+         '  int recovered_amount = msg_value - charge;',
+         '  int recovered_amount = msg_value;', RECOVERED_TEST),
+    Case('charge-is-nothing', 'the recovery costs the bounce nothing', RECOVERY,
+         '  return get_compute_fee(0, bounce_gas_ceiling);', '  return 0;', RECOVERED_TEST),
+    # The threshold's own case is not here: `bounce_dust_boundary` is a
+    # crosscheck test and this battery runs the contract sandboxes, so naming
+    # it would report WRONG-TEST forever. It is covered by
+    # `mutations-recovery-charge.py`, which runs that suite.
     Case('handler-no-liability', 'recovered money is not owed again', POOL,
          '  native_liability = native_liability + recovered_amount;',
          '  native_liability = native_liability;', RECOVERED_TEST),

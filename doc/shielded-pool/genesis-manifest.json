@@ -4,9 +4,9 @@
     "source_commit": "unknown",
     "source_blob": "unknown",
     "path": "doc/shielded-pool-v1-profile.md",
-    "bytes": 67016,
-    "file_sha256": "1117e59323a383becc42c4f528e3828a820eb4abb5adc6df32ab2d631ebf8f9f",
-    "profile_hash": "b60feda6f9dc940967bc0f672bca361d1b89e73d7d1ddf91aad7f66a5ad9225f"
+    "bytes": 68550,
+    "file_sha256": "cb3c7a47c40c07539f95efe90e96056a16527d2e1ff6a692092e0d878181f54f",
+    "profile_hash": "f99697b4d5d0b93223725495c15b4ce37b3b215a60a7fa11d15d76a1a7e0c5ab"
   },
   "poseidon2": {
     "manifest_bytes": 19007,
@@ -30,6 +30,6 @@
     "native_liability": "0",
     "frontier": "twelve zero levels, seven slots each",
     "anchor_rings": "two empty dictionaries",
-    "hash": "fd9303ebe4d0d72cbcefb7e59058c3f8ad911eac2d1d340c0f38646a397e5482"
+    "hash": "ced6d862d17e91b8bf0e1221d1eea9737d0e2733123554d1710e5db889c197fa"
   }
 }

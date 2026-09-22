@@ -94,10 +94,35 @@ cell recovery_original_body(slice body) impure inline_ref {
     template_hash == recovery_template_hash(owner_commitment, output_data_hash(recovery_data)));
 }
 
-;; Section 15.4. The note is built for what actually came back, never for what
-;; went out: whatever the recipient's compute, the forwarding or the bounce
-;; transport consumed is the withdrawing user's loss, and minting the original
-;; amount would pay for it out of everyone else's reserve.
+;; Section 15.4. What the pool charges the bounce for putting it back.
+;;
+;; The recovery is work, and somebody pays for it. Until now that was the
+;; immutable `withdrawal_fee`, collected from *every* withdrawal including the
+;; overwhelming majority that never bounce -- and covering a compute price the
+;; chain can govern upwards, against a fee that can never be changed.
+;;
+;; It is the ceiling rather than what this transaction actually spends, and
+;; that is not laziness. The note commitment has to be built before the
+;; transaction's own cost is known, and building it costs gas, so an exact
+;; charge is circular. The ceiling is declared, derived by a stated rule, and
+;; computable by a wallet before it withdraws.
+;;
+;; Read at live prices, so a governed price rise raises the charge instead of
+;; quietly draining the reserve.
+;;
+;; The ceiling arrives as an argument because this file is compiled before the
+;; contract that declares it, next to the other gas ceilings where it belongs.
+int recovery_charge_at(int bounce_gas_ceiling) impure inline {
+  return get_compute_fee(0, bounce_gas_ceiling);
+}
+
+;; Section 15.4. The note is built for what actually came back **less what
+;; putting it back costs**, never for what went out.
+;;
+;; Everything the recipient's compute, the forwarding or the bounce transport
+;; consumed was already the withdrawing user's loss; the pool's own recovery
+;; compute now joins it. Minting more than that would pay for the recovery out
+;; of everyone else's reserve, which is the thing this pool must never do.
 int recovery_note_body(int owner_commitment, int recovered_amount,
                        cell recovery_data) impure inline {
   return note_body_commitment(owner_commitment, recovered_amount,

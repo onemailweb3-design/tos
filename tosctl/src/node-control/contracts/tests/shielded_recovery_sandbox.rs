@@ -765,12 +765,24 @@ fn a_bounced_payout_becomes_a_note_for_what_came_back() {
     let after = pool.snapshot();
     assert_ne!(after[0], before[0], "the recovery minted no note");
     assert_eq!(after[1], "1", "the recovery did not take exactly one leaf");
+
+    // Section 15.4: what came back **less what putting it back costs**. The
+    // charge is asked of the contract rather than recomputed here, because a
+    // second copy of a fee formula is a second thing to keep in step with the
+    // chain's prices.
+    let charge = pool.get("recovery_charge").parse::<u64>().expect("the quoted charge");
+    assert!(charge > 0, "the contract quotes a recovery charge of nothing");
+    assert!(returned > charge, "this bounce is below the charge and would mint nothing");
     assert_eq!(
         after[2].parse::<u64>().expect("liability"),
-        before[2].parse::<u64>().expect("liability") + returned,
-        "the pool did not take back exactly what returned"
+        before[2].parse::<u64>().expect("liability") + returned - charge,
+        "the pool took back {returned} rather than that less the {charge} the recovery costs"
     );
-    eprintln!("recovered {returned} nanotos of a 9 TOS payout");
+    eprintln!(
+        "a 9 TOS payout bounced back {returned} and minted {}: the recovery charged itself \
+         {charge}",
+        returned - charge
+    );
 }
 
 /// Everything the authentication refuses, refused at the pool rather than in

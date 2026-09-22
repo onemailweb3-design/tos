@@ -106,8 +106,8 @@ cell p_message(slice recipient, int amount, cell body) method_id {
 int p_forward_fee(cell body) method_id {
   return payout_forward_fee(body);
 }
-int p_solvent(int fee, int config_fee, cell body, int ceiling) method_id {
-  payout_require_solvent(fee, config_fee, body, ceiling);
+int p_solvent(int fee, int config_fee, cell body) method_id {
+  payout_require_solvent(fee, config_fee, body);
   return 1;
 }
 int p_new_liability(int liability, int amount, int fee) method_id {
@@ -335,16 +335,24 @@ fn a_payout_to_nobody_is_refused() {
 
 /// Section 14.2. The fee is fixed at deployment and the chain's prices are
 /// not, so the check is on the deployment: if the configured fee has stopped
-/// covering the message plus a whole bounded recovery, withdrawals fail closed.
+/// covering the message, withdrawals fail closed.
+///
+/// **The floor is the forward fee and nothing else**, and this test exists to
+/// say so. It used to include a whole bounded recovery's compute, and that
+/// term was the dangerous one: an immutable fee had to stay ahead of a
+/// *compute* price the chain can govern upwards, so a large enough rise would
+/// brick every withdrawal permanently. Section 15.4 charges the recovery to
+/// the money being recovered instead, at the prices live when the bounce
+/// arrives, and what is left here prices bytes rather than work.
 #[test]
-fn the_fee_must_cover_the_message_and_a_whole_bounded_recovery() {
+fn the_fee_must_cover_the_message_and_not_the_recovery() {
     let probe = Probe::deploy();
     let data = byte_chain(&payload(7));
     let digest = small(0x31337);
     let record = record_of(&probe, &digest, &data);
     let body = probe.cell("p_body", vec![int(&digest), StackItem::cell(record)]);
-    // The frozen bounce ceiling, so the floor this measures is the one a
-    // deployment actually has to clear.
+    // The frozen bounce ceiling. It is no longer part of the floor; it is
+    // measured below so the test can say how much was taken out of it.
     let ceiling = 220_000u32;
 
     let forward = probe.int("p_forward_fee", vec![StackItem::cell(body.clone())]);
@@ -358,7 +366,6 @@ fn the_fee_must_cover_the_message_and_a_whole_bounded_recovery() {
                 StackItem::int(IntegerData::from_str_radix(&fee.to_string(), 10).unwrap()),
                 StackItem::int(IntegerData::from_str_radix(&config_fee.to_string(), 10).unwrap()),
                 StackItem::cell(body.clone()),
-                StackItem::int(IntegerData::from_u32(ceiling)),
             ],
         )
     };
@@ -366,10 +373,9 @@ fn the_fee_must_cover_the_message_and_a_whole_bounded_recovery() {
     // The fee on the wire is not the fee the configuration fixed.
     assert_eq!(solvent(50_000_000, 50_000_001), Err(242), "a fee the config did not fix passed");
 
-    // The smallest fee that covers the message and the recovery it may have to
-    // pay for, found rather than assumed: the fee one nanotos below it must
-    // fail, which is what makes it the boundary and not just a number that
-    // happens to work.
+    // The smallest fee that covers the message, found rather than assumed: the
+    // fee one nanotos below it must fail, which is what makes it the boundary
+    // and not just a number that happens to work.
     let (mut low, mut high) = (0i128, 10_000_000_000i128);
     assert!(solvent(high, high).is_ok(), "no fee in range was ever enough");
     while low + 1 < high {
@@ -383,20 +389,35 @@ fn the_fee_must_cover_the_message_and_a_whole_bounded_recovery() {
     let enough = high;
     assert_eq!(solvent(low, low), Err(243), "the fee one below the boundary was accepted");
 
-    // The boundary is the sum, exactly. A rule that dropped either term would
-    // still have a boundary, and a test that only required the boundary to be
-    // large would not notice.
+    // The boundary is the forward fee, exactly. A rule that added a term back
+    // would still have a boundary, and a test that only required the boundary
+    // to be positive would not notice.
     let recovery =
         probe.int("p_bounce_compute_fee", vec![StackItem::int(IntegerData::from_u32(ceiling))]);
     assert_eq!(
-        enough,
-        forward + recovery,
-        "the boundary is {enough}, not the {forward} forward fee plus {recovery} of recovery"
+        enough, forward,
+        "the boundary is {enough} and the message's forward fee is {forward}; something other \
+         than forwarding is in the floor"
     );
-    eprintln!("the smallest solvent fee at a {ceiling} gas bounce ceiling: {enough}");
+
+    // And the term that used to be there is real and large, so the equality
+    // above is a statement about the rule rather than about a quantity that
+    // happens to be near zero. This is the whole of the change: at a gas price
+    // {recovery} times dearer the old floor would have overtaken an immutable
+    // fee, and this one would not have moved at all.
     assert!(
-        enough > forward,
-        "the bounded recovery compute costs nothing: {enough} against a {forward} forward fee"
+        recovery > 0,
+        "a bounded recovery's compute costs nothing, so dropping it from the floor proves \
+         nothing"
+    );
+    assert!(
+        enough < forward + recovery,
+        "the floor is still the old sum: {enough} against {forward} + {recovery}"
+    );
+    eprintln!(
+        "the smallest solvent fee is {enough}, the forward fee exactly; the {recovery} a \
+         bounded recovery at a {ceiling} gas ceiling would cost is charged to the bounce, \
+         not pre-paid by every withdrawal"
     );
 }
 

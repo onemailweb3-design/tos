@@ -82,7 +82,12 @@ fn topup_gas_ceiling() -> i64 {
 /// them equal. A top-up never parses the state cell, so it has no read of the
 /// configuration to grow -- unlike the deposit and transact maxima, which were
 /// both low for exactly that reason until they were re-measured.
-const TOPUP_MEASURED_MAX_GAS: i64 = 2_380;
+// 2,380 until section 15.4's `recovery_charge` became a get method: a larger
+// method dictionary costs every entry point about a hundred gas to dispatch
+// through. The D6 ceiling does not move -- 2,480 x 5/4 still rounds to the
+// 10,000 floor -- but the measurement it was ruled from does, and a pinned
+// number that is no longer what the path costs is a number nobody can check.
+const TOPUP_MEASURED_MAX_GAS: i64 = 2_480;
 /// ConfigParam 21 of this chain's zero state, beyond the flat segment.
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
 /// flat 667 for the first hundred gas, then 436,907 per 65,536 gas with the

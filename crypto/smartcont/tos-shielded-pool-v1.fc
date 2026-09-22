@@ -280,8 +280,7 @@ int bounce_gas_ceiling() asm "220000 PUSHINT";
                                 recovery_owner_commitment, recovery_data);
     cell payout = payout_body(intent_digest, record);
     (_, _, _, int config_withdrawal_fee, _, _) = config_parse(config);
-    payout_require_solvent(withdrawal_fee, config_withdrawal_fee, payout,
-                           bounce_gas_ceiling());
+    payout_require_solvent(withdrawal_fee, config_withdrawal_fee, payout);
     native_liability =
       payout_new_liability(native_liability, public_amount_out, withdrawal_fee);
     raw_reserve(native_liability + reserve_floor, 0);
@@ -354,12 +353,19 @@ int bounce_gas_ceiling() asm "220000 PUSHINT";
   accept_message();
   set_gas_limit(bounce_gas_ceiling());
 
-  ;; 6, 7. The note is for what came back. A bounce that returns nothing mints
-  ;; nothing rather than minting a note worth zero.
-  int recovered_amount = msg_value;
-  if (recovered_amount == 0) {
+  ;; 6, 7. The note is for what came back, less what putting it back costs.
+  ;;
+  ;; A bounce that returns nothing -- or less than the recovery is worth --
+  ;; mints nothing. That is the same rule as before with the threshold moved
+  ;; off zero: minting below it would hand the user a note the rest of the
+  ;; pool had paid for. What is left stays in the balance as unencumbered
+  ;; reserve, which is where the gas this transaction is about to spend comes
+  ;; from.
+  int charge = recovery_charge_at(bounce_gas_ceiling());
+  if (msg_value <= charge) {
     return ();
   }
+  int recovered_amount = msg_value - charge;
 
   (int commitment_root, int commitment_next_index,
    int nullifier_root, int nullifier_next_index,
@@ -455,6 +461,17 @@ int nullifier_root() method_id {
 int nullifier_next_index() method_id {
   (_, _, _, int next, _, _, _, _, _, _, _) = state_parse(get_data());
   return next;
+}
+
+;; Section 15.4. What a bounce would be charged for putting the money back,
+;; at the prices live now.
+;;
+;; Exposed because a wallet has to quote it before it withdraws: it is what
+;; the user loses on top of the recipient's compute and the forwarding if the
+;; payout is refused, and it is also the threshold below which a bounce mints
+;; nothing at all. Both are the user's business before they decide, not after.
+int recovery_charge() method_id {
+  return recovery_charge_at(bounce_gas_ceiling());
 }
 
 int backed() method_id {

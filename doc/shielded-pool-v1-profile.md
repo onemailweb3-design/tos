@@ -1642,11 +1642,23 @@ withdrawal_fee == config.withdrawal_fee
 
 withdrawal_fee
   >= exact_outbound_forward_fee
-   + get_compute_fee(wc0, BOUNCE_GAS_CEILING)
    + RECOVERY_FEE_MARGIN
 ```
 
-`RECOVERY_FEE_MARGIN` is exactly `0` in this coding profile. Production activation must measure the real rich-bounce path and choose `config.withdrawal_fee` with explicit headroom; changing the margin constant itself requires an explicit profile/deployment revision.
+The floor covers what the pool spends **before any bounce can exist**: sending the payout, as its sender.
+It does not cover the recovery's compute, which section 15.4 charges to the money being recovered.
+
+That term used to be here, and it was the dangerous one. `config.withdrawal_fee` is immutable while this
+check reads live prices, so a fee that had to stay ahead of a governed **compute** price could be overtaken
+permanently -- bricking every withdrawal at this exit while deposits and transfers carried on, with no way
+to change the fee. What remains prices bytes rather than work.
+
+It is also fairer: the old floor made every withdrawal pre-pay for a recovery, and almost no withdrawal
+bounces.
+
+`RECOVERY_FEE_MARGIN` is exactly `0` in this coding profile. Production activation must measure the real
+path and choose `config.withdrawal_fee` with explicit headroom; changing the margin constant itself requires
+an explicit profile/deployment revision.
 
 If current config pricing makes the inequality false, withdrawals fail closed until the deployment/profile
 is updated. Deposit/private transfer remain available.
@@ -1778,12 +1790,26 @@ the smallest real protocol-generated bounce that reaches the authenticated `ACCE
 the handler MUST never mint a note; any credited remainder that cannot execute recovery is treated as user loss /
 unencumbered reserve according to actual transaction semantics.
 
-If authenticated recovery reaches the post-ACCEPT phase and `msg_value == 0`, no recovery note is minted.
+The recovery is work, and the money being recovered pays for it:
+
+```text
+recovery_charge = get_compute_fee(wc0, BOUNCE_GAS_CEILING)
+```
+
+read at the prices live when the bounce arrives. It is the ceiling rather than what the transaction actually
+spends, because the note commitment must be built before the transaction's own cost is known and building it
+costs gas -- an exact charge is circular. The ceiling is declared, derived by the section 14.1 rule, and
+computable by a wallet before it withdraws.
+
+If authenticated recovery reaches the post-ACCEPT phase and `msg_value <= recovery_charge`, **no recovery
+note is minted**. This is the `msg_value == 0` rule with its threshold moved off zero: below it, minting
+would hand the user a note the rest of the pool had paid for. The credited remainder stays in the balance as
+unencumbered reserve, which is where this transaction's gas comes from.
 
 Otherwise:
 
 ```text
-recovered_amount = msg_value
+recovered_amount = msg_value - recovery_charge
 
 recovery_note_body =
   H7(
@@ -1803,12 +1829,13 @@ Then:
 4. save state once;
 5. assert backing invariant.
 
-**The pool never restores more principal than actually returned by the bounce.**
-Any amount consumed by recipient compute, forwarding or bounce transport is the withdrawing user's loss,
-not a subsidy from other users' reserve.
+**The pool never restores more principal than actually returned by the bounce, less the cost of
+restoring it.**
+Any amount consumed by recipient compute, forwarding, bounce transport or the pool's own recovery compute is
+the withdrawing user's loss, not a subsidy from other users' reserve.
 
-The fixed `withdrawal_fee` funds pool-side sender fees and bounded recovery compute; it does not reimburse
-lost principal.
+The fixed `withdrawal_fee` funds pool-side sender fees only; it does not fund recovery compute and it does
+not reimburse lost principal.
 
 ### 15.5 Replay model
 

@@ -127,7 +127,7 @@ fn the_smallest_recoverable_bounce_is_measured_rather_than_assumed() {
     // nanotos below it a bounce still comes back -- the protocol generated it,
     // it carried value, it reached the pool -- and the pool still mints
     // nothing. The failure is not that no bounce arrived; it is that the
-    // bounce could not pay for its own authentication.
+    // bounce could not pay for putting itself back.
     assert!(
         fails_outcome.bounced_from.is_some(),
         "one below the boundary nothing bounced at all, so this is not the dust boundary \
@@ -135,6 +135,32 @@ fn the_smallest_recoverable_bounce_is_measured_rather_than_assumed() {
     );
     assert!(fails_outcome.bounced_value > 0, "the bounce one below the boundary carried nothing");
     assert!(!recovered(&fails_outcome), "the bisection put a recovered case on the failing side");
+
+    // And *which* threshold this is, which the bisection alone cannot say.
+    //
+    // There are two, and they moved past each other. A bounce has to carry
+    // enough to run the pre-ACCEPT authentication, and since section 15.4
+    // started charging the recovery to the recovered amount it also has to
+    // carry more than that charge or the pool mints nothing. The second is now
+    // about twenty times the first, so it is the one that binds, and the
+    // boundary is exactly one nanotos above it.
+    //
+    // Without this the test passes for any boundary at all -- it did, while
+    // the charge moved it from a few tens of thousands of nanotos to one and a
+    // half million, and the comment above went on describing the old reason.
+    let charge = works_outcome.recovery_charge;
+    assert_eq!(
+        boundary,
+        charge + 1,
+        "the smallest recoverable bounce is {boundary} and the recovery charges {charge}; if \
+         these have come apart, the binding threshold is no longer the charge -- most likely \
+         the pre-ACCEPT authentication has become the dearer of the two, which is a different \
+         statement and wants a different test"
+    );
+    eprintln!(
+        "the binding threshold is the recovery charge, {charge}, not the authentication: \
+         a bounce must carry more than what putting it back costs"
+    );
     eprintln!(
         "one below: a bounce of {} came back and minted nothing",
         fails_outcome.bounced_value

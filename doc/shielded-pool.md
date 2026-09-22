@@ -466,6 +466,57 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   calling `POSEIDON2_PATH7`, 99,950 when the Poseidon2 tariff came down from
   3,500 to 2,800, and 120,859 when the frontier changed container.
 
+  **The recovery now pays for itself.** Section 15.4 charges a bounce the cost
+  of putting the money back -- `get_compute_fee(0, 220000)`, 1,466,669 nanotos
+  at today's price -- out of the value it is returning, the way the
+  recipient's compute and the forwarding were already charged. A bounce of a
+  whole denomination returns 999,094,425 and mints 997,627,756.
+
+  That moves two things, and the second is the reason for it.
+
+  It is fairer: the cost used to come out of the immutable `withdrawal_fee`,
+  which **every** withdrawal pays, for a recovery almost none of them will
+  ever need.
+
+  And it takes a gas term out of an immutable number's floor. Section 14.2's
+  check reads the chain's **live** prices while `config.withdrawal_fee` can
+  never change, so the old floor —
+
+  | | term | moves with the gas price |
+  |---|---:|---|
+  | forwarding | 885,601 | no — ConfigParam 25 prices bytes |
+  | a bounded recovery | 1,466,669 | **yes** |
+  | floor | 2,352,270 | |
+
+  — could be overtaken permanently by a price rise, bricking every withdrawal
+  at exit 243 while deposits and transfers carried on. 50,000,000 survived
+  about 223 nanotos a gas: **3.4× the value this chain itself ran at until the
+  price cut.**
+
+  The floor is now 885,601 and does not contain a gas term at all. The same
+  fee is 56.5× it, and that ratio does not decay when gas is repriced. The
+  cliff has not disappeared — forwarding is also governed — but reaching it
+  needs a 56× move in a price that bills bytes, instead of a 3.4× move in one
+  that bills work.
+
+  `the_fee_must_cover_the_message_and_not_the_recovery` bisects for the floor
+  and requires it to be the forward fee **exactly**, so a term added back
+  turns it red.
+
+  **What it costs the user.** A bounced withdrawal now returns 1,466,669
+  nanotos less, and the smallest bounce that mints anything rises from a few
+  tens of thousands of nanotos to 1,466,670 — the charge plus one. That
+  threshold is measured, not assumed:
+  `the_smallest_recoverable_bounce_is_measured_rather_than_assumed` bisects to
+  it and asserts it is the charge that binds rather than the pre-ACCEPT
+  authentication, which is now about twenty times cheaper.
+
+  **What it does not change.** `config.withdrawal_fee` is still 50,000,000.
+  Re-deriving it downwards is a separate decision and a real one — the
+  argument that kept it there was the cliff, and the cliff has moved — but it
+  changes the genesis state, so the address, and the profile already makes the
+  mainnet fee an activation decision.
+
   **And what the sender actually pays is a price, not a gas count.** A
   transact cost its sender 0.098 TOS against 0.000356 for an ordinary payment
   — 275 times — and the target was 0.01. No amount of contract work reaches that

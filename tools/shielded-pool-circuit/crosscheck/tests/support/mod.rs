@@ -126,9 +126,12 @@ pub struct Outcome {
     /// nothing bounced.
     pub recovery_gas: i64,
     pub recovery_exit: i32,
-    /// The value the bounce actually carried back, which is what section 15.4
-    /// calls the recoverable amount.
+    /// The value the bounce actually carried back.
     pub bounced_value: u128,
+    /// What the pool quotes for putting it back, section 15.4's
+    /// `recovery_charge`, read from the same pool that ran the recovery and
+    /// at the prices it ran under. The minted note is the two subtracted.
+    pub recovery_charge: u128,
     pub holds: u128,
     pub reserve: u128,
 }
@@ -482,6 +485,11 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         recovery_gas,
         recovery_exit,
         bounced_value,
+        recovery_charge: pool
+            .get("recovery_charge")
+            .expect("the quoted recovery charge")
+            .parse()
+            .expect("a number"),
         holds: balance.balance().map(|value| value.coins.as_u128()).expect("a balance"),
         reserve: pool.get("reserve_floor").expect("reserve floor").parse().expect("a number"),
     }

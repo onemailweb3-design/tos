@@ -32,7 +32,7 @@ RECORD_TEST = 'the_record_has_the_shape_section_15_2_fixes'
 QUERY_TEST = 'the_query_id_is_the_low_half_of_the_intent_digest'
 MESSAGE_TEST = 'the_message_is_bouncable_and_asks_for_the_full_original_body'
 NOBODY_TEST = 'a_payout_to_nobody_is_refused'
-FEE_TEST = 'the_fee_must_cover_the_message_and_a_whole_bounded_recovery'
+FEE_TEST = 'the_fee_must_cover_the_message_and_not_the_recovery'
 LIABILITY_TEST = 'a_payout_never_discharges_more_liability_than_there_is'
 CHARGED_TEST = 'the_computed_forward_fee_is_the_fee_the_chain_charges'
 
@@ -84,12 +84,17 @@ CASES = [
     # Section 14.2.
     Case('fee-not-config', 'the fee on the wire need not be the configured one',
          '  throw_unless(242, withdrawal_fee == config_withdrawal_fee);\n', '', FEE_TEST),
-    Case('fee-no-recovery', 'the fee need only cover the message, not the recovery',
-         '    withdrawal_fee >= payout_forward_fee(body) + get_compute_fee(0, bounce_gas_ceiling));',
-         '    withdrawal_fee >= payout_forward_fee(body));', FEE_TEST),
     Case('fee-no-forward', 'the fee need not cover forwarding the message',
-         '    withdrawal_fee >= payout_forward_fee(body) + get_compute_fee(0, bounce_gas_ceiling));',
-         '    withdrawal_fee >= get_compute_fee(0, bounce_gas_ceiling));', FEE_TEST),
+         '  throw_unless(243, withdrawal_fee >= payout_forward_fee(body));',
+         '  throw_unless(243, withdrawal_fee >= 0);', FEE_TEST),
+    # The term that was taken out. Putting it back is not a bug the contract
+    # can detect -- the configured fee still clears the larger floor today --
+    # but it is the regression this change exists to prevent, and the test
+    # says so by pinning the boundary to the forward fee exactly.
+    Case('fee-recovery-again', 'the floor pre-pays a whole bounded recovery again',
+         '  throw_unless(243, withdrawal_fee >= payout_forward_fee(body));',
+         '  throw_unless(243,\n    withdrawal_fee >= payout_forward_fee(body) '
+         '+ get_compute_fee(0, 220000));', FEE_TEST),
     Case('forward-fee-cells', 'the forward fee ignores how many cells the message has',
          '  return get_forward_fee(0, bits, cells);', '  return get_forward_fee(0, bits, 0);',
          CHARGED_TEST),

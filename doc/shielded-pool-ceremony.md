@@ -853,8 +853,26 @@ floor entirely. What remains is the forward fee, which prices bytes rather than
 work and was held fixed through the price cut. The cliff does not disappear,
 but the fee sized against it gets much smaller and the margin much larger.
 
-It changes section 15.4 and the circuit, so it has to be answered before a
-ceremony, and it is the only thing on this page that does.
+**Decided and done, 2026-09-22.** Section 15.4 now charges
+`get_compute_fee(0, BOUNCE_GAS_CEILING)` -- 1,466,669 nanotos at today's price
+-- to the bounce, and section 14.2's floor is the forward fee alone: 885,601,
+with no gas term in it. The same 50,000,000 fee is 56.5x that floor and the
+ratio no longer decays when gas is repriced.
+
+It turned out **not to touch the circuit**. The recovery note's amount is
+fixed by the contract at bounce time and `recovery_template_hash` commits to
+the owner and the payload, never to a value, so nothing the prover signs
+changes. This page said otherwise and was wrong.
+
+So **nothing circuit-shaped is outstanding, and a ceremony is not waiting on a
+decision.** The genesis state hash moved with the profile
+(`fd9303eb...` to `ced6d862...`), which is free while no address is published.
+
+What remains open is a number rather than a shape: `config.withdrawal_fee` was
+held at 50,000,000 because the cliff was 3.4x away, and it is now 56.5x away.
+Re-deriving it downwards is a real saving for every withdrawal and it does not
+block anything -- the profile already makes the mainnet fee an activation
+decision.
 
 ## Running the checks
 

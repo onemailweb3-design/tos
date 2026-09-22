@@ -99,14 +99,25 @@ int payout_forward_fee(cell body) impure inline_ref {
 ;; what the pool charges, withdrawals fail closed and deposits and transfers
 ;; carry on.
 ;;
+;; The floor is the forward fee and nothing else. It used to include a whole
+;; bounded recovery's compute, and that term was the dangerous one: an
+;; immutable fee had to stay ahead of a *compute* price the chain can govern
+;; upwards, so a large enough rise would brick every withdrawal permanently
+;; while deposits and transfers carried on. What remains is what the pool
+;; spends before any bounce can exist -- sending the payout, as its sender --
+;; and it prices bytes rather than work.
+;;
+;; The recovery's compute is now charged to the money being recovered, at the
+;; prices live when the bounce arrives, so it cannot be underfunded by a price
+;; rise and cannot be paid for by withdrawals that never bounce. Section 15.4.
+;;
 ;; RECOVERY_FEE_MARGIN is exactly zero in this profile. Production activation
-;; has to measure the real bounce path and choose the configured fee with
-;; explicit headroom; the margin constant itself is not a knob to turn here.
+;; has to measure the real path and choose the configured fee with explicit
+;; headroom; the margin constant itself is not a knob to turn here.
 () payout_require_solvent(int withdrawal_fee, int config_withdrawal_fee,
-                          cell body, int bounce_gas_ceiling) impure inline_ref {
+                          cell body) impure inline_ref {
   throw_unless(242, withdrawal_fee == config_withdrawal_fee);
-  throw_unless(243,
-    withdrawal_fee >= payout_forward_fee(body) + get_compute_fee(0, bounce_gas_ceiling));
+  throw_unless(243, withdrawal_fee >= payout_forward_fee(body));
 }
 
 ;; Section 16.2 step 16's arithmetic. A payout discharges liability; it can

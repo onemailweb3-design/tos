@@ -97,6 +97,30 @@ fn a_withdrawal_that_is_refused_comes_back_as_a_note() {
         recovered < u128::from(DENOMINATION),
         "the pool minted back {recovered} of a {DENOMINATION} payout, more than returned"
     );
+
+    // Section 15.4, the part the assertion above cannot see: the recovery
+    // charges the bounce for putting the money back.
+    //
+    // `recovered < DENOMINATION` was already true before that charge existed
+    // -- the recipient's compute and the bounce transport take their share
+    // either way -- so it would stay green if the charge were removed
+    // tomorrow. The arithmetic is what pins it: the note is the bounced value
+    // less exactly what the contract quotes, and the quote is asked of the
+    // contract rather than recomputed here, because a second copy of a fee
+    // formula is a second thing to keep in step with the chain's prices.
+    let charge = outcome.recovery_charge;
+    assert!(charge > 0, "the contract quotes a recovery charge of nothing");
+    assert_eq!(
+        recovered,
+        outcome.bounced_value - charge,
+        "the bounce returned {} and the note is {recovered}; the difference should be the \
+         {charge} the contract quotes",
+        outcome.bounced_value
+    );
+    eprintln!(
+        "the bounce returned {} and minted {recovered}: the recovery charged itself {charge}",
+        outcome.bounced_value
+    );
     assert!(
         outcome.holds >= outcome.pool_liability_after + outcome.reserve,
         "the pool owes {} with a {} floor and holds only {}",
