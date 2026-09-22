@@ -230,12 +230,12 @@ int main() {
                                                           fixture.validator_set->get_validator_set_hash(),
                                                           fixture.session, Fixture::slot, candidate(fixture.id)),
       "valid-approve-construction");
-  if (require_ok(block::verify_pq_finality(trusted_context, *approve, block::FinalityRole::Approve),
-                 "valid-approve") != quorum_weight) {
+  if (require_ok(block::verify_pq_finality(trusted_context, *approve, block::FinalityRole::Approve), "valid-approve") !=
+      quorum_weight) {
     fail("PQ_BLOCK_SIGNATURE_WEIGHT_MISMATCH case=valid-approve");
   }
-  expect_error(block::verify_pq_finality(trusted_context, *approve, block::FinalityRole::Final),
-               "not final signatures", "notarize-presented-as-final");
+  expect_error(block::verify_pq_finality(trusted_context, *approve, block::FinalityRole::Final), "not final signatures",
+               "notarize-presented-as-final");
 
   auto final_in_memory =
       require_ok(block::BlockSignatureSet::create_simplex_pq_final(

@@ -112,9 +112,9 @@ std::map<std::size_t, Measurement> measured_object_sizes() {
     }
     auto row = fields(line);
     if (row.size() == 11 && row[3] != "REFUSED") {
-      result.emplace(number(row[0], "measurement signers"),
-                     Measurement{number(row[3], "measurement BOC"), number(row[6], "node TL"),
-                                 number(row[7], "lite TL")});
+      result.emplace(
+          number(row[0], "measurement signers"),
+          Measurement{number(row[3], "measurement BOC"), number(row[6], "node TL"), number(row[7], "lite TL")});
     }
   }
   return result;
@@ -231,8 +231,7 @@ int main() {
                (verdict.route == "finality-broadcast" || verdict.route == "v2-broadcast")) {
       expected_kind = "measured";
       expected_bytes = measured->second.node_tl;
-    } else if (verdict.object == "liteServer.signatureSet.simplexPq" &&
-               verdict.route == "lite-forward-proof") {
+    } else if (verdict.object == "liteServer.signatureSet.simplexPq" && verdict.route == "lite-forward-proof") {
       expected_kind = "measured";
       expected_bytes = measured->second.lite_tl;
     } else if ((verdict.object == "complete-tosNode.blockFinalityBroadcast" && verdict.route == "finality-broadcast") ||

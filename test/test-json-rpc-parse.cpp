@@ -90,15 +90,13 @@ TEST(JsonRpcParse, pq_block_signatures_fail_loudly) {
   auto signatures = tos::create_tl_object<tos::lite_api::liteServer_signatureSet_simplexPq>();
   auto rendered = tos::render_masterchain_block_signatures_json(signatures.get(), td::Slice("{}"));
   ASSERT_TRUE(rendered.is_error());
-  ASSERT_STREQ("post-quantum block signatures are not supported by JSON-RPC yet",
-               rendered.error().message().c_str());
+  ASSERT_STREQ("post-quantum block signatures are not supported by JSON-RPC yet", rendered.error().message().c_str());
 }
 
 TEST(JsonRpcParse, absent_block_signatures_remain_an_empty_ordinary_set) {
   auto rendered = tos::render_masterchain_block_signatures_json(nullptr, td::Slice("{\"seqno\":1}"));
   ASSERT_TRUE(rendered.is_ok());
-  ASSERT_STREQ("{\"@type\":\"blocks.blockSignatures\",\"id\":{\"seqno\":1},\"signatures\":[]}",
-               rendered.ok().c_str());
+  ASSERT_STREQ("{\"@type\":\"blocks.blockSignatures\",\"id\":{\"seqno\":1},\"signatures\":[]}", rendered.ok().c_str());
 }
 
 TEST(JsonRpcParse, result_stack_rejects_garbage_boc) {

@@ -63,9 +63,8 @@ inline FastSyncValidatorTransportAuthority fast_sync_validator_transport_authori
   }
   result.roots = canonical_validator_transport_roots(std::move(result.roots));
   std::sort(result.validator_adnl_ids.begin(), result.validator_adnl_ids.end());
-  result.validator_adnl_ids.erase(
-      std::unique(result.validator_adnl_ids.begin(), result.validator_adnl_ids.end()),
-      result.validator_adnl_ids.end());
+  result.validator_adnl_ids.erase(std::unique(result.validator_adnl_ids.begin(), result.validator_adnl_ids.end()),
+                                  result.validator_adnl_ids.end());
   return result;
 }
 

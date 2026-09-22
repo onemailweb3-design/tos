@@ -39,9 +39,10 @@ namespace tos {
 namespace validator {
 using namespace std::literals::string_literals;
 
-td::Result<td::Ref<vm::Cell>> prepare_accepted_block_signatures(
-    td::Ref<block::ValidatorSet> validator_set, td::Ref<block::BlockSignatureSet> signatures, BlockIdExt block_id,
-    ValidatorSessionId expected_session_id) {
+td::Result<td::Ref<vm::Cell>> prepare_accepted_block_signatures(td::Ref<block::ValidatorSet> validator_set,
+                                                                td::Ref<block::BlockSignatureSet> signatures,
+                                                                BlockIdExt block_id,
+                                                                ValidatorSessionId expected_session_id) {
   if (validator_set.is_null()) {
     return td::Status::Error("accept block: trusted validator set is missing");
   }
@@ -51,9 +52,8 @@ td::Result<td::Ref<vm::Cell>> prepare_accepted_block_signatures(
   td::Result<ValidatorWeight> verified;
   if (signatures->is_pq()) {
     const block::PQFinalityVerificationContext context{validator_set, block_id, expected_session_id};
-    verified = block::verify_pq_finality(context, *signatures,
-                                         signatures->is_final() ? block::FinalityRole::Final
-                                                                : block::FinalityRole::Approve);
+    verified = block::verify_pq_finality(
+        context, *signatures, signatures->is_final() ? block::FinalityRole::Final : block::FinalityRole::Approve);
   } else if (signatures->is_final()) {
     verified = signatures->check_signatures(validator_set, block_id);
   } else {
@@ -69,10 +69,10 @@ td::Result<td::Ref<vm::Cell>> prepare_accepted_block_signatures(
 
 AcceptBlockQuery::AcceptBlockQuery(BlockIdExt id, td::Ref<BlockData> data, std::vector<BlockIdExt> prev,
                                    td::Ref<block::ValidatorSet> validator_set,
-                                   td::Ref<block::BlockSignatureSet> signatures,
-                                   ValidatorSessionId expected_session_id, int block_broadcast_mode,
-                                   int finality_broadcast_mode, bool send_shard_block_desc, bool apply,
-                                   td::actor::ActorId<ValidatorManager> manager, td::Promise<td::Unit> promise)
+                                   td::Ref<block::BlockSignatureSet> signatures, ValidatorSessionId expected_session_id,
+                                   int block_broadcast_mode, int finality_broadcast_mode, bool send_shard_block_desc,
+                                   bool apply, td::actor::ActorId<ValidatorManager> manager,
+                                   td::Promise<td::Unit> promise)
     : id_(id)
     , data_(std::move(data))
     , prev_(std::move(prev))
@@ -291,10 +291,10 @@ bool AcceptBlockQuery::create_new_proof() {
   if (is_masterchain()) {
     // 9a. now create serialized proof
     vm::CellBuilder cb;
-    if (!(cb.store_long_bool(0xc3, 8)                // block_proof#c3
-          && block::tlb::t_BlockIdExt.pack(cb, id_)  // proof_for:BlockIdExt
-          && cb.store_ref_bool(std::move(proof))     // proof:^Cell
-          && cb.store_bool_bool(!is_fake_)           // signatures:(Maybe
+    if (!(cb.store_long_bool(0xc3, 8)                           // block_proof#c3
+          && block::tlb::t_BlockIdExt.pack(cb, id_)             // proof_for:BlockIdExt
+          && cb.store_ref_bool(std::move(proof))                // proof:^Cell
+          && cb.store_bool_bool(!is_fake_)                      // signatures:(Maybe
           && (is_fake_ || cb.store_ref_bool(signatures_cell_))  // ^BlockSignatures)
           && cb.finalize_to(bs_cell))) {
       return fatal_error("cannot serialize BlockProof for the newly-accepted block");
@@ -416,9 +416,8 @@ void AcceptBlockQuery::got_block_handle(BlockHandle handle) {
   handle_ = std::move(handle);
   if (handle_->received() && handle_->received_state() &&
       (handle_->inited_signatures() || is_fake_ || !signatures_->is_final() || is_fork_) &&
-      handle_->inited_split_after() &&
-      handle_->inited_merge_before() && handle_->inited_prev() && handle_->inited_logical_time() &&
-      handle_->inited_state_root_hash() &&
+      handle_->inited_split_after() && handle_->inited_merge_before() && handle_->inited_prev() &&
+      handle_->inited_logical_time() && handle_->inited_state_root_hash() &&
       (is_masterchain() ? handle_->inited_proof() && handle_->is_applied() && handle_->inited_is_key_block()
                         : handle_->inited_proof_link()) &&
       block_broadcast_mode_ == 0 && finality_broadcast_mode_ == 0) {

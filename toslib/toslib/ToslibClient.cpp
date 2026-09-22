@@ -207,9 +207,7 @@ td::Result<toslib_api::object_ptr<toslib_api::blocks_BlockSignatures>> to_toslib
                                         to_toslib_api(blk), std::move(signatures), obj.session_id_, obj.slot_,
                                         tos::serialize_tl_object(obj.candidate_, true).as_slice().str());
                                   },
-                                  [&](const tos::tos_api::tosNode_signatureSet_simplexPq&) {
-                                    pq_carrier = true;
-                                  }));
+                                  [&](const tos::tos_api::tosNode_signatureSet_simplexPq&) { pq_carrier = true; }));
   if (pq_carrier) {
     return td::Status::Error("post-quantum block signatures are not supported by toslib yet");
   }

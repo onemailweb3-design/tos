@@ -4,9 +4,9 @@
 #include <fstream>
 #include <sstream>
 
+#include "block/block-auto.h"
 #include "block/validator-session-id.h"
 #include "block/validator-session-members.h"
-#include "block/block-auto.h"
 #include "td/utils/misc.h"
 #include "tl-utils/common-utils.hpp"
 #include "tl-utils/tl-utils.hpp"
@@ -101,8 +101,7 @@ std::string render(const Vector& vector) {
 
 int check_manager_assembly_inputs(const Vector& vector) {
   const auto expected = block::derive_validator_session_identity(identity_input(vector));
-  if (expected.session_config_hash.to_hex() !=
-          "9596398C00EBC759D5BC0E25A98D4359EE1062A42D9B40CBDABA1A03B28B0883" ||
+  if (expected.session_config_hash.to_hex() != "9596398C00EBC759D5BC0E25A98D4359EE1062A42D9B40CBDABA1A03B28B0883" ||
       expected.session_id.to_hex() != "F365B81E5D8FB9705FAA85C60665C9B75F8CF82AAF575E149C3EAC4E50B02276") {
     std::fprintf(stderr, "MANAGER_SESSION_ASSEMBLY_FROZEN_VECTOR_MISMATCH\n");
     return 1;
@@ -118,31 +117,40 @@ int check_manager_assembly_inputs(const Vector& vector) {
   auto input = identity_input(vector);
   auto changed = input;
   changed.global_id++;
-  if (!changes_session(std::move(changed), "global_id")) return 1;
+  if (!changes_session(std::move(changed), "global_id"))
+    return 1;
   changed = input;
   changed.validator_options_hash.data()[0] ^= 1;
-  if (!changes_session(std::move(changed), "validator_options_hash")) return 1;
+  if (!changes_session(std::move(changed), "validator_options_hash"))
+    return 1;
   changed = input;
   changed.simplex_config_cell_hash.data()[0] ^= 1;
-  if (!changes_session(std::move(changed), "simplex_config_cell_hash")) return 1;
+  if (!changes_session(std::move(changed), "simplex_config_cell_hash"))
+    return 1;
   changed = input;
   changed.shard = tos::ShardIdFull{0, tos::shardIdAll};
-  if (!changes_session(std::move(changed), "shard")) return 1;
+  if (!changes_session(std::move(changed), "shard"))
+    return 1;
   changed = input;
   changed.catchain_seqno++;
-  if (!changes_session(std::move(changed), "catchain_seqno")) return 1;
+  if (!changes_session(std::move(changed), "catchain_seqno"))
+    return 1;
   changed = input;
   changed.validators[0].validator_id.value.data()[0] ^= 1;
-  if (!changes_session(std::move(changed), "validators")) return 1;
+  if (!changes_session(std::move(changed), "validators"))
+    return 1;
   changed = input;
   changed.vertical_seqno++;
-  if (!changes_session(std::move(changed), "vertical_seqno")) return 1;
+  if (!changes_session(std::move(changed), "vertical_seqno"))
+    return 1;
   changed = input;
   changed.last_key_block_seqno++;
-  if (!changes_session(std::move(changed), "last_key_block_seqno")) return 1;
+  if (!changes_session(std::move(changed), "last_key_block_seqno"))
+    return 1;
   changed = input;
   changed.new_catchain_ids = false;
-  if (!changes_session(std::move(changed), "new_catchain_ids")) return 1;
+  if (!changes_session(std::move(changed), "new_catchain_ids"))
+    return 1;
   return 0;
 }
 
@@ -157,8 +165,7 @@ int check_real_state_global_id() {
   td::BufferSlice data{bytes.str()};
   auto root_r = vm::std_boc_deserialize(data.as_slice());
   if (root_r.is_error()) {
-    std::fprintf(stderr, "SHARD_STATE_GLOBAL_ID_BOC_PARSE_FAILURE error=%s\n",
-                 root_r.error().message().str().c_str());
+    std::fprintf(stderr, "SHARD_STATE_GLOBAL_ID_BOC_PARSE_FAILURE error=%s\n", root_r.error().message().str().c_str());
     return 1;
   }
   auto root = root_r.move_as_ok();
@@ -174,8 +181,7 @@ int check_real_state_global_id() {
   tos::BlockIdExt block_id{tos::BlockId{tos::ShardIdFull(parsed_shard), header.seq_no}, root_hash, file_hash};
   auto state_r = tos::validator::ShardStateQ::fetch(block_id, data.clone());
   if (state_r.is_error()) {
-    std::fprintf(stderr, "SHARD_STATE_GLOBAL_ID_FETCH_FAILURE error=%s\n",
-                 state_r.error().message().str().c_str());
+    std::fprintf(stderr, "SHARD_STATE_GLOBAL_ID_FETCH_FAILURE error=%s\n", state_r.error().message().str().c_str());
     return 1;
   }
   // Frozen independently of the session vector: this tracked state BOC is

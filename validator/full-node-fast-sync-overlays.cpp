@@ -108,8 +108,8 @@ void FullNodeFastSyncOverlay::process_block_finality_broadcast(PublicKeyHash src
   parsed_finality.received_bytes = received_bytes;
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in fast sync overlay from " << src << ": "
                         << parsed_finality.block_id.to_str();
-  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(parsed_finality),
-                          src, BroadcastSource::fast_sync_overlay, true);
+  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(parsed_finality), src,
+                          BroadcastSource::fast_sync_overlay, true);
 }
 
 void FullNodeFastSyncOverlay::obtain_state_for_decompression(PublicKeyHash src,

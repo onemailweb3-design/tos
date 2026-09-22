@@ -227,8 +227,7 @@ class ValidatorManagerImpl : public ValidatorManager {
   td::LRUCache<BlockIdExt, td::BufferSlice> cached_block_data_{/* max_size = */ 128};
   td::LRUCache<BlockIdExt, td::BufferSlice> cached_masterchain_block_candidates_{/* max_size = */ 128};
   td::LRUCache<BlockIdExt, td::Unit> cached_checked_shard_block_descriptions_{/* max_size = */ 1024};
-  PendingFinalityStore<BlockIdExt, PendingBlockFinalitySender, PendingBlockFinalityCandidate>
-      pending_block_finality_;
+  PendingFinalityStore<BlockIdExt, PendingBlockFinalitySender, PendingBlockFinalityCandidate> pending_block_finality_;
   td::optional<BlockIdExt> pending_finality_authority_memo_state_;
   PendingFinalityAuthorityMemo pending_finality_authority_memo_;
 
@@ -403,7 +402,7 @@ class ValidatorManagerImpl : public ValidatorManager {
   void new_block_broadcast(BlockBroadcast broadcast, bool signatures_checked, BroadcastSource source,
                            td::Promise<td::Unit> promise) override;
   td::actor::Task<> new_block_finality_broadcast(BlockFinalityBroadcast finality, BroadcastSource source,
-                                                  td::optional<PublicKeyHash> source_peer = {}) override;
+                                                 td::optional<PublicKeyHash> source_peer = {}) override;
   void validate_block_broadcast_signatures(BlockBroadcast broadcast, td::Promise<td::Unit> promise) override;
   td::actor::Task<> validated_accepted_block_broadcast(BlockIdExt block_id, CatchainSeqno cc_seqno);
   td::actor::Task<> generate_shard_block_description(BlockIdExt block_id, Ref<block::BlockSignatureSet> sig_set);
@@ -626,8 +625,8 @@ class ValidatorManagerImpl : public ValidatorManager {
   void checked_pending_block_finality(BlockIdExt block_id, BlockBroadcast broadcast, BroadcastSource source,
                                       bool was_final, PendingFinalityAttemptToken attempt_token,
                                       td::Result<td::Unit> result);
-  void processed_pending_block_finality(BlockIdExt block_id, bool was_final,
-                                        PendingFinalityAttemptToken attempt_token, td::Result<td::Unit> result);
+  void processed_pending_block_finality(BlockIdExt block_id, bool was_final, PendingFinalityAttemptToken attempt_token,
+                                        td::Result<td::Unit> result);
   void preload_msg_queue_to_masterchain(td::Ref<ShardTopBlockDescription> desc, td::Promise<td::Unit> promise);
   void loaded_msg_queue_to_masterchain(td::Ref<ShardTopBlockDescription> desc, td::Ref<OutMsgQueueProof> res,
                                        td::Promise<td::Unit> promise);

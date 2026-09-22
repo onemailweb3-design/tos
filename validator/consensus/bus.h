@@ -199,11 +199,11 @@ class Db {
 
 class Bus : public td::actor::Bus {
  public:
-  using Events = td::TypeList<Start, StopRequested, FinalizeBlock, OurLeaderWindowStarted, CandidateGenerated,
-                              CandidateReceived, ValidationRequest, IncomingProtocolMessage, OutgoingProtocolMessage,
-                              IncomingOverlayRequest, OutgoingOverlayRequest, BlockFinalizedInMasterchain,
-                              MisbehaviorReport, TraceEvent, NoncriticalParamsUpdated, PrecheckCandidateBroadcast,
-                              FinalizationBacklog>;
+  using Events =
+      td::TypeList<Start, StopRequested, FinalizeBlock, OurLeaderWindowStarted, CandidateGenerated, CandidateReceived,
+                   ValidationRequest, IncomingProtocolMessage, OutgoingProtocolMessage, IncomingOverlayRequest,
+                   OutgoingOverlayRequest, BlockFinalizedInMasterchain, MisbehaviorReport, TraceEvent,
+                   NoncriticalParamsUpdated, PrecheckCandidateBroadcast, FinalizationBacklog>;
 
   Bus() = default;
   ~Bus() override {

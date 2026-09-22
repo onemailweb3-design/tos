@@ -8,8 +8,8 @@
 
 #include "adnl/utils.hpp"
 #include "auto/tl/tos_api.h"
-#include "block/block.h"
 #include "block/block-parse.h"
+#include "block/block.h"
 #include "block/mc-config.h"
 #include "block/validator-set.h"
 #include "consensus/candidate-relay-policy.h"
@@ -564,9 +564,9 @@ class TestManagerFacade : public ManagerFacade {
   }
 
   td::actor::Task<> accept_block(BlockIdExt id, td::Ref<BlockData> data, size_t creator_idx,
-                                 td::Ref<block::BlockSignatureSet> signatures,
-                                 ValidatorSessionId expected_session_id, int block_broadcast_mode,
-                                 int finality_broadcast_mode, bool send_shard_block_desc, bool apply) override;
+                                 td::Ref<block::BlockSignatureSet> signatures, ValidatorSessionId expected_session_id,
+                                 int block_broadcast_mode, int finality_broadcast_mode, bool send_shard_block_desc,
+                                 bool apply) override;
 
   td::actor::Task<td::Ref<vm::Cell>> wait_block_state_root(BlockIdExt block_id, td::Timestamp timeout) override;
   td::actor::Task<td::Ref<BlockData>> wait_block_data(BlockIdExt block_id, td::Timestamp timeout) override;
@@ -776,8 +776,7 @@ class TestConsensus : public td::actor::Actor {
       CHECK(!SHARD.is_masterchain());
       if (signatures->is_pq()) {
         signatures
-            ->check_pq_signatures_under_carried_session_for_test(validator_set_, block_id,
-                                                                  block::FinalityRole::Approve)
+            ->check_pq_signatures_under_carried_session_for_test(validator_set_, block_id, block::FinalityRole::Approve)
             .ensure();
       } else {
         signatures->check_approve_signatures(validator_set_, block_id).ensure();
@@ -1456,8 +1455,8 @@ class TestConsensus : public td::actor::Actor {
       co_return td::Unit{};
     }
     if (FINALIZATION_BACKPRESSURE_TEST) {
-      LOG(WARNING) << "Finalization backpressure scenario: over-limit reports="
-                   << BACKLOG_OVER_LIMIT_REPORTS.load() << "; cleared reports=" << BACKLOG_CLEARED_REPORTS.load()
+      LOG(WARNING) << "Finalization backpressure scenario: over-limit reports=" << BACKLOG_OVER_LIMIT_REPORTS.load()
+                   << "; cleared reports=" << BACKLOG_CLEARED_REPORTS.load()
                    << "; candidates while throttled=" << CANDIDATES_WHILE_BACKLOGGED.load()
                    << "; consecutive accepted blocks after recovery=" << consecutive_accepted_blocks;
     }
@@ -1632,8 +1631,8 @@ class TestConsensus : public td::actor::Actor {
     LOG(WARNING) << "PQ finality carrier: compared " << compared
                  << " signature(s) byte-for-byte across journal, FinalCert, #13 carrier, database round trip and "
                     "BlockProof; carrier-missing count=0; longest consecutive accepted run="
-                 << consecutive_accepted_blocks << "; independently verified accepted proofs="
-                 << independently_verified_proofs;
+                 << consecutive_accepted_blocks
+                 << "; independently verified accepted proofs=" << independently_verified_proofs;
     pq_finality_completed_ = true;
     co_return td::Unit{};
   }
@@ -2515,9 +2514,8 @@ class TestConsensus : public td::actor::Actor {
 
 td::actor::Task<> TestManagerFacade::accept_block(BlockIdExt id, td::Ref<BlockData> data, size_t creator_idx,
                                                   td::Ref<block::BlockSignatureSet> signatures,
-                                                  ValidatorSessionId expected_session_id,
-                                                  int block_broadcast_mode, int finality_broadcast_mode,
-                                                  bool send_shard_block_desc, bool apply) {
+                                                  ValidatorSessionId expected_session_id, int block_broadcast_mode,
+                                                  int finality_broadcast_mode, bool send_shard_block_desc, bool apply) {
   if (signatures->is_pq() && signatures->pq_session_id().move_as_ok() != expected_session_id) {
     co_return td::Status::Error("manager facade received a PQ carrier for an unexpected session");
   }
@@ -2551,7 +2549,7 @@ td::actor::Task<> TestManagerFacade::accept_block(BlockIdExt id, td::Ref<BlockDa
     tampered_id.id.seqno++;
     CHECK(decoded_signatures
               ->check_pq_signatures_under_carried_session_for_test(validator_set_, tampered_id,
-                                                                    block::FinalityRole::Final)
+                                                                   block::FinalityRole::Final)
               .is_error());
 
     auto tampered_signature_tl = signatures->tl();

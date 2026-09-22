@@ -1,7 +1,8 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
-#include "mldsa44.h"
 #include <atomic>
 #include <cstdint>
+
+#include "mldsa44.h"
 #include "mldsa_native.h"
 
 namespace tos::pq {

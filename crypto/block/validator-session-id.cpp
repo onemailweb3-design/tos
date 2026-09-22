@@ -23,14 +23,14 @@ td::Bits256 validator_session_options_hash(const tos::ValidatorSessionConfig& co
     }
     return tos::create_hash_tl_object<tos::tos_api::validatorSession_configNew>(
         catchain.idle_timeout, catchain.max_deps, config.round_candidates, config.next_candidate_delay,
-        config.round_attempt_duration, config.max_round_attempts, config.max_block_size,
-        config.max_collated_data_size, config.new_catchain_ids);
+        config.round_attempt_duration, config.max_round_attempts, config.max_block_size, config.max_collated_data_size,
+        config.new_catchain_ids);
   }
   if (config.proto_version == 1) {
     return tos::create_hash_tl_object<tos::tos_api::validatorSession_configVersioned>(
         catchain.idle_timeout, catchain.max_deps, config.round_candidates, config.next_candidate_delay,
-        config.round_attempt_duration, config.max_round_attempts, config.max_block_size,
-        config.max_collated_data_size, config.proto_version);
+        config.round_attempt_duration, config.max_round_attempts, config.max_block_size, config.max_collated_data_size,
+        config.proto_version);
   }
   return tos::create_hash_tl_object<tos::tos_api::validatorSession_configVersionedV2>(
       tos::create_tl_object<tos::tos_api::validatorSession_catchainOptions>(
@@ -91,8 +91,8 @@ ValidatorSessionIdentity derive_validator_session_identity(
 
 ValidatorSessionIdentity derive_validator_session_identity(const ValidatorSessionIdentityInput& input) {
   return derive_validator_session_identity(
-      input.global_id, input.validator_options_hash, input.simplex_config_cell_hash, input.shard,
-      input.catchain_seqno, input.validators, input.vertical_seqno, input.last_key_block_seqno, input.new_catchain_ids);
+      input.global_id, input.validator_options_hash, input.simplex_config_cell_hash, input.shard, input.catchain_seqno,
+      input.validators, input.vertical_seqno, input.last_key_block_seqno, input.new_catchain_ids);
 }
 
 }  // namespace block

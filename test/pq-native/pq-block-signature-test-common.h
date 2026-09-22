@@ -41,8 +41,7 @@ inline tos::ConsensusKeyId key_id_of(const tos::pq::ConsensusPQKey& key) {
 }
 
 inline tos::BlockIdExt block_id(std::string_view label = "pq-finality") {
-  return {-1, 0x8000000000000000ULL, 42, hash_of(std::string(label) + "-root"),
-          hash_of(std::string(label) + "-file")};
+  return {-1, 0x8000000000000000ULL, 42, hash_of(std::string(label) + "-root"), hash_of(std::string(label) + "-file")};
 }
 
 inline tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData> candidate(
@@ -57,8 +56,7 @@ inline std::vector<block::PQBlockSignature> clone_pairs(const std::vector<block:
   std::vector<block::PQBlockSignature> result;
   result.reserve(signatures.size());
   for (const auto& signature : signatures) {
-    result.push_back(
-        {signature.validator_id, signature.algorithm_id, signature.signature.clone()});
+    result.push_back({signature.validator_id, signature.algorithm_id, signature.signature.clone()});
   }
   return result;
 }
@@ -96,12 +94,13 @@ struct Fixture {
 
   tos::ValidatorDescr descriptor(std::size_t index) const {
     const auto& key = stores.at(index).consensus_key();
-    return {validator_ids.at(index), static_cast<td::uint16>(key.algorithm_id), key_id_of(key), key.public_key,
-            weights.at(index), hash_of("pq-finality-adnl-" + std::to_string(index))};
+    return {validator_ids.at(index), static_cast<td::uint16>(key.algorithm_id),
+            key_id_of(key),          key.public_key,
+            weights.at(index),       hash_of("pq-finality-adnl-" + std::to_string(index))};
   }
 
   td::Ref<block::ValidatorSet> make_validator_set(std::vector<tos::ValidatorDescr> descriptors,
-                                                   tos::CatchainSeqno cc = catchain_seqno) const {
+                                                  tos::CatchainSeqno cc = catchain_seqno) const {
     return td::Ref<block::ValidatorSet>{true, cc, tos::ShardIdFull{tos::masterchainId}, std::move(descriptors)};
   }
 
@@ -109,8 +108,8 @@ struct Fixture {
                                             td::uint32 signed_slot,
                                             const tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData>& data,
                                             bool final, const tos::BlockIdExt& signed_block_id) {
-    auto message = block::BlockSignatureSet::build_simplex_data_to_sign(signed_session, signed_slot, data, final,
-                                                                        signed_block_id);
+    auto message =
+        block::BlockSignatureSet::build_simplex_data_to_sign(signed_session, signed_slot, data, final, signed_block_id);
     if (message.is_error()) {
       fail("PQ_BLOCK_SIGNATURE_FIXTURE_PREIMAGE_FAILED: " + message.error().message().str());
     }
@@ -141,8 +140,8 @@ struct Fixture {
       const std::vector<block::PQBlockSignature>& signatures, td::Bits256 carried_session, td::uint32 carried_slot,
       const tos::tl_object_ptr<tos::tos_api::consensus_CandidateHashData>& data, tos::ValidatorWeight claimed_weight,
       td::uint32 validator_hash, tos::CatchainSeqno cc_seqno, td::Ref<block::ValidatorSet> trusted_set) const {
-    TRY_RESULT(cell, block::BlockSignatureSet::serialize_simplex_pq(signatures, cc_seqno, validator_hash,
-                                                                    claimed_weight, carried_session, carried_slot, data));
+    TRY_RESULT(cell, block::BlockSignatureSet::serialize_simplex_pq(
+                         signatures, cc_seqno, validator_hash, claimed_weight, carried_session, carried_slot, data));
     return block::BlockSignatureSet::fetch(std::move(cell), std::move(trusted_set));
   }
 };

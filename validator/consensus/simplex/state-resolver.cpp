@@ -579,9 +579,8 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
       case Finalization::Finalized:
         co_return td::Unit{};
       case Finalization::StalledPermanently:
-        co_return td::Status::Error(ErrorCode::protoviolation,
-                                    PSTRING() << "Simplex state-resolver: slot " << id.slot
-                                              << " is permanently stalled");
+        co_return td::Status::Error(ErrorCode::protoviolation, PSTRING() << "Simplex state-resolver: slot " << id.slot
+                                                                         << " is permanently stalled");
       case Finalization::InFlight:
         // The attempt this waited on finished and another has already started. Fall through
         // to the re-read below, which attaches to whichever attempt is now running.
@@ -607,9 +606,8 @@ class StateResolverImpl : public td::actor::SpawnsWith<Bus>, public td::actor::C
         case Finalization::Idle:
           break;
         case Finalization::StalledPermanently:
-          co_return td::Status::Error(ErrorCode::protoviolation,
-                                      PSTRING() << "Simplex state-resolver: slot " << id.slot
-                                                << " is permanently stalled");
+          co_return td::Status::Error(ErrorCode::protoviolation, PSTRING() << "Simplex state-resolver: slot " << id.slot
+                                                                           << " is permanently stalled");
       }
     }
     // Every attempt is admitted, including a retry of one that failed transiently: an entry

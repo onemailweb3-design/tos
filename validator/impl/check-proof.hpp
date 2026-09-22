@@ -19,9 +19,9 @@
 */
 #pragma once
 
+#include "block/signature-set.h"
 #include "interfaces/block-handle.h"
 #include "interfaces/validator-manager.h"
-#include "block/signature-set.h"
 #include "td/actor/actor.h"
 
 namespace tos {

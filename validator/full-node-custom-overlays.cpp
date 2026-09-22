@@ -112,8 +112,8 @@ void FullNodeCustomOverlay::process_broadcast(PublicKeyHash src, tos_api::tosNod
   parsed_finality.received_bytes = received_bytes;
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in custom overlay \"" << name_ << "\" from " << src << ": "
                         << parsed_finality.block_id.to_str();
-  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(parsed_finality),
-                          src, BroadcastSource::custom_overlay, !block_senders_.contains(local_id_));
+  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(parsed_finality), src,
+                          BroadcastSource::custom_overlay, !block_senders_.contains(local_id_));
 }
 
 void FullNodeCustomOverlay::obtain_state_for_decompression(PublicKeyHash src,

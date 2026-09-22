@@ -880,8 +880,8 @@ void FullNodeShardImpl::process_broadcast(PublicKeyHash src, tos_api::tosNode_bl
   parsed_finality.received_bytes = received_bytes;
   VLOG(FULL_NODE_DEBUG) << "Received blockFinalityBroadcast in public overlay from " << src << ": "
                         << parsed_finality.block_id.to_str();
-  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(parsed_finality),
-                          src, BroadcastSource::public_overlay, false);
+  td::actor::send_closure(full_node_, &FullNode::process_block_finality_broadcast, std::move(parsed_finality), src,
+                          BroadcastSource::public_overlay, false);
 }
 
 void FullNodeShardImpl::process_block_broadcast(PublicKeyHash src, tos_api::tosNode_Broadcast &query) {

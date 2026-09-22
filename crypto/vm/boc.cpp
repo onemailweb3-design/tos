@@ -1099,8 +1099,7 @@ namespace {
 // scratch buffer of size `chunk_bytes_`, regardless of direction.
 class StreamingFileReader {
  public:
-  StreamingFileReader(td::FileFd& file, td::uint64 file_size, td::uint64 chunk_bytes,
-                      StreamingBocImportStats* stats)
+  StreamingFileReader(td::FileFd& file, td::uint64 file_size, td::uint64 chunk_bytes, StreamingBocImportStats* stats)
       : file_(&file), file_size_(file_size), chunk_bytes_(chunk_bytes), stats_(stats) {
   }
 

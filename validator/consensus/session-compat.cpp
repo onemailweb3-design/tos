@@ -18,8 +18,9 @@
     Copyright 2025-2026 TOS Blockchain Teams
 */
 
-#include "session-compat.h"
 #include "block/validator-session-id.h"
+
+#include "session-compat.h"
 
 namespace tos::validator::consensus {
 

@@ -424,7 +424,7 @@ class ValidatorManagerInterface : public td::actor::Actor {
     co_return td::Unit{};
   }
   virtual td::actor::Task<> new_block_finality_broadcast(BlockFinalityBroadcast finality, BroadcastSource source,
-                                                          td::optional<PublicKeyHash> source_peer = {}) {
+                                                         td::optional<PublicKeyHash> source_peer = {}) {
     co_return td::Unit{};
   }
 

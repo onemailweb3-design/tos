@@ -82,8 +82,7 @@ inline constexpr double pending_finality_initial_retry_seconds = 0.5;
 inline constexpr double pending_finality_max_retry_seconds = 8.0;
 inline constexpr double pending_finality_no_expiry = std::numeric_limits<double>::max();
 
-constexpr PendingFinalityFailureAction pending_finality_failure_action(int error_code, double now,
-                                                                       double expires_at) {
+constexpr PendingFinalityFailureAction pending_finality_failure_action(int error_code, double now, double expires_at) {
   if (error_code != ErrorCode::notready && error_code != ErrorCode::timeout) {
     return PendingFinalityFailureAction::DiscardPermanent;
   }
@@ -234,8 +233,8 @@ class PendingFinalityCandidates {
         cached_is_final = cached_is_final || entry.is_final;
       }
     }
-    auto action = pending_finality_admission(!entries_.empty(), cached_is_verified, cached_is_final, verified,
-                                             is_final);
+    auto action =
+        pending_finality_admission(!entries_.empty(), cached_is_verified, cached_is_final, verified, is_final);
     if (processing_ && action == PendingFinalityAdmission::Replace) {
       action = PendingFinalityAdmission::Append;
     }
@@ -243,8 +242,7 @@ class PendingFinalityCandidates {
   }
 
   PendingFinalityAdmission admit(Evidence evidence, Sender sender, std::size_t accounted_bytes,
-                                  PendingFinalityCapacity capacity, bool verified, bool is_final,
-                                  double expires_at) {
+                                 PendingFinalityCapacity capacity, bool verified, bool is_final, double expires_at) {
     auto action = admission(verified, is_final);
     if (action == PendingFinalityAdmission::Keep) {
       return action;
@@ -333,9 +331,9 @@ class PendingFinalityCandidates {
   std::size_t erase_expired(double now) {
     auto old_size = entries_.size();
     bool processing_front_expired = processing_ && !entries_.empty() && entries_.front().expires_at <= now;
-    entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
-                                  [now](const Entry &entry) { return entry.expires_at <= now; }),
-                   entries_.end());
+    entries_.erase(
+        std::remove_if(entries_.begin(), entries_.end(), [now](const Entry &entry) { return entry.expires_at <= now; }),
+        entries_.end());
     if (processing_front_expired) {
       processing_ = false;
       processing_token_ = {};
@@ -407,8 +405,7 @@ class PendingFinalityStore {
                                        std::size_t serialized_bytes, PendingFinalityCapacity capacity, bool verified,
                                        bool is_final, double expires_at) {
     auto it = entries_.find(block);
-    auto action = it == entries_.end() ? PendingFinalityAdmission::Replace
-                                       : it->second.admission(verified, is_final);
+    auto action = it == entries_.end() ? PendingFinalityAdmission::Replace : it->second.admission(verified, is_final);
     if (action == PendingFinalityAdmission::Keep) {
       return {action, PendingFinalityRejection::Policy};
     }
@@ -417,12 +414,10 @@ class PendingFinalityStore {
     }
 
     const auto charge = std::max(serialized_bytes, pending_finality_minimum_charge_bytes);
-    const auto removed_sender = action == PendingFinalityAdmission::Replace && it != entries_.end()
-                                    ? it->second.accounted_bytes(sender)
-                                    : 0;
-    const auto removed_capacity = action == PendingFinalityAdmission::Replace && it != entries_.end()
-                                      ? it->second.accounted_bytes(capacity)
-                                      : 0;
+    const auto removed_sender =
+        action == PendingFinalityAdmission::Replace && it != entries_.end() ? it->second.accounted_bytes(sender) : 0;
+    const auto removed_capacity =
+        action == PendingFinalityAdmission::Replace && it != entries_.end() ? it->second.accounted_bytes(capacity) : 0;
     const auto block_sender_bytes = it == entries_.end() ? 0 : it->second.accounted_bytes(sender);
     if (pending_finality_exceeds_budget(block_sender_bytes, removed_sender, charge,
                                         pending_finality_sender_per_block_budget_bytes)) {
@@ -436,10 +431,9 @@ class PendingFinalityStore {
                                      ? pending_finality_validator_reserved_budget_bytes
                                      : pending_finality_public_budget_bytes;
     if (pending_finality_exceeds_budget(capacity_bytes(capacity), removed_capacity, charge, capacity_budget)) {
-      return {PendingFinalityAdmission::Keep,
-              capacity == PendingFinalityCapacity::ValidatorReserved
-                  ? PendingFinalityRejection::ValidatorReservedBudget
-                  : PendingFinalityRejection::SharedBudget};
+      return {PendingFinalityAdmission::Keep, capacity == PendingFinalityCapacity::ValidatorReserved
+                                                  ? PendingFinalityRejection::ValidatorReservedBudget
+                                                  : PendingFinalityRejection::SharedBudget};
     }
     if (it == entries_.end()) {
       if (next_queue_generation_ == std::numeric_limits<std::uint64_t>::max()) {

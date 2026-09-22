@@ -1,15 +1,15 @@
-#include <chrono>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <string>
 #include <vector>
 
+#include "block/mc-config.h"
 #include "validator/finality-cache-policy.h"
 #include "validator/full-node-serializer.hpp"
 #include "validator/pending-finality-ingress.h"
-#include "block/mc-config.h"
 
 #include "pq-block-signature-test-common.h"
 
@@ -27,20 +27,20 @@ constexpr auto NoExpiry = tos::validator::pending_finality_no_expiry;
 
 struct ProcessingResult {
   bool accepted{false};
-  std::vector<const block::BlockSignatureSet*> attempted;
+  std::vector<const block::BlockSignatureSet *> attempted;
 };
 
-ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::BlockSignatureSet>>& arrivals,
-                                             const block::PQFinalityVerificationContext& context) {
+ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::BlockSignatureSet>> &arrivals,
+                                             const block::PQFinalityVerificationContext &context) {
   tos::validator::PendingFinalityStore<int, int, td::Ref<block::BlockSignatureSet>> store;
   int sender = 0;
-  for (const auto& signature_set : arrivals) {
+  for (const auto &signature_set : arrivals) {
     auto serialized_bytes = serialize_tl_object(signature_set->tl(), true).size();
     if (!store.admit(0, sender++, signature_set, serialized_bytes, SharedCapacity, false, true, NoExpiry).admitted()) {
       return {};
     }
   }
-  auto* candidates = store.get_if_exists(0);
+  auto *candidates = store.get_if_exists(0);
   ProcessingResult result;
   while (auto candidate = candidates->begin_processing(0)) {
     result.attempted.push_back(candidate->evidence.get());
@@ -55,13 +55,23 @@ ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::Bl
 }
 
 block::ShardConfig make_split_shard_config(tos::CatchainSeqno catchain_seqno, tos::ShardIdFull &real_shard,
-                                            tos::ShardIdFull &deeper_shard) {
+                                           tos::ShardIdFull &deeper_shard) {
   auto make_leaf = [&](tos::ShardIdFull shard, unsigned seqno, const char *label) {
     auto root_hash = pq_block_signature_test::hash_of(std::string(label) + "-root");
     auto file_hash = pq_block_signature_test::hash_of(std::string(label) + "-file");
-    td::Ref<block::McShardHash> descriptor{
-        true, tos::BlockId{shard, seqno}, 1, 2, 1, root_hash, file_hash, block::CurrencyCollection{},
-        block::CurrencyCollection{}, 1, 1, catchain_seqno, shard.shard};
+    td::Ref<block::McShardHash> descriptor{true,
+                                           tos::BlockId{shard, seqno},
+                                           1,
+                                           2,
+                                           1,
+                                           root_hash,
+                                           file_hash,
+                                           block::CurrencyCollection{},
+                                           block::CurrencyCollection{},
+                                           1,
+                                           1,
+                                           catchain_seqno,
+                                           shard.shard};
     vm::CellBuilder builder;
     td::Ref<vm::Cell> leaf;
     if (!builder.store_bool_bool(false) || !descriptor->pack(builder) || !builder.finalize_to(leaf)) {
@@ -97,10 +107,8 @@ block::ShardConfig make_split_shard_config(tos::CatchainSeqno catchain_seqno, to
 int main() {
   constexpr std::array ingress_rejection_names{
       std::pair{tos::validator::PendingFinalityIngressRejection::None, "none"},
-      std::pair{tos::validator::PendingFinalityIngressRejection::MissingRemoteByteCount,
-                "missing_remote_byte_count"},
-      std::pair{tos::validator::PendingFinalityIngressRejection::MissingLocalMeasurement,
-                "missing_local_measurement"},
+      std::pair{tos::validator::PendingFinalityIngressRejection::MissingRemoteByteCount, "missing_remote_byte_count"},
+      std::pair{tos::validator::PendingFinalityIngressRejection::MissingLocalMeasurement, "missing_local_measurement"},
   };
   for (const auto &[rejection, expected] : ingress_rejection_names) {
     if (std::string_view{tos::validator::pending_finality_ingress_rejection_name(rejection)} != expected) {
@@ -128,13 +136,14 @@ int main() {
     return 1;
   }
   if (!tos::validator::pending_finality_exceeds_budget(0, std::numeric_limits<std::size_t>::max(), 0, 10)) {
-    std::cerr << "PENDING_FINALITY_BUDGET_ARITHMETIC_FAILURE: removed bytes exceeded current accounting without rejection\n";
+    std::cerr
+        << "PENDING_FINALITY_BUDGET_ARITHMETIC_FAILURE: removed bytes exceeded current accounting without rejection\n";
     return 1;
   }
 
   tos::validator::PendingFinalityStore<int, int, int> permanent_failure;
   permanent_failure.admit(0, 0, 7, 4096, SharedCapacity, false, true, NoExpiry);
-  auto* permanent_candidates = permanent_failure.get_if_exists(0);
+  auto *permanent_candidates = permanent_failure.get_if_exists(0);
   auto permanent_attempt = permanent_candidates->begin_processing(0);
   if (!permanent_attempt ||
       permanent_candidates->resolve_front_failure(permanent_attempt.token, tos::ErrorCode::protoviolation, 0).action !=
@@ -145,9 +154,8 @@ int main() {
   }
 
   tos::validator::PendingFinalityStore<int, int, int> expired_failure;
-  expired_failure.admit(0, 0, 7, 4096, SharedCapacity, false, true,
-                        tos::validator::pending_finality_retention_seconds);
-  auto* expired_candidates = expired_failure.get_if_exists(0);
+  expired_failure.admit(0, 0, 7, 4096, SharedCapacity, false, true, tos::validator::pending_finality_retention_seconds);
+  auto *expired_candidates = expired_failure.get_if_exists(0);
   double retry_time = 0;
   while (retry_time < tos::validator::pending_finality_retention_seconds) {
     auto attempt = expired_candidates->begin_processing(retry_time);
@@ -197,8 +205,7 @@ int main() {
       }
     } else {
       candidates->resolve_front_failure(attempt_a.token, tos::ErrorCode::protoviolation, 1);
-      stale_ignored = candidates->size() == 1 && candidates->is_processing(attempt_b.token) &&
-                      attempt_b->evidence == 2;
+      stale_ignored = candidates->size() == 1 && candidates->is_processing(attempt_b.token) && attempt_b->evidence == 2;
       if (!stale_ignored) {
         std::cerr << "PENDING_FINALITY_STALE_ATTEMPT_PERMANENT_FAILURE: A's late permanent error removed candidate B\n";
       }
@@ -244,17 +251,17 @@ int main() {
       const bool marked = second_queue->mark_front_verified(attempt_a.token);
       const bool completed = second_queue->complete_front(attempt_a.token, true);
       stale_ignored = !marked && !completed && second_queue->size() == 1 &&
-                      second_queue->is_processing(attempt_b.token) && !attempt_b->verified &&
-                      attempt_b->evidence == 2;
+                      second_queue->is_processing(attempt_b.token) && !attempt_b->verified && attempt_b->evidence == 2;
       if (!stale_ignored) {
         std::cerr << "PENDING_FINALITY_QUEUE_REUSE_SUCCESS_FAILURE: Q1's late success mutated Q2 candidate B\n";
       }
     } else {
       second_queue->resolve_front_failure(attempt_a.token, tos::ErrorCode::protoviolation, 1);
-      stale_ignored = second_queue->size() == 1 && second_queue->is_processing(attempt_b.token) &&
-                      attempt_b->evidence == 2;
+      stale_ignored =
+          second_queue->size() == 1 && second_queue->is_processing(attempt_b.token) && attempt_b->evidence == 2;
       if (!stale_ignored) {
-        std::cerr << "PENDING_FINALITY_QUEUE_REUSE_PERMANENT_FAILURE: Q1's late permanent error removed Q2 candidate B\n";
+        std::cerr
+            << "PENDING_FINALITY_QUEUE_REUSE_PERMANENT_FAILURE: Q1's late permanent error removed Q2 candidate B\n";
       }
     }
     if (!stale_ignored) {
@@ -286,8 +293,8 @@ int main() {
     return 1;
   }
   auto missing_local_measurement = tos::validator::prepare_pending_finality_ingress(nullptr, 0);
-  if (missing_local_measurement.admitted() || missing_local_measurement.rejection !=
-                                                    tos::validator::PendingFinalityIngressRejection::MissingLocalMeasurement) {
+  if (missing_local_measurement.admitted() ||
+      missing_local_measurement.rejection != tos::validator::PendingFinalityIngressRejection::MissingLocalMeasurement) {
     std::cerr << "PENDING_FINALITY_INGRESS_ACCOUNTING_FAILURE: local evidence without a measurement was admitted\n";
     return 1;
   }
@@ -307,14 +314,15 @@ int main() {
 
   tos::validator::PendingFinalityStore<int, int, int> sender_budget_check;
   if (!sender_budget_check
-           .admit(1, 7, 1, tos::validator::pending_finality_sender_per_block_budget_bytes, SharedCapacity, false,
-                  true, NoExpiry)
+           .admit(1, 7, 1, tos::validator::pending_finality_sender_per_block_budget_bytes, SharedCapacity, false, true,
+                  NoExpiry)
            .admitted() ||
       !sender_budget_check
-           .admit(2, 7, 2, tos::validator::pending_finality_sender_per_block_budget_bytes, SharedCapacity, false,
-                  true, NoExpiry)
+           .admit(2, 7, 2, tos::validator::pending_finality_sender_per_block_budget_bytes, SharedCapacity, false, true,
+                  NoExpiry)
            .admitted()) {
-    std::cerr << "PENDING_FINALITY_PER_BLOCK_SENDER_FAILURE: one sender could not retain maximum-size evidence for two blocks\n";
+    std::cerr << "PENDING_FINALITY_PER_BLOCK_SENDER_FAILURE: one sender could not retain maximum-size evidence for two "
+                 "blocks\n";
     return 1;
   }
   if (sender_budget_check
@@ -334,9 +342,9 @@ int main() {
     std::size_t admitted = 0;
     tos::validator::PendingFinalityRejection first_rejection = tos::validator::PendingFinalityRejection::None;
     for (std::size_t block = 0; block <= tos::validator::pending_finality_max_validator_senders; ++block) {
-      auto result = store.admit(static_cast<int>(block), flooding_sender, static_cast<int>(block),
-                                tos::validator::pending_finality_sender_per_block_budget_bytes, capacity, false,
-                                true, NoExpiry);
+      auto result =
+          store.admit(static_cast<int>(block), flooding_sender, static_cast<int>(block),
+                      tos::validator::pending_finality_sender_per_block_budget_bytes, capacity, false, true, NoExpiry);
       if (!result.admitted()) {
         first_rejection = result.rejection;
         break;
@@ -348,16 +356,15 @@ int main() {
     if (admitted != tos::validator::pending_finality_sender_global_carrier_shares ||
         first_rejection != tos::validator::PendingFinalityRejection::SenderBudget ||
         store.sender_bytes(flooding_sender) != tos::validator::pending_finality_sender_global_budget_bytes) {
-      std::cerr << "PENDING_FINALITY_GLOBAL_SENDER_BUDGET_FAILURE: " << pool_name
-                << " sender admitted=" << admitted
+      std::cerr << "PENDING_FINALITY_GLOBAL_SENDER_BUDGET_FAILURE: " << pool_name << " sender admitted=" << admitted
                 << " rejection=" << tos::validator::pending_finality_rejection_name(first_rejection)
                 << " held=" << store.sender_bytes(flooding_sender)
                 << " expected_slots=" << tos::validator::pending_finality_sender_global_carrier_shares << "\n";
       ok = false;
     }
-    auto honest = store.admit(10000, honest_sender, 10000,
-                              tos::validator::pending_finality_sender_per_block_budget_bytes, capacity, false, true,
-                              NoExpiry);
+    auto honest =
+        store.admit(10000, honest_sender, 10000, tos::validator::pending_finality_sender_per_block_budget_bytes,
+                    capacity, false, true, NoExpiry);
     if (!honest.admitted()) {
       std::cerr << "PENDING_FINALITY_POOL_MONOPOLY_FAILURE: " << pool_name
                 << " sender prevented honest sender after reaching its global share; rejection="
@@ -400,7 +407,8 @@ int main() {
            .admit(2000, 2000, 1, tos::validator::pending_finality_sender_per_block_budget_bytes, ValidatorCapacity,
                   false, true, NoExpiry)
            .admitted()) {
-    std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: non-validator peers exhausted validator reserved capacity\n";
+    std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: non-validator peers exhausted validator reserved "
+                 "capacity\n";
     return 1;
   }
   tos::validator::PendingFinalityStore<int, int, int> reserved_budget_check;
@@ -443,13 +451,14 @@ int main() {
     return std::vector<tos::validator::PendingFinalityAuthoritySet>{
         {validator_set_hash, {validator_peer}, fixture.validator_set}};
   };
-  const auto &classical_sets = classical_authority_memo.get(
-      {fixture.id.shard_full(), current_catchain_seqno}, classical_loader);
+  const auto &classical_sets =
+      classical_authority_memo.get({fixture.id.shard_full(), current_catchain_seqno}, classical_loader);
   if (classical_sets.size() != 1 || classical_sets.front().validator_set != fixture.validator_set ||
       !classical_authority_memo.contains({fixture.id.shard_full(), current_catchain_seqno}, validator_set_hash,
                                          validator_peer, classical_loader) ||
       classical_authority_computations != 1) {
-    std::cerr << "PENDING_FINALITY_CLASSICAL_MEMO_FAILURE: authority and classical verification did not share one validator-set computation\n";
+    std::cerr << "PENDING_FINALITY_CLASSICAL_MEMO_FAILURE: authority and classical verification did not share one "
+                 "validator-set computation\n";
     return 1;
   }
 
@@ -459,13 +468,14 @@ int main() {
   auto inherited_catchain_seqno = split_shards.get_shard_cc_seqno(deeper_shard);
   auto exact_deeper_shard = split_shards.get_shard_hash(deeper_shard, true);
   if (inherited_catchain_seqno != current_catchain_seqno || exact_deeper_shard.not_null()) {
-    std::cerr << "PENDING_FINALITY_SHARD_WINDOW_FIXTURE_FAILURE: deeper non-existent shard did not inherit only the containing shard's catchain coordinate\n";
+    std::cerr << "PENDING_FINALITY_SHARD_WINDOW_FIXTURE_FAILURE: deeper non-existent shard did not inherit only the "
+                 "containing shard's catchain coordinate\n";
     return 1;
   }
-  if (tos::validator::pending_finality_coordinate_is_admissible(exact_deeper_shard.not_null(),
-                                                                inherited_catchain_seqno,
+  if (tos::validator::pending_finality_coordinate_is_admissible(exact_deeper_shard.not_null(), inherited_catchain_seqno,
                                                                 current_catchain_seqno)) {
-    std::cerr << "PENDING_FINALITY_DEEP_SHARD_WINDOW_FAILURE: non-existent descendant shard reached validator-set computation\n";
+    std::cerr << "PENDING_FINALITY_DEEP_SHARD_WINDOW_FAILURE: non-existent descendant shard reached validator-set "
+                 "computation\n";
     return 1;
   }
   std::size_t authority_computations = 0;
@@ -476,8 +486,7 @@ int main() {
         authority_memo, fixture.id.shard_full(), current_catchain_seqno, claimed_catchain_seqno,
         claimed_validator_set_hash, validator_peer, [&] {
           ++authority_computations;
-          return std::vector<tos::validator::PendingFinalityAuthoritySet>{
-              {validator_set_hash, {validator_peer}, {}}};
+          return std::vector<tos::validator::PendingFinalityAuthoritySet>{{validator_set_hash, {validator_peer}, {}}};
         });
     if (classified != (i == 0)) {
       std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: attacker-controlled coordinates changed authority\n";
@@ -500,8 +509,7 @@ int main() {
           bounded_authority_memo, shard, current_catchain_seqno, current_catchain_seqno, validator_set_hash,
           validator_peer, [&] {
             ++bounded_authority_computations;
-            return std::vector<tos::validator::PendingFinalityAuthoritySet>{
-                {validator_set_hash, {validator_peer}, {}}};
+            return std::vector<tos::validator::PendingFinalityAuthoritySet>{{validator_set_hash, {validator_peer}, {}}};
           });
     }
   }
@@ -509,8 +517,8 @@ int main() {
       bounded_authority_memo.size() > tos::validator::pending_finality_authority_memo_max_entries) {
     std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_BOUND_FAILURE: cycled " << cycled_shard_count
               << " shard coordinates caused computations=" << bounded_authority_computations
-              << " entries=" << bounded_authority_memo.size() << " cap="
-              << tos::validator::pending_finality_authority_memo_max_entries << "\n";
+              << " entries=" << bounded_authority_memo.size()
+              << " cap=" << tos::validator::pending_finality_authority_memo_max_entries << "\n";
     return 1;
   }
   authority_memo.clear();
@@ -521,7 +529,8 @@ int main() {
         return std::vector<tos::validator::PendingFinalityAuthoritySet>{{validator_set_hash, {validator_peer}, {}}};
       });
   if (authority_computations != 3) {
-    std::cerr << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: trusted-state invalidation retained a stale classification\n";
+    std::cerr
+        << "PENDING_FINALITY_AUTHORITY_MEMO_FAILURE: trusted-state invalidation retained a stale classification\n";
     return 1;
   }
 
@@ -533,8 +542,7 @@ int main() {
     auto key_id = pq_block_signature_test::hash_of("classification-key-" + std::to_string(i));
     auto adnl = pq_block_signature_test::hash_of("classification-adnl-" + std::to_string(i));
     measured_set.list.emplace_back(tos::ValidatorId{identity}, 1, tos::ConsensusKeyId{key_id},
-                                   std::string(tos::pq::mldsa44_public_key_bytes, static_cast<char>(i)), 1, i,
-                                   adnl);
+                                   std::string(tos::pq::mldsa44_public_key_bytes, static_cast<char>(i)), 1, i, adnl);
   }
   measured_set.total_weight = measured_validator_count;
   block::CatchainValidatorsConfig measured_config(0, 0, 0, measured_validator_count);
@@ -542,15 +550,16 @@ int main() {
   std::size_t measured_outputs = 0;
   auto measurement_started = std::chrono::steady_clock::now();
   for (std::size_t i = 0; i < measurement_iterations; ++i) {
-    measured_outputs += block::Config::do_compute_validator_set(
-                            measured_config, tos::ShardIdFull{tos::basechainId, tos::shardIdAll}, measured_set,
-                            static_cast<tos::CatchainSeqno>(i))
-                            .size();
+    measured_outputs +=
+        block::Config::do_compute_validator_set(measured_config, tos::ShardIdFull{tos::basechainId, tos::shardIdAll},
+                                                measured_set, static_cast<tos::CatchainSeqno>(i))
+            .size();
   }
-  auto measurement_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-      std::chrono::steady_clock::now() - measurement_started);
+  auto measurement_elapsed =
+      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - measurement_started);
   if (measured_outputs != measured_validator_count * measurement_iterations) {
-    std::cerr << "PENDING_FINALITY_CLASSIFICATION_MEASUREMENT_FAILURE: validator-set computation returned the wrong size\n";
+    std::cerr
+        << "PENDING_FINALITY_CLASSIFICATION_MEASUREMENT_FAILURE: validator-set computation returned the wrong size\n";
     return 1;
   }
   auto measured_microseconds = measurement_elapsed.count() / measurement_iterations;
@@ -571,7 +580,8 @@ int main() {
   auto valid_transport_id = tos::validator::fullnode::block_finality_broadcast_transport_id({fixture.id, valid});
   auto invalid_transport_id = tos::validator::fullnode::block_finality_broadcast_transport_id({fixture.id, invalid});
   if (valid_transport_id == invalid_transport_id) {
-    std::cerr << "PENDING_FINALITY_TRANSPORT_DEDUP_FAILURE: invalid finality occupied the honest finality transport id\n";
+    std::cerr
+        << "PENDING_FINALITY_TRANSPORT_DEDUP_FAILURE: invalid finality occupied the honest finality transport id\n";
     return 1;
   }
   const block::PQFinalityVerificationContext context{fixture.validator_set, fixture.id, fixture.session};
@@ -588,10 +598,11 @@ int main() {
     }
   }
   if (!authority_reservation_gate
-           .admit(100, 100, valid, tos::validator::pending_finality_sender_per_block_budget_bytes,
-                  ValidatorCapacity, false, true, NoExpiry)
+           .admit(100, 100, valid, tos::validator::pending_finality_sender_per_block_budget_bytes, ValidatorCapacity,
+                  false, true, NoExpiry)
            .admitted()) {
-    std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: non-validator peers exhausted validator reserved capacity\n";
+    std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: non-validator peers exhausted validator reserved "
+                 "capacity\n";
     return 1;
   }
   auto reserved_candidate = authority_reservation_gate.get_if_exists(100)->begin_processing(0);
@@ -607,7 +618,7 @@ int main() {
     std::cerr << "PENDING_FINALITY_RETRY_FAILURE: valid certificate was not admitted\n";
     return 1;
   }
-  auto* retry_candidates = retry_then_accept.get_if_exists(0);
+  auto *retry_candidates = retry_then_accept.get_if_exists(0);
   auto first_retry_attempt = retry_candidates->begin_processing(0);
   if (!first_retry_attempt ||
       retry_candidates->resolve_front_failure(first_retry_attempt.token, tos::ErrorCode::notready, 0).action !=
@@ -650,7 +661,7 @@ int main() {
     return 1;
   }
   bool isolated_accepted = false;
-  auto* isolated_candidates = isolated_store.get_if_exists(0);
+  auto *isolated_candidates = isolated_store.get_if_exists(0);
   while (auto pending = isolated_candidates->begin_processing(0)) {
     bool accepted = block::verify_pq_finality(context, *pending->evidence, block::FinalityRole::Final).is_ok();
     isolated_candidates->complete_front(pending.token, accepted);
@@ -660,7 +671,8 @@ int main() {
     }
   }
   if (!isolated_accepted) {
-    std::cerr << "PENDING_FINALITY_SENDER_ISOLATION_FAILURE: honest finality was not accepted after Byzantine evidence\n";
+    std::cerr
+        << "PENDING_FINALITY_SENDER_ISOLATION_FAILURE: honest finality was not accepted after Byzantine evidence\n";
     return 1;
   }
   auto positive_control = block::verify_pq_finality(context, *valid, block::FinalityRole::Final);
@@ -696,30 +708,33 @@ int main() {
   std::cout << "PENDING_FINALITY_PERMANENT_OK: protocol violation was discarded without retry\n";
   std::cout << "PENDING_FINALITY_RETRY_DEADLINE_OK: transient evidence freed its slot after "
             << tos::validator::pending_finality_retention_seconds << " seconds\n";
-  std::cout << "PENDING_FINALITY_STALE_ATTEMPT_OK: late failure and success tokens could not mutate the replacement front\n";
-  std::cout << "PENDING_FINALITY_QUEUE_REUSE_OK: destroyed and recreated block queues use distinct attempt namespaces\n";
-  std::cout << "PENDING_FINALITY_INGRESS_OK: missing accounting fails closed and authenticated senders retain attribution\n";
+  std::cout
+      << "PENDING_FINALITY_STALE_ATTEMPT_OK: late failure and success tokens could not mutate the replacement front\n";
+  std::cout
+      << "PENDING_FINALITY_QUEUE_REUSE_OK: destroyed and recreated block queues use distinct attempt namespaces\n";
+  std::cout
+      << "PENDING_FINALITY_INGRESS_OK: missing accounting fails closed and authenticated senders retain attribution\n";
   std::cout << "PENDING_FINALITY_TRANSPORT_DEDUP_OK: evidence-distinct finalities have distinct transport ids\n";
-  std::cout << "PENDING_FINALITY_SENDER_ISOLATION_OK: four bad arrivals from one sender did not exclude another sender\n";
-  std::cout << "PENDING_FINALITY_BYTE_BUDGET_OK: total="
-            << tos::validator::pending_finality_total_budget_bytes
+  std::cout
+      << "PENDING_FINALITY_SENDER_ISOLATION_OK: four bad arrivals from one sender did not exclude another sender\n";
+  std::cout << "PENDING_FINALITY_BYTE_BUDGET_OK: total=" << tos::validator::pending_finality_total_budget_bytes
             << " public_shared=" << tos::validator::pending_finality_public_budget_bytes
             << " validator_reserved=" << tos::validator::pending_finality_validator_reserved_budget_bytes
             << " per_sender_per_block=" << tos::validator::pending_finality_sender_per_block_budget_bytes
             << " per_sender_global=" << tos::validator::pending_finality_sender_global_budget_bytes
-            << " minimum_charge=4096 validator_shares="
-            << tos::validator::pending_finality_max_validator_senders << "\n";
+            << " minimum_charge=4096 validator_shares=" << tos::validator::pending_finality_max_validator_senders
+            << "\n";
   std::cout << "PENDING_FINALITY_AUTHORITY_MEMO_OK: cycled_claims=64 computations=2 entries=2"
                " global_cycled_shards="
             << cycled_shard_count << " global_computations=" << bounded_authority_computations
-            << " global_entries=" << bounded_authority_memo.size() << " global_cap="
-            << tos::validator::pending_finality_authority_memo_max_entries << "\n";
-  std::cout << "PENDING_FINALITY_CLASSICAL_MEMO_OK: authority classification and classical verification share one computation\n";
+            << " global_entries=" << bounded_authority_memo.size()
+            << " global_cap=" << tos::validator::pending_finality_authority_memo_max_entries << "\n";
+  std::cout << "PENDING_FINALITY_CLASSICAL_MEMO_OK: authority classification and classical verification share one "
+               "computation\n";
   std::cout << "PENDING_FINALITY_DEEP_SHARD_WINDOW_OK: containing_cc_seqno=" << inherited_catchain_seqno
             << " exact_descendant=absent validator_set_computation=blocked\n";
   std::cout << "PENDING_FINALITY_CLASSIFICATION_COST: validators=400 average_us=" << measured_microseconds
-            << " copied_pq_key_bytes_per_set="
-            << measured_validator_count * tos::pq::mldsa44_public_key_bytes << " iterations=" << measurement_iterations
-            << "\n";
+            << " copied_pq_key_bytes_per_set=" << measured_validator_count * tos::pq::mldsa44_public_key_bytes
+            << " iterations=" << measurement_iterations << "\n";
   return 0;
 }

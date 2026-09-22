@@ -391,12 +391,11 @@ td::BufferSlice adnl_ext_round_trip(const td::BufferSlice& proof) {
     }
     td::Status listening_status = td::Status::Error("transport server did not report listening");
     scheduler.run_in_context([&] {
-      td::actor::send_closure(
-          server, &adnl::AdnlExtServer::wait_listening,
-          td::PromiseCreator::lambda([&](td::Result<td::Unit> result) {
-            listening_status = result.is_error() ? result.move_as_error() : td::Status::OK();
-            server_listening.store(true, std::memory_order_release);
-          }));
+      td::actor::send_closure(server, &adnl::AdnlExtServer::wait_listening,
+                              td::PromiseCreator::lambda([&](td::Result<td::Unit> result) {
+                                listening_status = result.is_error() ? result.move_as_error() : td::Status::OK();
+                                server_listening.store(true, std::memory_order_release);
+                              }));
     });
     deadline = td::Timestamp::in(10.0);
     while (!server_listening.load(std::memory_order_acquire)) {

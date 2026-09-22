@@ -64,26 +64,46 @@ struct VectorCase {
 };
 
 std::string reason_code(const std::string& reason) {
-  if (reason == "-") return "-";
-  if (reason == "pq signatures: duplicate validator_id") return "duplicate_validator_id";
-  if (reason == "pq signatures: unsupported algorithm") return "unsupported_algorithm";
-  if (reason.find("pq signatures: signature length") == 0) return "signature_length";
-  if (reason.find("pq signatures: noncanonical PQBytes") == 0) return "noncanonical_pqbytes";
-  if (reason == "pq signatures: dictionary index") return "dictionary_index";
-  if (reason == "pq signatures: dictionary missing entry") return "dictionary_missing_entry";
-  if (reason == "pq signatures: dictionary extra entry") return "dictionary_extra_entry";
-  if (reason == "pq candidate data: oversize") return "candidate_oversize";
-  if (reason == "pq candidate data: noncanonical chunk size") return "candidate_noncanonical_chunk";
-  if (reason == "pq candidate data: non-byte-aligned cell") return "candidate_non_byte_aligned";
-  if (reason == "pq candidate data: multiple continuation refs") return "candidate_multiple_refs";
-  if (reason == "pq candidate data: chain too long") return "candidate_chain_length";
-  if (reason == "pq candidate data: trailing empty cell") return "candidate_trailing_ref";
-  if (reason.find("pq candidate data: invalid TL") == 0) return "candidate_tl";
-  if (reason == "pq signatures: signer count exceeds maximum") return "signer_count";
-  if (reason == "pq signatures: unknown validator_id") return "unknown_validator_id";
-  if (reason == "pq signatures: validator algorithm mismatch") return "validator_algorithm_mismatch";
-  if (reason == "signature weight mismatch") return "weight_mismatch";
-  if (reason == "unsupported carrier for post-quantum validator set") return "unsupported_carrier";
+  if (reason == "-")
+    return "-";
+  if (reason == "pq signatures: duplicate validator_id")
+    return "duplicate_validator_id";
+  if (reason == "pq signatures: unsupported algorithm")
+    return "unsupported_algorithm";
+  if (reason.find("pq signatures: signature length") == 0)
+    return "signature_length";
+  if (reason.find("pq signatures: noncanonical PQBytes") == 0)
+    return "noncanonical_pqbytes";
+  if (reason == "pq signatures: dictionary index")
+    return "dictionary_index";
+  if (reason == "pq signatures: dictionary missing entry")
+    return "dictionary_missing_entry";
+  if (reason == "pq signatures: dictionary extra entry")
+    return "dictionary_extra_entry";
+  if (reason == "pq candidate data: oversize")
+    return "candidate_oversize";
+  if (reason == "pq candidate data: noncanonical chunk size")
+    return "candidate_noncanonical_chunk";
+  if (reason == "pq candidate data: non-byte-aligned cell")
+    return "candidate_non_byte_aligned";
+  if (reason == "pq candidate data: multiple continuation refs")
+    return "candidate_multiple_refs";
+  if (reason == "pq candidate data: chain too long")
+    return "candidate_chain_length";
+  if (reason == "pq candidate data: trailing empty cell")
+    return "candidate_trailing_ref";
+  if (reason.find("pq candidate data: invalid TL") == 0)
+    return "candidate_tl";
+  if (reason == "pq signatures: signer count exceeds maximum")
+    return "signer_count";
+  if (reason == "pq signatures: unknown validator_id")
+    return "unknown_validator_id";
+  if (reason == "pq signatures: validator algorithm mismatch")
+    return "validator_algorithm_mismatch";
+  if (reason == "signature weight mismatch")
+    return "weight_mismatch";
+  if (reason == "unsupported carrier for post-quantum validator set")
+    return "unsupported_carrier";
   fail("VECTOR_UNKNOWN_REASON reason=" + reason);
 }
 
@@ -270,8 +290,7 @@ td::Ref<block::ValidatorSet> trusted_validator_set(const std::vector<td::Bits256
     td::Bits256 key_id_bits;
     std::memcpy(key_id_bits.data(), derived->data(), derived->size());
     validators.emplace_back(tos::ValidatorId{validator_ids[i]}, algorithms[i], tos::ConsensusKeyId{key_id_bits},
-                            public_key, 1,
-                            hash_of("fixture-adnl-" + std::to_string(i)));
+                            public_key, 1, hash_of("fixture-adnl-" + std::to_string(i)));
   }
   return td::Ref<block::ValidatorSet>{true, catchain_seqno, tos::ShardIdFull{tos::masterchainId},
                                       std::move(validators)};
@@ -487,19 +506,19 @@ std::vector<VectorCase> make_cases() {
   auto known_signer = raw_pair(0);
   auto absent_signer = raw_pair(1);
   auto known_vset = trusted_validator_set({known_signer.validator_id}, {known_signer.algorithm});
-  cases.push_back(rejected_case(
-      "unknown-validator-id", "pq signatures: unknown validator_id",
-      raw_signature_set({{0, known_signer}, {1, absent_signer}}, 2, 1, canonical_candidate(),
-                        known_vset->get_validator_set_hash()),
-      2, {known_signer.validator_id}, {known_signer.algorithm}, true, known_vset->get_validator_set_hash()));
+  cases.push_back(rejected_case("unknown-validator-id", "pq signatures: unknown validator_id",
+                                raw_signature_set({{0, known_signer}, {1, absent_signer}}, 2, 1, canonical_candidate(),
+                                                  known_vset->get_validator_set_hash()),
+                                2, {known_signer.validator_id}, {known_signer.algorithm}, true,
+                                known_vset->get_validator_set_hash()));
 
   auto algorithm_mismatch_pair = raw_pair(0);
   auto algorithm_mismatch_vset = validator_set({algorithm_mismatch_pair.validator_id}, {2});
-  cases.push_back(rejected_case(
-      "validator-algorithm-mismatch", "pq signatures: validator algorithm mismatch",
-      raw_signature_set({{0, algorithm_mismatch_pair}}, 1, 1, canonical_candidate(),
-                        algorithm_mismatch_vset->get_validator_set_hash()),
-      1, {algorithm_mismatch_pair.validator_id}, {2}, true, algorithm_mismatch_vset->get_validator_set_hash()));
+  cases.push_back(rejected_case("validator-algorithm-mismatch", "pq signatures: validator algorithm mismatch",
+                                raw_signature_set({{0, algorithm_mismatch_pair}}, 1, 1, canonical_candidate(),
+                                                  algorithm_mismatch_vset->get_validator_set_hash()),
+                                1, {algorithm_mismatch_pair.validator_id}, {2}, true,
+                                algorithm_mismatch_vset->get_validator_set_hash()));
 
   auto old_id = hash_of("persisted-validator-0");
   cases.push_back(rejected_case("old-11-under-pq-vset", "unsupported carrier for post-quantum validator set",
@@ -569,7 +588,8 @@ void write_fixture(const std::vector<VectorCase>& cases) {
   output << "# Shared canonical post-quantum BlockSignatures vectors. Fields are tab-separated.\n";
   output << "# validator_ids and algorithm_ids describe the trusted set for vset-dependent rejects; otherwise they "
             "describe the pairs.\n";
-  output << "# case outcome reason_code reason boc_hex constructor validator_set_hash catchain_seqno sig_count validator_ids "
+  output << "# case outcome reason_code reason boc_hex constructor validator_set_hash catchain_seqno sig_count "
+            "validator_ids "
             "algorithm_ids session_id slot candidate_sha256\n";
   for (const auto& item : cases) {
     auto boc = vm::std_boc_serialize(item.root, 0);
@@ -577,11 +597,10 @@ void write_fixture(const std::vector<VectorCase>& cases) {
       fail("VECTOR_BOC_SERIALIZATION_FAILED case=" + item.name);
     }
     output << item.name << '\t' << (item.accept ? "accept" : "reject") << '\t' << reason_code(item.reason) << '\t'
-           << item.reason << '\t'
-           << td::hex_encode(boc.ok().as_slice()) << '\t' << item.constructor << '\t' << item.validator_hash << '\t'
-           << item.cc_seqno << '\t' << item.sig_count << '\t' << join_bits(item.validator_ids) << '\t'
-           << join_algorithms(item.algorithms) << '\t' << item.session.to_hex() << '\t' << item.candidate_slot << '\t'
-           << item.candidate_hash << '\n';
+           << item.reason << '\t' << td::hex_encode(boc.ok().as_slice()) << '\t' << item.constructor << '\t'
+           << item.validator_hash << '\t' << item.cc_seqno << '\t' << item.sig_count << '\t'
+           << join_bits(item.validator_ids) << '\t' << join_algorithms(item.algorithms) << '\t' << item.session.to_hex()
+           << '\t' << item.candidate_slot << '\t' << item.candidate_hash << '\n';
   }
 }
 
@@ -659,8 +678,7 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
         fail("VECTOR_REASON_MISMATCH case=" + row[0] + " expected=" + row[3] + " actual=" + actual);
       }
       if (reason_code(actual) != row[2]) {
-        fail("VECTOR_REASON_CODE_MISMATCH case=" + row[0] + " expected=" + row[2] +
-             " actual=" + reason_code(actual));
+        fail("VECTOR_REASON_CODE_MISMATCH case=" + row[0] + " expected=" + row[2] + " actual=" + reason_code(actual));
       }
       continue;
     }
@@ -683,16 +701,15 @@ void verify_fixture(const std::vector<VectorCase>& definitions) {
     }
     const auto ids = ids_of(parsed_signatures.ok());
     const auto algorithms = algorithms_of(parsed_signatures.ok());
-    if (join_bits(ids) != row[9] || join_algorithms(algorithms) != row[10] ||
-        parsed_session.ok().to_hex() != row[11] || parsed_slot.ok() != number(row[12], row[0]) ||
+    if (join_bits(ids) != row[9] || join_algorithms(algorithms) != row[10] || parsed_session.ok().to_hex() != row[11] ||
+        parsed_slot.ok() != number(row[12], row[0]) ||
         td::sha256_bits256(parsed_candidate.ok().as_slice()).to_hex() != row[13]) {
       fail("VECTOR_PARSED_CONTENT_MISMATCH case=" + row[0]);
     }
-    auto candidate_object = tos::fetch_tl_object<tos::tos_api::consensus_CandidateHashData>(
-        parsed_candidate.ok().as_slice(), true);
+    auto candidate_object =
+        tos::fetch_tl_object<tos::tos_api::consensus_CandidateHashData>(parsed_candidate.ok().as_slice(), true);
     if (candidate_object.is_error()) {
-      fail("VECTOR_CANDIDATE_REPARSE_FAILED case=" + row[0] +
-           " actual=" + candidate_object.error().message().str());
+      fail("VECTOR_CANDIDATE_REPARSE_FAILED case=" + row[0] + " actual=" + candidate_object.error().message().str());
     }
     auto reserialized = block::BlockSignatureSet::serialize_simplex_pq(
         parsed_signatures.ok(), item->cc_seqno, item->validator_hash, item->sig_count, parsed_session.ok(),

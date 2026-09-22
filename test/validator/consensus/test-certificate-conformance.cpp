@@ -275,7 +275,7 @@ void carrier_conversion(Fixture& f) {
   expect(approve_set->is_pq() && !approve_set->is_final(), "notar-cert-converted-to-pq-approve");
 
   auto wrong_candidate = td::make_ref<c::Candidate>(c::CandidateId{8, fill(0x91)}, f.candidate_data.parent,
-                                                     c::PeerValidatorId{0}, f.block_id, td::BufferSlice());
+                                                    c::PeerValidatorId{0}, f.block_id, td::BufferSlice());
   reject(final_cert->to_signature_set(wrong_candidate, f.bus), "conversion-vote-candidate-mismatch",
          "vote id does not match candidate id");
 

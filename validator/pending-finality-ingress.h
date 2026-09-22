@@ -76,15 +76,12 @@ inline PendingFinalityIngressDecision prepare_pending_finality_ingress(
       return {PendingBlockFinalitySender::remote(*source_peer), 0,
               PendingFinalityIngressRejection::MissingRemoteByteCount};
     }
-    return {PendingBlockFinalitySender::remote(*source_peer), received_bytes,
-            PendingFinalityIngressRejection::None};
+    return {PendingBlockFinalitySender::remote(*source_peer), received_bytes, PendingFinalityIngressRejection::None};
   }
   if (!local_signature_bytes) {
-    return {PendingBlockFinalitySender::local_source(), 0,
-            PendingFinalityIngressRejection::MissingLocalMeasurement};
+    return {PendingBlockFinalitySender::local_source(), 0, PendingFinalityIngressRejection::MissingLocalMeasurement};
   }
-  return {PendingBlockFinalitySender::local_source(), *local_signature_bytes,
-          PendingFinalityIngressRejection::None};
+  return {PendingBlockFinalitySender::local_source(), *local_signature_bytes, PendingFinalityIngressRejection::None};
 }
 
 // Only the transport identity carried by a descriptor in the exact validator
@@ -131,7 +128,7 @@ constexpr bool pending_finality_catchain_is_current_or_next(CatchainSeqno curren
 // must not use such a descendant as a fresh validator-set memo key. Require an
 // exact configured shard before any validator-set computation.
 constexpr bool pending_finality_coordinate_is_admissible(bool exact_configured_shard, CatchainSeqno current,
-                                                          CatchainSeqno claimed) {
+                                                         CatchainSeqno claimed) {
   return exact_configured_shard && pending_finality_catchain_is_current_or_next(current, claimed);
 }
 
@@ -187,8 +184,8 @@ class PendingFinalityAuthorityMemo {
     std::vector<PendingFinalityAuthoritySet> sets;
   };
 
-  static bool contains_peer(const std::vector<PendingFinalityAuthoritySet> &sets,
-                            td::uint32 claimed_validator_set_hash, const PublicKeyHash &peer) {
+  static bool contains_peer(const std::vector<PendingFinalityAuthoritySet> &sets, td::uint32 claimed_validator_set_hash,
+                            const PublicKeyHash &peer) {
     for (const auto &set : sets) {
       if (set.validator_set_hash == claimed_validator_set_hash) {
         for (const auto &root : set.roots) {
@@ -206,15 +203,13 @@ class PendingFinalityAuthorityMemo {
 
 template <class Loader>
 bool pending_finality_sender_is_validator(PendingFinalityAuthorityMemo &memo, ShardIdFull shard,
-                                          CatchainSeqno current_catchain_seqno,
-                                          CatchainSeqno claimed_catchain_seqno,
+                                          CatchainSeqno current_catchain_seqno, CatchainSeqno claimed_catchain_seqno,
                                           td::uint32 claimed_validator_set_hash, const PublicKeyHash &peer,
                                           Loader &&loader) {
   if (!pending_finality_catchain_is_current_or_next(current_catchain_seqno, claimed_catchain_seqno)) {
     return false;
   }
-  return memo.contains({shard, claimed_catchain_seqno}, claimed_validator_set_hash, peer,
-                       std::forward<Loader>(loader));
+  return memo.contains({shard, claimed_catchain_seqno}, claimed_validator_set_hash, peer, std::forward<Loader>(loader));
 }
 
 }  // namespace tos::validator

@@ -168,11 +168,10 @@ class FocusedConfigHolder final : public ConfigHolder {
 
 class FocusedMasterchainState final : public MasterchainState {
  public:
-  FocusedMasterchainState(BlockIdExt id, td::int32 global_id, BlockSeqno vertical_seqno,
-                          BlockIdExt last_key_block_id, td::Ref<block::ValidatorSet> validator_set,
-                          td::Ref<block::McShardHashI> shard_top, ValidatorSessionConfig session_config,
-                          SelectedNewConsensusConfig selected_config, std::vector<BlockIdExt> ancestors,
-                          td::optional<td::int32> config_global_id = {})
+  FocusedMasterchainState(BlockIdExt id, td::int32 global_id, BlockSeqno vertical_seqno, BlockIdExt last_key_block_id,
+                          td::Ref<block::ValidatorSet> validator_set, td::Ref<block::McShardHashI> shard_top,
+                          ValidatorSessionConfig session_config, SelectedNewConsensusConfig selected_config,
+                          std::vector<BlockIdExt> ancestors, td::optional<td::int32> config_global_id = {})
       : id_(std::move(id))
       , global_id_(global_id)
       , vertical_seqno_(vertical_seqno)
@@ -316,8 +315,8 @@ class FocusedMasterchainState final : public MasterchainState {
     return std::find(ancestors_.begin(), ancestors_.end(), block_id) != ancestors_.end();
   }
   td::Result<td::Ref<ConfigHolder>> get_config_holder() const override {
-    return td::Ref<FocusedConfigHolder>{true, global_id_, config_global_id_, validator_set_, session_config_,
-                                        selected_config_};
+    return td::Ref<FocusedConfigHolder>{true,           global_id_,      config_global_id_,
+                                        validator_set_, session_config_, selected_config_};
   }
   block::WorkchainSet get_workchain_list() const override {
     return {};
@@ -731,42 +730,62 @@ void run_proof_consumers() {
   auto shard_top = td::Ref<block::McShardHash>{true, shard_proof.previous_block_id, 41000, 41001};
   SelectedNewConsensusConfig selected_a{.config = {}, .cell_hash = hash_of("top-descr-param30-a")};
   SelectedNewConsensusConfig selected_b{.config = {}, .cell_hash = hash_of("top-descr-param30-b")};
-  auto governing_state = td::Ref<FocusedMasterchainState>{
-      true, shard_proof.governing_mc_block_id, -111, 0, shard_proof.governing_mc_block_id, shard_validator_set,
-      shard_top, session_options, selected_a, std::vector<BlockIdExt>{}};
-  auto current_state = td::Ref<FocusedMasterchainState>{
-      true, current_after_key_block, -111, 0, current_after_key_block, shard_validator_set, shard_top, session_options,
-      selected_b, std::vector<BlockIdExt>{shard_proof.governing_mc_block_id}};
-  auto mismatched_global_id_state = td::Ref<FocusedMasterchainState>{
-      true, shard_proof.governing_mc_block_id, -111, 0, shard_proof.governing_mc_block_id, shard_validator_set,
-      shard_top, session_options, selected_a, std::vector<BlockIdExt>{}, -112};
+  auto governing_state = td::Ref<FocusedMasterchainState>{true,
+                                                          shard_proof.governing_mc_block_id,
+                                                          -111,
+                                                          0,
+                                                          shard_proof.governing_mc_block_id,
+                                                          shard_validator_set,
+                                                          shard_top,
+                                                          session_options,
+                                                          selected_a,
+                                                          std::vector<BlockIdExt>{}};
+  auto current_state = td::Ref<FocusedMasterchainState>{true,
+                                                        current_after_key_block,
+                                                        -111,
+                                                        0,
+                                                        current_after_key_block,
+                                                        shard_validator_set,
+                                                        shard_top,
+                                                        session_options,
+                                                        selected_b,
+                                                        std::vector<BlockIdExt>{shard_proof.governing_mc_block_id}};
+  auto mismatched_global_id_state = td::Ref<FocusedMasterchainState>{true,
+                                                                     shard_proof.governing_mc_block_id,
+                                                                     -111,
+                                                                     0,
+                                                                     shard_proof.governing_mc_block_id,
+                                                                     shard_validator_set,
+                                                                     shard_top,
+                                                                     session_options,
+                                                                     selected_a,
+                                                                     std::vector<BlockIdExt>{},
+                                                                     -112};
 
   int res_flags = 0;
   require_ok(production_top->prevalidate(shard_proof.governing_mc_block_id, governing_state, governing_state,
-                                         ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
-                                         res_flags),
+                                         ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new, res_flags),
              "top-descr-validate-at-governing-state");
   res_flags = 0;
   require_ok(production_top->prevalidate(current_after_key_block, current_state, governing_state,
-                                         ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
-                                         res_flags),
+                                         ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new, res_flags),
              "top-descr-validate-after-key-block-with-governing-state");
   res_flags = 0;
-  expect_error(production_top->prevalidate(current_after_key_block, current_state, mismatched_global_id_state,
-                                           ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
-                                           res_flags),
-               "governing state global_id -111 disagrees with ConfigParam 19 global_id -112",
-               "top_descr_global_id_disagreement");
+  expect_error(
+      production_top->prevalidate(current_after_key_block, current_state, mismatched_global_id_state,
+                                  ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new, res_flags),
+      "governing state global_id -111 disagrees with ConfigParam 19 global_id -112",
+      "top_descr_global_id_disagreement");
   auto mismatched_config = require_ok(mismatched_global_id_state->get_config_holder(), "mismatched-config-holder");
   expect_error(derive_pq_finality_context(*mismatched_config, shard_validator_set, shard_proof.block_id, 0,
                                           shard_proof.governing_mc_block_id.seqno()),
                "governing state global_id -111 disagrees with ConfigParam 19 global_id -112",
                "config_holder_global_id_disagreement");
   res_flags = 0;
-  expect_error(production_top->prevalidate(current_after_key_block, current_state, current_state,
-                                           ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
-                                           res_flags),
-               "top block description governing state mismatch", "top_descr_current_state_is_not_governing");
+  expect_error(
+      production_top->prevalidate(current_after_key_block, current_state, current_state,
+                                  ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new, res_flags),
+      "top block description governing state mismatch", "top_descr_current_state_is_not_governing");
   auto top_envelope = require_ok(parse_top_block_descr_signature_envelope(top_loaded), "top-descr-envelope");
   if (top_envelope.block_id != shard_proof.block_id || top_envelope.signatures.is_null() ||
       top_envelope.signatures->get_catchain_seqno() != Fixture::catchain_seqno ||
@@ -789,10 +808,10 @@ void run_proof_consumers() {
   auto post_change_root = top_block_descr_cell(shard_proof.block_id, shard_signature_cell_b, shard_proof.proof);
   auto post_change_top = require_ok(ShardTopBlockDescrQ::fetch(post_change_root), "top-descr-post-change-fetch");
   res_flags = 0;
-  expect_error(post_change_top->prevalidate(current_after_key_block, current_state, governing_state,
-                                            ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
-                                            res_flags),
-               "carried session_id does not match trusted expected session_id", "top_descr_post_change_session");
+  expect_error(
+      post_change_top->prevalidate(current_after_key_block, current_state, governing_state,
+                                   ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new, res_flags),
+      "carried session_id does not match trusted expected session_id", "top_descr_post_change_session");
   std::fprintf(stderr, "PQ_TOP_BLOCK_DESCR_GOVERNING_SNAPSHOT_OK pre_change=accepted post_change=refused\n");
   std::fprintf(stderr, "PQ_BLOCK_PROOF_ROUNDTRIP_OK bytes=%zu\n", proof_boc.size());
   std::fprintf(stderr, "PQ_TOP_BLOCK_DESCR_ROUNDTRIP_OK bytes=%zu\n", top_boc.size());

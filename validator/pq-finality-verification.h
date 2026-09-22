@@ -13,10 +13,9 @@ namespace detail {
 inline td::Status check_governing_global_id(td::int32 header_global_id, const ConfigHolder& governing_config) {
   TRY_RESULT(config_global_id, governing_config.get_config_global_id());
   if (header_global_id != config_global_id) {
-    return td::Status::Error(
-        ErrorCode::protoviolation,
-        PSTRING() << "pq finality context: governing state global_id " << header_global_id
-                  << " disagrees with ConfigParam 19 global_id " << config_global_id);
+    return td::Status::Error(ErrorCode::protoviolation,
+                             PSTRING() << "pq finality context: governing state global_id " << header_global_id
+                                       << " disagrees with ConfigParam 19 global_id " << config_global_id);
   }
   return td::Status::OK();
 }
@@ -36,9 +35,8 @@ inline td::Result<block::PQFinalityVerificationContext> derive_pq_finality_conte
   }
   auto identity = block::derive_validator_session_identity(
       global_id, block::validator_session_options_hash(session_config), selected_config.value().cell_hash,
-      block_id.shard_full(),
-      validator_set->get_catchain_seqno(), validator_set->export_vector(), vertical_seqno, previous_key_block_seqno,
-      session_config.new_catchain_ids);
+      block_id.shard_full(), validator_set->get_catchain_seqno(), validator_set->export_vector(), vertical_seqno,
+      previous_key_block_seqno, session_config.new_catchain_ids);
   return block::PQFinalityVerificationContext{std::move(validator_set), block_id, identity.session_id};
 }
 
@@ -65,9 +63,9 @@ inline td::Result<block::PQFinalityVerificationContext> derive_pq_finality_conte
                                             previous_key_block_seqno);
 }
 
-inline td::Result<ValidatorWeight> verify_pq_proof_signatures(
-    const block::PQFinalityVerificationContext& context, const block::BlockSignatureSet& signatures,
-    ValidatorWeight claimed_weight) {
+inline td::Result<ValidatorWeight> verify_pq_proof_signatures(const block::PQFinalityVerificationContext& context,
+                                                              const block::BlockSignatureSet& signatures,
+                                                              ValidatorWeight claimed_weight) {
   TRY_RESULT(verified_weight, block::verify_pq_finality(context, signatures, block::FinalityRole::Final));
   if (verified_weight != claimed_weight) {
     return td::Status::Error(ErrorCode::protoviolation, PSTRING() << "bad signature set weight: expected "

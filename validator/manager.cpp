@@ -721,8 +721,8 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
     }
   }
   if (!finality.sig_set->is_pq()) {
-    auto status = co_await check_finality_signatures(finality.block_id, finality.sig_set, std::move(validator_sets))
-                      .wrap();
+    auto status =
+        co_await check_finality_signatures(finality.block_id, finality.sig_set, std::move(validator_sets)).wrap();
     if (status.is_error()) {
       VLOG(VALIDATOR_WARNING) << "dropping block finality broadcast: " << status.move_as_error();
       co_return td::Unit{};
@@ -771,8 +771,8 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
   // attacker-selected real shard ids; current/next being the only legitimate
   // coordinates per shard keeps the honest-path working set small. The memo is
   // reset above when the trusted masterchain state changes.
-  const auto capacity = validator_capacity ? PendingFinalityCapacity::ValidatorReserved
-                                           : PendingFinalityCapacity::Shared;
+  const auto capacity =
+      validator_capacity ? PendingFinalityCapacity::ValidatorReserved : PendingFinalityCapacity::Shared;
   auto admission_time = td::Time::now();
   pending_block_finality_.erase_expired(admission_time);
   auto expires_at = admission_time + pending_finality_retention_seconds;
@@ -998,10 +998,9 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
   }
   const auto attempt_token = finality.token;
   td::Result<td::BufferSlice> proof =
-      block_id.is_masterchain()
-          ? WaitBlockData::generate_proof(block_id, block.ok()->root_cell(), finality->evidence.sig_set,
-                                          last_masterchain_state_)
-          : WaitBlockData::generate_proof_link(block_id, block.ok()->root_cell());
+      block_id.is_masterchain() ? WaitBlockData::generate_proof(block_id, block.ok()->root_cell(),
+                                                                finality->evidence.sig_set, last_masterchain_state_)
+                                : WaitBlockData::generate_proof_link(block_id, block.ok()->root_cell());
   if (proof.is_error()) {
     auto error = proof.move_as_error();
     if (error.code() == ErrorCode::notready || error.code() == ErrorCode::timeout) {
@@ -1037,12 +1036,12 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
         });
     return;
   }
-  new_block_broadcast(std::move(broadcast), signatures_checked, finality_source,
-                      [SelfId = actor_id(this), block_id, was_final,
-                       attempt_token](td::Result<td::Unit> result) mutable {
-                        td::actor::send_closure(SelfId, &ValidatorManagerImpl::processed_pending_block_finality,
-                                                block_id, was_final, attempt_token, std::move(result));
-                      });
+  new_block_broadcast(
+      std::move(broadcast), signatures_checked, finality_source,
+      [SelfId = actor_id(this), block_id, was_final, attempt_token](td::Result<td::Unit> result) mutable {
+        td::actor::send_closure(SelfId, &ValidatorManagerImpl::processed_pending_block_finality, block_id, was_final,
+                                attempt_token, std::move(result));
+      });
 }
 
 void ValidatorManagerImpl::schedule_pending_block_finality_retry(BlockIdExt block_id, double retry_at) {
@@ -1066,8 +1065,7 @@ void ValidatorManagerImpl::expire_pending_block_finality(BlockIdExt block_id) {
   }
 }
 
-void ValidatorManagerImpl::failed_pending_block_finality(BlockIdExt block_id,
-                                                         PendingFinalityAttemptToken attempt_token,
+void ValidatorManagerImpl::failed_pending_block_finality(BlockIdExt block_id, PendingFinalityAttemptToken attempt_token,
                                                          td::Status error, td::Slice operation) {
   auto pending = pending_block_finality_.get_if_exists(block_id);
   if (pending == nullptr || !pending->is_processing(attempt_token)) {
@@ -1092,9 +1090,9 @@ void ValidatorManagerImpl::failed_pending_block_finality(BlockIdExt block_id,
 }
 
 void ValidatorManagerImpl::checked_pending_block_finality(BlockIdExt block_id, BlockBroadcast broadcast,
-                                                           BroadcastSource source, bool was_final,
-                                                           PendingFinalityAttemptToken attempt_token,
-                                                           td::Result<td::Unit> result) {
+                                                          BroadcastSource source, bool was_final,
+                                                          PendingFinalityAttemptToken attempt_token,
+                                                          td::Result<td::Unit> result) {
   auto pending = pending_block_finality_.get_if_exists(block_id);
   if (pending == nullptr || !pending->is_processing(attempt_token)) {
     return;
@@ -1106,17 +1104,17 @@ void ValidatorManagerImpl::checked_pending_block_finality(BlockIdExt block_id, B
   if (!pending->mark_front_verified(attempt_token)) {
     return;
   }
-  new_block_broadcast(std::move(broadcast), true, source,
-                      [SelfId = actor_id(this), block_id, was_final,
-                       attempt_token](td::Result<td::Unit> apply_result) mutable {
-                        td::actor::send_closure(SelfId, &ValidatorManagerImpl::processed_pending_block_finality,
-                                                block_id, was_final, attempt_token, std::move(apply_result));
-                      });
+  new_block_broadcast(
+      std::move(broadcast), true, source,
+      [SelfId = actor_id(this), block_id, was_final, attempt_token](td::Result<td::Unit> apply_result) mutable {
+        td::actor::send_closure(SelfId, &ValidatorManagerImpl::processed_pending_block_finality, block_id, was_final,
+                                attempt_token, std::move(apply_result));
+      });
 }
 
 void ValidatorManagerImpl::processed_pending_block_finality(BlockIdExt block_id, bool was_final,
-                                                             PendingFinalityAttemptToken attempt_token,
-                                                             td::Result<td::Unit> result) {
+                                                            PendingFinalityAttemptToken attempt_token,
+                                                            td::Result<td::Unit> result) {
   auto pending = pending_block_finality_.get_if_exists(block_id);
   if (pending == nullptr || !pending->is_processing(attempt_token)) {
     return;
@@ -3262,17 +3260,19 @@ void ValidatorManagerImpl::update_shards() {
           continue;
         }
         ++(shard.is_masterchain() ? active_validator_groups_master_ : active_validator_groups_shard_);
-        auto val_group_id = block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
-                                .global_id = global_id,
-                                .validator_options_hash = opts_hash,
-                                .simplex_config_cell_hash = selected_config.value().cell_hash,
-                                .shard = shard,
-                                .catchain_seqno = val_set->get_catchain_seqno(),
-                                .validators = val_set->export_vector(),
-                                .vertical_seqno = opts_->get_maximal_vertical_seqno(),
-                                .last_key_block_seqno = key_seqno,
-                                .new_catchain_ids = opts.new_catchain_ids,
-                            }).session_id;
+        auto val_group_id =
+            block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
+                                                         .global_id = global_id,
+                                                         .validator_options_hash = opts_hash,
+                                                         .simplex_config_cell_hash = selected_config.value().cell_hash,
+                                                         .shard = shard,
+                                                         .catchain_seqno = val_set->get_catchain_seqno(),
+                                                         .validators = val_set->export_vector(),
+                                                         .vertical_seqno = opts_->get_maximal_vertical_seqno(),
+                                                         .last_key_block_seqno = key_seqno,
+                                                         .new_catchain_ids = opts.new_catchain_ids,
+                                                     })
+                .session_id;
         if (destroyed_validator_sessions_.contains(val_group_id)) {
           continue;
         }
@@ -3341,17 +3341,19 @@ void ValidatorManagerImpl::update_shards() {
                    << ": consensus config is missing or its protocol version is not supported by this build";
         continue;
       }
-      auto val_group_id = block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
-                              .global_id = global_id,
-                              .validator_options_hash = opts_hash,
-                              .simplex_config_cell_hash = selected_config.value().cell_hash,
-                              .shard = shard,
-                              .catchain_seqno = val_set->get_catchain_seqno(),
-                              .validators = val_set->export_vector(),
-                              .vertical_seqno = opts_->get_maximal_vertical_seqno(),
-                              .last_key_block_seqno = key_seqno,
-                              .new_catchain_ids = opts.new_catchain_ids,
-                          }).session_id;
+      auto val_group_id =
+          block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
+                                                       .global_id = global_id,
+                                                       .validator_options_hash = opts_hash,
+                                                       .simplex_config_cell_hash = selected_config.value().cell_hash,
+                                                       .shard = shard,
+                                                       .catchain_seqno = val_set->get_catchain_seqno(),
+                                                       .validators = val_set->export_vector(),
+                                                       .vertical_seqno = opts_->get_maximal_vertical_seqno(),
+                                                       .last_key_block_seqno = key_seqno,
+                                                       .new_catchain_ids = opts.new_catchain_ids,
+                                                   })
+              .session_id;
       if (destroyed_validator_sessions_.contains(val_group_id)) {
         continue;
       }
@@ -3387,17 +3389,19 @@ void ValidatorManagerImpl::update_shards() {
         LOG(ERROR) << "refusing to create observer groups for " << shard.to_str() << ": " << usable.move_as_error();
         continue;
       }
-      auto session_id = block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
-                            .global_id = global_id,
-                            .validator_options_hash = opts_hash,
-                            .simplex_config_cell_hash = selected_config.value().cell_hash,
-                            .shard = shard,
-                            .catchain_seqno = val_set->get_catchain_seqno(),
-                            .validators = val_set->export_vector(),
-                            .vertical_seqno = opts_->get_maximal_vertical_seqno(),
-                            .last_key_block_seqno = key_seqno,
-                            .new_catchain_ids = opts.new_catchain_ids,
-                        }).session_id;
+      auto session_id =
+          block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
+                                                       .global_id = global_id,
+                                                       .validator_options_hash = opts_hash,
+                                                       .simplex_config_cell_hash = selected_config.value().cell_hash,
+                                                       .shard = shard,
+                                                       .catchain_seqno = val_set->get_catchain_seqno(),
+                                                       .validators = val_set->export_vector(),
+                                                       .vertical_seqno = opts_->get_maximal_vertical_seqno(),
+                                                       .last_key_block_seqno = key_seqno,
+                                                       .new_catchain_ids = opts.new_catchain_ids,
+                                                   })
+              .session_id;
       for (auto local_adnl_id : get_observer_adnl_ids(val_set)) {
         ObserverGroupId observer_id{session_id, local_adnl_id};
         ValidatorGroupEntry entry;

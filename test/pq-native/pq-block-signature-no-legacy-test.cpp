@@ -13,8 +13,7 @@ using namespace pq_block_signature_test;
 
 td::Ref<vm::Cell> legacy_cell(unsigned tag, const Fixture& fixture) {
   vm::CellBuilder root;
-  if (!(root.store_long_bool(tag, 8) &&
-        root.store_long_bool(fixture.validator_set->get_validator_set_hash(), 32) &&
+  if (!(root.store_long_bool(tag, 8) && root.store_long_bool(fixture.validator_set->get_validator_set_hash(), 32) &&
         root.store_long_bool(Fixture::catchain_seqno, 32) && root.store_long_bool(0, 32) &&
         root.store_long_bool(0, 64) && root.store_bool_bool(false))) {
     fail("PQ_BLOCK_SIGNATURE_LEGACY_FIXTURE_FAILED");
@@ -51,9 +50,9 @@ int main() {
   auto node_ordinary = tos::create_tl_object<tos::tos_api::tosNode_signatureSet_ordinary>();
   node_ordinary->cc_seqno_ = Fixture::catchain_seqno;
   node_ordinary->validator_set_hash_ = fixture.validator_set->get_validator_set_hash();
-  expect_legacy_refusal(block::BlockSignatureSet::fetch(
-                            tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>(node_ordinary.release())),
-                        fixture, "node-ordinary-under-pq-set");
+  expect_legacy_refusal(
+      block::BlockSignatureSet::fetch(tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>(node_ordinary.release())),
+      fixture, "node-ordinary-under-pq-set");
 
   auto node_simplex = tos::create_tl_object<tos::tos_api::tosNode_signatureSet_simplex>();
   node_simplex->cc_seqno_ = Fixture::catchain_seqno;
@@ -62,17 +61,17 @@ int main() {
   node_simplex->slot_ = Fixture::slot;
   node_simplex->candidate_ = candidate(fixture.id);
   node_simplex->final_ = true;
-  expect_legacy_refusal(block::BlockSignatureSet::fetch(
-                            tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>(node_simplex.release())),
-                        fixture, "node-simplex-under-pq-set");
+  expect_legacy_refusal(
+      block::BlockSignatureSet::fetch(tos::tl_object_ptr<tos::tos_api::tosNode_SignatureSet>(node_simplex.release())),
+      fixture, "node-simplex-under-pq-set");
 
   auto lite_ordinary = tos::create_tl_object<tos::lite_api::liteServer_signatureSet_ordinary>();
   lite_ordinary->catchain_seqno_ = Fixture::catchain_seqno;
   lite_ordinary->validator_set_hash_ = fixture.validator_set->get_validator_set_hash();
-  auto lite_ordinary_set = require_ok(
-      block::BlockSignatureSet::fetch(
-          tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>(lite_ordinary.release())),
-      "lite-ordinary-construction");
+  auto lite_ordinary_set =
+      require_ok(block::BlockSignatureSet::fetch(
+                     tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>(lite_ordinary.release())),
+                 "lite-ordinary-construction");
   expect_legacy_refusal(std::move(lite_ordinary_set), fixture, "lite-ordinary-under-pq-set");
 
   auto lite_simplex = tos::create_tl_object<tos::lite_api::liteServer_signatureSet_simplex>();
@@ -81,10 +80,10 @@ int main() {
   lite_simplex->session_id_ = fixture.session;
   lite_simplex->slot_ = Fixture::slot;
   lite_simplex->candidate_ = tos::serialize_tl_object(candidate(fixture.id), true);
-  auto lite_simplex_set = require_ok(
-      block::BlockSignatureSet::fetch(
-          tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>(lite_simplex.release())),
-      "lite-simplex-construction");
+  auto lite_simplex_set =
+      require_ok(block::BlockSignatureSet::fetch(
+                     tos::tl_object_ptr<tos::lite_api::liteServer_SignatureSet>(lite_simplex.release())),
+                 "lite-simplex-construction");
   expect_legacy_refusal(std::move(lite_simplex_set), fixture, "lite-simplex-under-pq-set");
 
   std::printf("PQ_BLOCK_SIGNATURE_NO_LEGACY_OK cases=6\n");

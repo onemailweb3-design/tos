@@ -11,8 +11,8 @@
 #include <type_traits>
 #include <vector>
 
-#include "auto/tl/tos_api.h"
 #include "auto/tl/lite_api.h"
+#include "auto/tl/tos_api.h"
 #include "crypto/block/block-parse.h"
 #include "crypto/block/signature-set.h"
 #include "crypto/pq/mldsa44.h"

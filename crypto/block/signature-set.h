@@ -97,8 +97,7 @@ class BlockSignatureSet : public td::CntObject {
 
  protected:
   friend td::Result<tos::ValidatorWeight> verify_pq_finality(const PQFinalityVerificationContext& context,
-                                                             const BlockSignatureSet& signature_set,
-                                                             FinalityRole role);
+                                                             const BlockSignatureSet& signature_set, FinalityRole role);
   tos::CatchainSeqno cc_seqno_;
   td::uint32 validator_set_hash_;
 

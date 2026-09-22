@@ -70,8 +70,7 @@ static td::Status check_vset(const BlockSignatureSet* sig_set, const td::Ref<Val
   return td::Status::OK();
 }
 
-static td::Status check_carrier_compatibility(const BlockSignatureSet* sig_set,
-                                              const td::Ref<ValidatorSet>& vset) {
+static td::Status check_carrier_compatibility(const BlockSignatureSet* sig_set, const td::Ref<ValidatorSet>& vset) {
   bool has_pq = false;
   bool has_classical = false;
   for (const auto& validator : vset->export_vector()) {
@@ -189,14 +188,13 @@ td::Result<td::BufferSlice> BlockSignatureSet::build_simplex_data_to_sign(
     return td::Status::Error("simplex candidate data is null");
   }
   tos::BlockIdExt expected_block_id;
-  tos::tos_api::downcast_call(
-      *candidate, td::overloaded(
-                      [&](const tos::tos_api::consensus_candidateHashDataOrdinary& obj) {
-                        expected_block_id = tos::create_block_id(obj.block_);
-                      },
-                      [&](const tos::tos_api::consensus_candidateHashDataEmpty& obj) {
-                        expected_block_id = tos::create_block_id(obj.block_);
-                      }));
+  tos::tos_api::downcast_call(*candidate, td::overloaded(
+                                              [&](const tos::tos_api::consensus_candidateHashDataOrdinary& obj) {
+                                                expected_block_id = tos::create_block_id(obj.block_);
+                                              },
+                                              [&](const tos::tos_api::consensus_candidateHashDataEmpty& obj) {
+                                                expected_block_id = tos::create_block_id(obj.block_);
+                                              }));
   if (block_id != expected_block_id) {
     return td::Status::Error("block id mismatch");
   }
@@ -1153,8 +1151,7 @@ static td::Result<std::vector<PQBlockSignature>> fetch_pq_tl_signatures_checked(
     if (pair->signature_.size() != tos::pq::mldsa44_signature_bytes) {
       return td::Status::Error("pq tl: signature_length");
     }
-    signatures.push_back(
-        PQBlockSignature{tos::ValidatorId{pair->validator_id_}, algorithm, pair->signature_.clone()});
+    signatures.push_back(PQBlockSignature{tos::ValidatorId{pair->validator_id_}, algorithm, pair->signature_.clone()});
   }
   TRY_STATUS(validate_pq_signatures(signatures));
   return signatures;
@@ -1175,9 +1172,9 @@ td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_pq_node_checked(
     return td::Status::Error("pq tl: candidate_oversize");
   }
   return obj.final_ ? create_simplex_pq_final(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_,
-                                               obj.session_id_, obj.slot_, clone_tl(obj.candidate_))
+                                              obj.session_id_, obj.slot_, clone_tl(obj.candidate_))
                     : create_simplex_pq_approve(std::move(signatures), obj.cc_seqno_, obj.validator_set_hash_,
-                                                 obj.session_id_, obj.slot_, clone_tl(obj.candidate_));
+                                                obj.session_id_, obj.slot_, clone_tl(obj.candidate_));
 }
 
 td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_pq_lite_checked(
@@ -1215,8 +1212,8 @@ static td::Status validate_classical_tl_signatures(const std::vector<tos::BlockS
 }
 
 td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_legacy_checked(
-    const std::vector<tos::tl_object_ptr<tos::tos_api::tosNode_blockSignature>>& input,
-    tos::CatchainSeqno cc_seqno, td::uint32 validator_set_hash) {
+    const std::vector<tos::tl_object_ptr<tos::tos_api::tosNode_blockSignature>>& input, tos::CatchainSeqno cc_seqno,
+    td::uint32 validator_set_hash) {
   std::vector<tos::BlockSignature> signatures;
   signatures.reserve(input.size());
   for (const auto& signature : input) {
@@ -1278,8 +1275,8 @@ td::Result<td::Ref<BlockSignatureSet>> BlockSignatureSet::fetch_node_checked(
                     return;
                   }
                   result = td::Ref<BlockSignatureSetSimplex>(true, std::move(signatures), obj.cc_seqno_,
-                                                              obj.validator_set_hash_, obj.session_id_, obj.slot_,
-                                                              clone_tl(obj.candidate_), obj.final_);
+                                                             obj.validator_set_hash_, obj.session_id_, obj.slot_,
+                                                             clone_tl(obj.candidate_), obj.final_);
                 },
                 [&](const tos::tos_api::tosNode_signatureSet_simplexPq&) {
                   result = td::Status::Error("node signature set: internal dispatch error");

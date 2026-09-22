@@ -3247,15 +3247,12 @@ void test_l2_streaming_importer_1gib_resident_peak_at_realistic_density() {
   // load changes elapsed ratios, but cannot change how many cache refills
   // the importer performs.
   td::rmrf(tmp_dir).ignore();
-  auto max_linear_reads = [](td::uint64 bytes) {
-    return 4 * ((bytes + (4 * kMiB - 1)) / (4 * kMiB)) + 16;
-  };
+  auto max_linear_reads = [](td::uint64 bytes) { return 4 * ((bytes + (4 * kMiB - 1)) / (4 * kMiB)) + 16; };
   // Small focused control reaches the same importer guard before the
   // larger residency measurements. It keeps the guard-removal mutation
   // cheap while the 32/64 MiB runs below retain their production-scale
   // memory evidence.
-  auto run_8 = run_streaming_importer_at_size(
-      tmp_dir, 8ULL * kMiB, kLeafPayloadBytes, "synth-density-8m.boc");
+  auto run_8 = run_streaming_importer_at_size(tmp_dir, 8ULL * kMiB, kLeafPayloadBytes, "synth-density-8m.boc");
   if (run_8.work.file_read_calls > max_linear_reads(run_8.boc_size_bytes)) {
     std::fprintf(stderr, "STREAMING_IMPORT_WORK_FAILURE: 8 MiB import used %llu file reads, bound=%llu\n",
                  static_cast<unsigned long long>(run_8.work.file_read_calls),

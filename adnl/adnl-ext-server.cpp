@@ -199,9 +199,9 @@ void AdnlExtServerImpl::add_tcp_port(td::uint16 port) {
     }
   };
 
-  auto act = td::actor::create_actor<td::TcpInfiniteListener>(
-      td::actor::ActorOptions().with_name("listener").with_poll(), port,
-      std::make_unique<Callback>(actor_id(this), port));
+  auto act =
+      td::actor::create_actor<td::TcpInfiniteListener>(td::actor::ActorOptions().with_name("listener").with_poll(),
+                                                       port, std::make_unique<Callback>(actor_id(this), port));
   listeners_.emplace(port, std::move(act));
 }
 
@@ -225,7 +225,7 @@ void AdnlExtServerImpl::tcp_port_listening(td::uint16 port, td::Status status) {
   if (!initial_ports_pending_.empty()) {
     return;
   }
-  for (auto& waiter : listening_waiters_) {
+  for (auto &waiter : listening_waiters_) {
     if (listening_status_.is_error()) {
       waiter.set_error(listening_status_.clone());
     } else {
