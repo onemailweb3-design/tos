@@ -219,6 +219,53 @@ int main() {
     std::cerr << "PENDING_FINALITY_SENDER_BUDGET_FAILURE: one block exceeded the measured maximum carrier size\n";
     return 1;
   }
+  static_assert(tos::validator::pending_finality_sender_global_budget_bytes ==
+                tos::validator::pending_finality_sender_global_carrier_shares *
+                    block::pq::pq_block_finality_broadcast_max_bytes);
+  auto check_sender_monopoly = [](PendingFinalityCapacity capacity, const char *pool_name) {
+    tos::validator::PendingFinalityStore<int, int, int> store;
+    constexpr int flooding_sender = 700;
+    constexpr int honest_sender = 701;
+    std::size_t admitted = 0;
+    tos::validator::PendingFinalityRejection first_rejection = tos::validator::PendingFinalityRejection::None;
+    for (std::size_t block = 0; block <= tos::validator::pending_finality_max_validator_senders; ++block) {
+      auto result = store.admit(static_cast<int>(block), flooding_sender, static_cast<int>(block),
+                                tos::validator::pending_finality_sender_per_block_budget_bytes, capacity, false,
+                                true, NoExpiry);
+      if (!result.admitted()) {
+        first_rejection = result.rejection;
+        break;
+      }
+      ++admitted;
+    }
+
+    bool ok = true;
+    if (admitted != tos::validator::pending_finality_sender_global_carrier_shares ||
+        first_rejection != tos::validator::PendingFinalityRejection::SenderBudget ||
+        store.sender_bytes(flooding_sender) != tos::validator::pending_finality_sender_global_budget_bytes) {
+      std::cerr << "PENDING_FINALITY_GLOBAL_SENDER_BUDGET_FAILURE: " << pool_name
+                << " sender admitted=" << admitted
+                << " rejection=" << tos::validator::pending_finality_rejection_name(first_rejection)
+                << " held=" << store.sender_bytes(flooding_sender)
+                << " expected_slots=" << tos::validator::pending_finality_sender_global_carrier_shares << "\n";
+      ok = false;
+    }
+    auto honest = store.admit(10000, honest_sender, 10000,
+                              tos::validator::pending_finality_sender_per_block_budget_bytes, capacity, false, true,
+                              NoExpiry);
+    if (!honest.admitted()) {
+      std::cerr << "PENDING_FINALITY_POOL_MONOPOLY_FAILURE: " << pool_name
+                << " sender prevented honest sender after reaching its global share; rejection="
+                << tos::validator::pending_finality_rejection_name(honest.rejection) << "\n";
+      ok = false;
+    }
+    return ok;
+  };
+  const bool public_monopoly_blocked = check_sender_monopoly(SharedCapacity, "public");
+  const bool validator_monopoly_blocked = check_sender_monopoly(ValidatorCapacity, "validator");
+  if (!public_monopoly_blocked || !validator_monopoly_blocked) {
+    return 1;
+  }
   tos::validator::PendingFinalityStore<int, int, int> total_budget_check;
   static_assert(tos::validator::pending_finality_public_budget_bytes ==
                 tos::validator::pending_finality_public_candidate_slots *
@@ -551,6 +598,7 @@ int main() {
             << " public_shared=" << tos::validator::pending_finality_public_budget_bytes
             << " validator_reserved=" << tos::validator::pending_finality_validator_reserved_budget_bytes
             << " per_sender_per_block=" << tos::validator::pending_finality_sender_per_block_budget_bytes
+            << " per_sender_global=" << tos::validator::pending_finality_sender_global_budget_bytes
             << " minimum_charge=4096 validator_shares="
             << tos::validator::pending_finality_max_validator_senders << "\n";
   std::cout << "PENDING_FINALITY_AUTHORITY_MEMO_OK: cycled_claims=64 computations=2 entries=2"

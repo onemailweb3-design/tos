@@ -100,10 +100,24 @@ struct PendingFinalityAdmissionResult {
 // Remote entries are charged by their received boxed-TL payload bytes; local
 // entries use their measured intrinsic signature bytes. Each sender may retain
 // one unverified candidate per block, and that block-local candidate may occupy
-// exactly the measured maximum 400-signer carrier. A minimum charge for either
-// source bounds both memory and object count.
+// exactly the measured maximum 400-signer carrier. Across blocks, one sender
+// may retain four such carriers: the three-consecutive-block recovery window
+// exercised by the accepted-chain gate plus one in-flight successor. This is
+// enough for normal pipelining while one public peer can occupy at most 1/4 of
+// the shared pool and one committee authority at most 1/100 of its reserved
+// pool. Four hundred committee shares are four times the aggregate reserved
+// pool, so the pool remains the aggregate constraint without allowing one
+// sender to monopolise it. A minimum charge for either source bounds both
+// memory and object count. Block IDs are not range-gated here: masterchain and
+// shardchain seqnos are not comparable, and valid finality can precede local
+// block data, so no cheap generic trusted window exists at this boundary.
 inline constexpr std::size_t pending_finality_sender_per_block_budget_bytes =
     block::pq::pq_block_finality_broadcast_max_bytes;
+inline constexpr std::size_t pending_finality_sender_global_carrier_shares = 4;
+static_assert(pending_finality_sender_global_carrier_shares <=
+              std::numeric_limits<std::size_t>::max() / pending_finality_sender_per_block_budget_bytes);
+inline constexpr std::size_t pending_finality_sender_global_budget_bytes =
+    pending_finality_sender_global_carrier_shares * pending_finality_sender_per_block_budget_bytes;
 inline constexpr std::size_t pending_finality_minimum_charge_bytes = 4096;
 inline constexpr std::size_t pending_finality_public_candidate_slots = 16;
 inline constexpr std::size_t pending_finality_max_validator_senders =
@@ -124,6 +138,11 @@ inline constexpr std::size_t pending_finality_public_budget_bytes =
     pending_finality_public_candidate_slots * pending_finality_sender_per_block_budget_bytes;
 inline constexpr std::size_t pending_finality_validator_reserved_budget_bytes =
     pending_finality_max_validator_senders * pending_finality_sender_per_block_budget_bytes;
+static_assert(pending_finality_sender_global_budget_bytes < pending_finality_public_budget_bytes);
+static_assert(pending_finality_max_validator_senders <=
+              std::numeric_limits<std::size_t>::max() / pending_finality_sender_global_budget_bytes);
+static_assert(pending_finality_max_validator_senders * pending_finality_sender_global_budget_bytes >
+              pending_finality_validator_reserved_budget_bytes);
 static_assert(pending_finality_public_budget_bytes <=
               std::numeric_limits<std::size_t>::max() - pending_finality_validator_reserved_budget_bytes);
 inline constexpr std::size_t pending_finality_total_budget_bytes =
@@ -347,6 +366,10 @@ class PendingFinalityStore {
                                         pending_finality_sender_per_block_budget_bytes)) {
       return {PendingFinalityAdmission::Keep, PendingFinalityRejection::SenderBudget};
     }
+    if (pending_finality_exceeds_budget(sender_bytes(sender), removed_sender, charge,
+                                        pending_finality_sender_global_budget_bytes)) {
+      return {PendingFinalityAdmission::Keep, PendingFinalityRejection::SenderBudget};
+    }
     const auto capacity_budget = capacity == PendingFinalityCapacity::ValidatorReserved
                                      ? pending_finality_validator_reserved_budget_bytes
                                      : pending_finality_public_budget_bytes;
@@ -404,6 +427,19 @@ class PendingFinalityStore {
     for (const auto &[unused, candidates] : entries_) {
       (void)unused;
       result += candidates.accounted_bytes(capacity);
+    }
+    return result;
+  }
+
+  std::size_t sender_bytes(const Sender &sender) const {
+    std::size_t result = 0;
+    for (const auto &[unused, candidates] : entries_) {
+      (void)unused;
+      const auto block_bytes = candidates.accounted_bytes(sender);
+      if (block_bytes > std::numeric_limits<std::size_t>::max() - result) {
+        return std::numeric_limits<std::size_t>::max();
+      }
+      result += block_bytes;
     }
     return result;
   }
