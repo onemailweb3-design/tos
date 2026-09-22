@@ -435,6 +435,20 @@ exhaust its finite injected failures and then meet the same three-height bar.
 Permanent finalization failure does not use the progress gate: its contract is to
 retain the certificate, stop retrying it, and stop production.
 
+### Source-guard execution integrity
+
+The quorum-arithmetic source guard requires `ripgrep` and now fails closed when
+that executable or a configured scan root is absent.  Branch/PR CI selects all
+pure-source guards through their per-test `source-guard` label with
+`--no-tests=error`; full CTest and focused validator-auth workflows explicitly
+install the same search dependency.  Before these checks were made fail-closed,
+the validator-auth workflow had repeatedly printed `quorum static check passed`
+without searching anything because `rg` was missing.  The retained mutation
+evidence is: removing `rg` fails with `ripgrep is required but not installed`, a
+missing scan root fails naming that root, and a real `signed_weight += weight`
+probe still fails naming its file and line.  This is execution-integrity evidence
+for the guard, not evidence about paths outside its declared scan roots.
+
 ## Registered gaps and explicit non-claims
 
 The two remaining closure gaps are the restart-cut part of item 5 and item 7.

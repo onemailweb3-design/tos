@@ -65,7 +65,7 @@ jobs:
       - name: Install focused native test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld cmake ninja-build pkg-config libssl-dev libsodium-dev liblz4-dev zlib1g-dev gperf
+          sudo apt-get install -y clang lld cmake ninja-build pkg-config libssl-dev libsodium-dev liblz4-dev zlib1g-dev gperf ripgrep
       - name: Configure isolated verification targets, not a network node
         # The build runs tlbc, a build-time generator that emits block-auto.cpp
         # and then exits. It leaks, harmlessly, and LeakSanitizer would abort it
