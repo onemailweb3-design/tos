@@ -1,8 +1,15 @@
 # Phase-2 ceremony — open participation
 
-**Status: contribution 1 by tosman is signed and verified; registration remains
-open. Parameters are not finalised and must not be deployed.**
+**Status: two contributions are signed and verified, neither of them
+independent of the operator; registration remains open. Parameters are not
+finalised and must not be deployed.**
 
+Because no contribution yet comes from a party outside the operator's control,
+`verify-attestations.py` refuses this ceremony at its final gate. That refusal
+is the correct answer today, and it stays correct until somebody outside
+contributes.
+
+[Contribution 2 and verification evidence](CONTRIBUTION-2.md).
 [Contribution 1 and verification evidence](CONTRIBUTION-1.md).
 [Download the public contribution bundle](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-1);
 [server publication receipt](contribution-1-publication-receipt.json).
@@ -101,7 +108,8 @@ acceptance conditions; neither needs to be arranged before the first contributio
 | Publish and retain announcement snapshot and publication receipt | completed before opening |
 | Register tosman and its new public signing key | public key and initial register published |
 | Open and accept the first signed contribution | completed: tosman, not independent |
-| Register and accept additional participants | throughout the contribution window |
+| Register and accept additional participants | open: tosdev2 registered and accepted, also not independent |
+| Accept a contribution from an independent party | **not done; the final gate refuses without it** |
 | Close, apply the announced beacon, verify and accept | only after all final gates pass |
 
 The confirmed heights remain **970141** (close) and **970285** (beacon).
@@ -114,6 +122,8 @@ keys or contributions; publish additions with their history.
 - [PARTICIPANT-GUIDE.md](PARTICIPANT-GUIDE.md): contribution instructions.
 - [roster.template.json](roster.template.json): registration format.
 - [keys/tosman.md](keys/tosman.md): first contributor's public signing identity.
+- [keys/tosdev2.md](keys/tosdev2.md): second contributor's public signing
+  identity, and what is missing from it.
 
 The published announcement and publication receipt identify the opening.
 The beacon and final verification results appear only after closing.
