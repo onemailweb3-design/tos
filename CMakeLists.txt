@@ -1224,6 +1224,8 @@ add_test(NAME n6-low-cardinality COMMAND test-measurement-contract --filter LowC
 add_test(NAME n6-size-accounting COMMAND test-measurement-contract --filter SizeAccounting)
 add_test(NAME n6-instrumentation-byte-equivalence
   COMMAND test-measurement-contract --filter InstrumentationByteEquivalence)
+add_test(NAME n6-disabled-instrumentation-cost
+  COMMAND test-measurement-contract --filter DisabledTraceIdProviderIsLazy)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME n6-manifest-completeness
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/measurement-manifest-test.py)

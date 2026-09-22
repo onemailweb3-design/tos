@@ -185,4 +185,31 @@ TEST(MeasurementContract, InstrumentationByteEquivalence) {
   ASSERT_EQ(with_instrumentation.size(), sink->sizes().front().exact_bytes);
 }
 
+TEST(MeasurementContract, DisabledTraceIdProviderIsLazy) {
+  std::size_t provider_calls = 0;
+  auto provider = [&] {
+    ++provider_calls;
+    return trace_id(7);
+  };
+
+  install_sink(nullptr);
+  record_trace_lazy(provider, TraceStage::peer_finality_verification_started);
+  record_trace_lazy(provider, TraceStage::peer_finality_broadcast_received, 984'260);
+  require(provider_calls == 0,
+          "N6_DISABLED_INSTRUMENTATION_COST_FAILURE: disabled instrumentation evaluated the trace-id provider");
+
+  auto sink = std::make_shared<BoundedTraceBuffer>(1, 2);
+  install_sink(sink);
+  record_trace_lazy(provider, TraceStage::peer_finality_verification_started);
+  record_trace_lazy(provider, TraceStage::peer_finality_broadcast_received, 984'260);
+  install_sink(nullptr);
+
+  require(provider_calls == 2,
+          "N6_DISABLED_INSTRUMENTATION_COST_FAILURE: enabled instrumentation did not evaluate each provider once");
+  require(sink->event_count(trace_id(7)) == 2,
+          "N6_DISABLED_INSTRUMENTATION_COST_FAILURE: enabled instrumentation did not record both trace events");
+  ASSERT_TRUE(!sink->trace(trace_id(7))->front().exact_bytes.has_value());
+  ASSERT_EQ(984'260u, sink->trace(trace_id(7))->back().exact_bytes.value());
+}
+
 }  // namespace

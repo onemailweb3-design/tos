@@ -110,6 +110,10 @@ void install_sink(std::shared_ptr<Sink> value) {
   sink_enabled.store(static_cast<bool>(sink), std::memory_order_release);
 }
 
+bool enabled() noexcept {
+  return sink_enabled.load(std::memory_order_acquire);
+}
+
 td::Result<std::shared_ptr<Sink>> create_jsonl_file_sink(std::string path, std::string node_id) {
   auto result = std::make_shared<JsonlFileSink>(std::move(path), std::move(node_id));
   if (!result->is_open()) {

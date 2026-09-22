@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "td/utils/Slice.h"
@@ -102,11 +103,33 @@ class Sink {
 void install_sink(std::shared_ptr<Sink> sink);
 td::Result<std::shared_ptr<Sink>> create_jsonl_file_sink(std::string path, std::string node_id);
 
+// One atomic load.  Use record_trace_lazy when computing the trace id is not
+// already part of the caller's work; its provider is never evaluated while
+// measurement is disabled.
+bool enabled() noexcept;
+
 ClockSample sample_clocks();
 td::Result<std::int64_t> monotonic_duration_ns(const ClockSample& start, const ClockSample& finish);
 void record_trace(TraceId trace_id, TraceStage stage);
 void record_trace(TraceId trace_id, TraceStage stage, std::size_t exact_bytes);
 void record_trace_at(TraceId trace_id, TraceStage stage, ClockSample clock);
+
+template <class TraceIdProvider>
+void record_trace_lazy(TraceIdProvider&& trace_id_provider, TraceStage stage) {
+  if (!enabled()) {
+    return;
+  }
+  record_trace(std::forward<TraceIdProvider>(trace_id_provider)(), stage);
+}
+
+template <class TraceIdProvider>
+void record_trace_lazy(TraceIdProvider&& trace_id_provider, TraceStage stage, std::size_t exact_bytes) {
+  if (!enabled()) {
+    return;
+  }
+  record_trace(std::forward<TraceIdProvider>(trace_id_provider)(), stage, exact_bytes);
+}
+
 void record_serialized_size(SerializedArtifact artifact, std::size_t exact_bytes);
 void record_serialized_size(SerializedArtifact artifact, td::Slice serialized);
 

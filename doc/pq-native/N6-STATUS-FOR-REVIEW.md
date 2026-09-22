@@ -30,6 +30,7 @@ Mutation evidence, run individually and restored before the next mutation:
 | Compute duration from the wall-clock coordinate | `n6-monotonic-timestamps` | `N6_MONOTONIC_TIMESTAMP_FAILURE: forward steady interval was refused` |
 | Omit `git_commit` from the generated manifest | `n6-manifest-completeness` | `pq_measurement_manifest.ManifestError: manifest missing required field git_commit` |
 | Add `validator_id` to the registered `messages_total` labels | `n6-low-cardinality` | `N6_LOW_CARDINALITY_FAILURE: registered schema contains a forbidden high-cardinality label` |
+| Evaluate a lazy trace-id provider while measurement is disabled | `n6-disabled-instrumentation-cost` | `N6_DISABLED_INSTRUMENTATION_COST_FAILURE: disabled instrumentation evaluated the trace-id provider` |
 
 ## N6.1 acceptance criteria scaffolding
 
