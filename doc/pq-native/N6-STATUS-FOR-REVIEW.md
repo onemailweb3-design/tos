@@ -224,7 +224,7 @@ The N6.2 result above is diagnostic feasibility evidence only. No release-grade
 measurement, threshold verdict, launch-cap freeze, or Genesis release evidence
 has been produced on this branch.
 
-## Open release-measurement gaps
+## Release-measurement gap disposition
 
 The required release scale is now `[21]`, matching the enforced launch ceiling
 rather than an owner preference. The ceiling is fail-closed at all four
@@ -238,40 +238,50 @@ inherited-consensus premise: `git ls-tree -r 628506c9e` shows 16 files already
 under `validator/consensus/simplex/` at the fork point, and the reviewed
 upstream production committee is approximately 400 validators. This premise
 was checked against the tree because an earlier review assertion incorrectly
-treated Simplex as project-local. Step 2 changes the required scale only; the
-three registry entries below remain open until each is re-derived separately.
+treated Simplex as project-local.
 
 `N6-OPEN-MEASUREMENT-GAPS.json` is a fail-closed release registry parallel to
 the correctness-question registry. Its required ids cannot be removed by
-deleting a gap, and a resolved entry must retain `resolved_by` evidence.
-Release mode currently refuses all three registered gaps by name:
+deleting a gap, and each resolved entry retains `resolved_by`, its fork-point
+evidence, the three facts on which it depends, and gap-specific arithmetic.
+All three are resolved by the documented inherited-consensus outcome rather
+than by the co-located diagnostic runs:
 
-- `release-scale-matrix-unmeasured`: the required 21-validator release point
-  remains unmeasured. This 6-core KVM guest has 11.68 GiB RAM; 21
-  colocated validators would reserve about 8.0 GiB for the N5 pending-finality
-  budget alone. Closure requires the section 0.5 topology: one validator per
-  reviewed host or VM, at the exact N5-complete measured commit.
-- `carrier-scale-transport-unmeasured`: closure requires a live overlay run at
-  a signer count producing a carrier near the 984260-byte ceiling, retaining
-  separate payload, queueing, propagation and verification evidence.
-- `sustained-finality-distribution-unmeasured`: the scale sweep records one
-  cold-start time-to-first sequence per process set. Repeating that run yields
-  more cold starts, not the steady-state persisted-finality distribution that
-  `max_p99_persisted_finality_ms` names. Closure requires production trace
-  points that correlate each FinalCert through signatures, BlockProof and the
-  finalized-marker persistence sinks, a declared warmup, and at least 100
-  monotonic per-event samples from one sustained run before reporting p99.
-  At the 400 ms target block interval, 100 post-warmup finalities require at
-  least 40 seconds of observation; setup, warmup, exact-commit release topology
-  and a checker that rejects missing or under-sampled stages are additional
-  costs. Repeated cold-start sweep samples do not close this gap.
+- `release-scale-matrix-unmeasured`: resolved because inherited Simplex runs
+  upstream at approximately 400 real validators, while every committee-forming
+  path here rejects more than 21. The reachable scale is about one nineteenth
+  of the inherited production deployment.
+- `carrier-scale-transport-unmeasured`: resolved because 21 ML-DSA-44
+  signatures occupy 50820 bytes, 1.99 times the 25600 signature bytes in a
+  400-validator Ed25519 certificate carried by the same inherited transport.
+  The 984260-byte 400-signer structural ceiling is unreachable at launch.
+- `sustained-finality-distribution-unmeasured`: resolved because steady-state
+  Simplex is the inherited upstream operating condition and reachable PQ
+  verification is about 1419.6 microseconds per round, 0.12 times the roughly
+  12000 microseconds for 400 upstream Ed25519 verifications. The cold-start
+  sweep still does not itself produce a p99 distribution; it is simply not the
+  evidence used for this closure.
 
-The owner-supplied deployment link is 100 Mbps symmetric. A maximum carrier is
-7874080 bits: 78.7 ms at line rate and 157.5 ms after the accepted 0.50 network
-headroom. One transmission therefore consumes about 12.1% of the 1300 ms
-persisted-finality criterion and 39.4% of the 400 ms target block interval,
-before gossip fan-out. This is a launch-relevant measurement requirement, not
-a conclusion that the link fails.
+Every closure explicitly depends on: TON's current production consensus being
+Simplex, its production committee remaining approximately 400, and the TOS
+launch cap remaining enforced at 21. The manifest validator checks those
+recorded dependencies and the gap-specific arithmetic. If any premise changes,
+the registry must be reopened rather than silently reusing this conclusion.
+
+The historical 200-to-300 cliff is closed as section 0.12 Outcome B. Its cause
+class is the old single-process harness: the table predates the later lifecycle
+and backpressure work and N5, while the same inherited Simplex operates at
+approximately 400 validators in production. The enforced 21 cap is below that
+historical region at ConfigParam16, ConfigParam28, node admission and Genesis,
+so the harness cliff is neither reachable launch configuration nor evidence of
+a protocol cliff.
+
+This inherited evidence has a strict boundary. It says nothing about the new
+N5 pending-finality carrier/admission/cache machinery: the 409452160-byte
+retention budget, pool split, per-sender rules, deadline and attempt tokens
+remain project-local. It also does not answer the open
+`merkle-base-state-mismatch` correctness question, which remains registered and
+release-blocking.
 
 The separately named 4-validator tier is minimum BFT (`n = 3f + 1`, `f = 1`).
 It can establish protocol path, message flow and carrier transport at the
@@ -287,7 +297,8 @@ Mutation evidence:
 | Delete an open gap but retain its required id | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: open measurement gaps reported the wrong release refusal: measurement-gap registry required ids and entries differ` |
 | Close the release-scale gap with a result carrying `local_colocation_diagnostic_override=true` | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: co-located release-scale evidence reported the wrong refusal: release-scale-matrix-unmeasured cannot be resolved by local_colocation_diagnostic_override evidence` |
 | Cite a result with the override false but diagnostic eligibility | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: diagnostic release-scale evidence reported the wrong refusal: release-scale-matrix-unmeasured evidence is not release_evidence_eligible` |
-| Mark all three gaps resolved with eligible evidence | `n6-manifest-completeness` | The measurement-gap refusal disappears and the independent next refusal is `no N5 closure artifact was supplied for that exact commit` |
+| Change an inherited closure's enforced-cap dependency from 21 to 22 | `n6-manifest-completeness` | `carrier-scale-transport-unmeasured does not pin the inherited Simplex dependencies` |
+| Keep all three inherited closures intact | `n6-manifest-completeness` | The measurement-gap refusal disappears and the independent next refusal is `no N5 closure artifact was supplied for that exact commit` |
 
 ## N6.5 scale-sweep instrument
 
@@ -305,7 +316,8 @@ shaping; the launch-default profile requires a remote-command deployment with
 external shaping whose backend manifest names the applied profile. Only the
 no-simulated-latency 4-validator point is executed here. The 21-validator
 release point, the historical section 8.1 cliff matrix, and the launch-default run
-remain explicitly unexecuted and release-ineligible.
+remain explicitly unexecuted by this harness. Their absence is not hidden by
+the inherited-evidence disposition above.
 
 The runner accepts larger remote scale lists without changing its result
 contract. The registered `n6-scale-sweep-cardinality` source guard drives two
@@ -323,11 +335,13 @@ instrument validation on a capable development host. It is false by default,
 is not used by the registered 4-validator gate, and sets
 `local_colocation_diagnostic_override=true` in its result. Such a run remains
 ineligible for release evidence and cannot satisfy a required release scale.
-That statement is enforced at the gap consumer: resolving
-`release-scale-matrix-unmeasured` requires result files, and the manifest
-validator rejects any cited result carrying the override before considering
-its scale list. A result without the override must still declare release
-eligibility and cover exactly the enforced scale 21.
+That statement remains enforced for the measured-result closure path: if a
+result is cited to resolve `release-scale-matrix-unmeasured`, the manifest
+validator rejects any result carrying the override before considering its
+scale list. A result without the override must still declare release
+eligibility and cover exactly the enforced scale 21. The live registry instead
+uses the separately reviewed inherited-Simplex closure and cites no co-located
+result.
 
 Instrument-validation evidence was collected from a clean worktree at exact
 commit `e7f1106c1`; it remains diagnostic, co-located and ineligible for release
@@ -346,6 +360,7 @@ on the second point with `requested scale 7 booted 4 validators`.
 
 This tier proves only minimum-BFT protocol progress, message flow and carrier
 transport. It makes no launch-sizing, carrier-ceiling, network-capacity or
-consensus-correctness claim, and it does not resolve any of the three open
-measurement gaps. In particular, its three milestones describe one cold-start
-sequence and are not a sustained-operation latency distribution.
+consensus-correctness claim, and it is not the evidence used to resolve any of
+the three retained measurement-gap entries. In particular, its three
+milestones describe one cold-start sequence and are not a sustained-operation
+latency distribution.

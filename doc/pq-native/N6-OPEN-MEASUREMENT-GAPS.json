@@ -7,22 +7,71 @@
   ],
   "gaps": {
     "release-scale-matrix-unmeasured": {
-      "observation": "The required 21-validator release scale has not been measured; this host runs only the separate 4-validator minimum-BFT functional tier.",
-      "reason": "The required scale now matches the enforced 21-validator launch ceiling, but the available measurement server is a 6-core KVM guest with 11.68 GiB RAM. Co-locating 21 validators would reserve about 8.0 GiB for the N5 pending-finality budget alone and would not represent the one-validator-per-host topology required by section 0.5.",
-      "closure_condition": "Run the required 21-validator release scale with one validator per reviewed host or VM at the exact N5-complete measured commit and retain the manifest and result.",
-      "status": "OPEN"
+      "observation": "The local N6 harness has not produced a release-grade 21-host scale run, but the production-reachable scale is now bounded to 21 by the four launch-cap enforcement points.",
+      "reason": "The scale question is inherited rather than a new PQ consensus regime: Simplex and its transport stack predate this fork and operate upstream at approximately 400 real validators, while the enforced TOS launch scale is 21, about one nineteenth as large.",
+      "closure_condition": "Outcome B is satisfied while all three pinned facts remain true: TON production consensus is Simplex, its production committee is approximately 400, and every TOS committee-forming path rejects more than 21 validators. Any change to one of those facts reopens this entry.",
+      "status": "RESOLVED",
+      "resolution_kind": "INHERITED_SIMPLEX_WITH_ENFORCED_CAP",
+      "depends_on": {
+        "ton_current_consensus": "Simplex",
+        "ton_production_committee_approx": 400,
+        "tos_enforced_launch_cap": 21
+      },
+      "fork_point_evidence": {
+        "commit": "628506c9e",
+        "validator_consensus_simplex_files": 16
+      },
+      "evidence": {
+        "upstream_validators_approx": 400,
+        "capped_validators": 21,
+        "relative_scale": "21/400 (about one nineteenth)"
+      },
+      "resolved_by": "Inherited Simplex production evidence plus the enforced 21-validator cap; no co-located diagnostic result is cited as release evidence."
     },
     "carrier-scale-transport-unmeasured": {
-      "observation": "No cluster run has transported a finality carrier near the 984260-byte 400-signer ceiling over the reviewed 100 Mbps symmetric deployment link.",
-      "reason": "The 4-validator functional tier carries only an approximately ten-kilobyte certificate and therefore cannot exercise the carrier, admission-pool, fan-out or network-capacity ceilings.",
-      "closure_condition": "Run the live overlay scenario at a signer count that produces a carrier near the 984260-byte ceiling on the reviewed deployment network and retain separate payload, queueing, propagation and verification evidence.",
-      "status": "OPEN"
+      "observation": "The old 984260-byte 400-signer structural carrier ceiling is unreachable at the enforced 21-validator production cap; 21 ML-DSA-44 signatures occupy 50820 bytes.",
+      "reason": "The reachable PQ signature payload is 1.99 times the 25600 bytes of 400 Ed25519 signatures carried by the same inherited ADNL/DHT/overlay/RLDP transport in upstream production, so it is not a new transport-size regime.",
+      "closure_condition": "The inherited-transport closure remains valid only while TON production consensus is Simplex at approximately 400 validators and TOS enforces 21. A larger TOS cap or a transport change reopens carrier-scale measurement.",
+      "status": "RESOLVED",
+      "resolution_kind": "INHERITED_SIMPLEX_WITH_ENFORCED_CAP",
+      "depends_on": {
+        "ton_current_consensus": "Simplex",
+        "ton_production_committee_approx": 400,
+        "tos_enforced_launch_cap": 21
+      },
+      "fork_point_evidence": {
+        "commit": "628506c9e",
+        "validator_consensus_simplex_files": 16
+      },
+      "evidence": {
+        "pq_21_signature_bytes": 50820,
+        "ed25519_400_signature_bytes": 25600,
+        "relative_bytes": "1.99x",
+        "unreachable_structural_carrier_ceiling_bytes": 984260
+      },
+      "resolved_by": "The enforced cap makes the 984260-byte structural maximum unreachable, and the reachable signature payload is within the inherited transport's demonstrated production regime."
     },
     "sustained-finality-distribution-unmeasured": {
-      "observation": "No N6 cluster run reports a sustained-operation distribution of persisted-finality latency; the scale sweep records one first proposal/notarization/FinalCert sequence per cold start.",
-      "reason": "Repeated cold starts produce repeated first-event observations, not many finality-latency samples inside steady-state operation, so they cannot establish the p99 quantity used by max_p99_persisted_finality_ms.",
-      "closure_condition": "After a declared warmup, observe and correlate many production finality events through persistence during one sustained run, retain the per-event monotonic latency samples, and report a distribution with enough samples to support its claimed percentile rather than a first-event timestamp.",
-      "status": "OPEN"
+      "observation": "The N6 cold-start sweep does not itself yield a steady-state persisted-finality distribution, but sustained Simplex is the inherited upstream production operating condition.",
+      "reason": "At the enforced cap, aggregate PQ verification is approximately 1419.6 microseconds per round (21 times 67.6 microseconds), about 0.12 times the approximately 12000 microseconds for 400 Ed25519 verifications upstream. The inherited consensus therefore sees lower aggregate verification work at the reachable scale.",
+      "closure_condition": "The inherited steady-state closure remains valid only while TON production consensus is Simplex at approximately 400 validators, TOS enforces 21, and the cited per-signature costs remain the reviewed comparison. A change to those facts reopens sustained measurement.",
+      "status": "RESOLVED",
+      "resolution_kind": "INHERITED_SIMPLEX_WITH_ENFORCED_CAP",
+      "depends_on": {
+        "ton_current_consensus": "Simplex",
+        "ton_production_committee_approx": 400,
+        "tos_enforced_launch_cap": 21
+      },
+      "fork_point_evidence": {
+        "commit": "628506c9e",
+        "validator_consensus_simplex_files": 16
+      },
+      "evidence": {
+        "pq_21_verify_us_at_67_6_each": 1419.6,
+        "ed25519_400_verify_us_at_30_each": 12000,
+        "relative_verify_cost": "0.12x (about one eighth)"
+      },
+      "resolved_by": "Inherited upstream steady-state Simplex operation plus lower reachable aggregate PQ verification cost at the enforced cap."
     }
   }
 }

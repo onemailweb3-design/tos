@@ -212,7 +212,27 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
         encoding="utf-8",
     )
     resolved_gaps = Path(raw).parent / f"measurement-gaps-{Path(raw).name}.json"
+    open_gaps = Path(raw).parent / f"open-measurement-gaps-{Path(raw).name}.json"
     scale_result = Path(raw).parent / f"scale-result-{Path(raw).name}.json"
+
+    open_gaps.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "required_gap_ids": list(module.REQUIRED_MEASUREMENT_GAP_IDS),
+                "gaps": {
+                    gap_id: {
+                        "observation": "fixture observation",
+                        "reason": "fixture reason",
+                        "closure_condition": "fixture closure condition",
+                        "status": "OPEN",
+                    }
+                    for gap_id in module.REQUIRED_MEASUREMENT_GAP_IDS
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
     def write_scale_result(*, local_override: bool, release_eligible: bool, scales: list[int]) -> None:
         scale_result.write_text(
@@ -286,8 +306,8 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
             if expected not in str(exc):
                 fail(f"open Merkle question reported the wrong release refusal: {exc}")
 
-        # With the correctness question resolved, the unmeasured release scale
-        # and carrier-size work is an independent refusal.
+        # With the correctness question resolved, open measurement work is an
+        # independent refusal.
         try:
             module.create_manifest(
                 repo=repo_root,
@@ -297,7 +317,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                 mode="release",
                 n5_closure_path=None,
                 correctness_questions_path=resolved_questions,
-                measurement_gaps_path=live_gaps,
+                measurement_gaps_path=open_gaps,
             )
             fail("current branch with open measurement gaps was release eligible")
         except module.ManifestError as exc:
@@ -352,7 +372,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
             if expected not in str(exc):
                 fail(f"diagnostic release-scale evidence reported the wrong refusal: {exc}")
 
-        # Resolving both registered measurement gaps with eligible evidence
+        # Resolving all registered measurement gaps with eligible evidence
         # exposes the next independent refusal, the exact-commit N5 closure.
         write_scale_result(local_override=False, release_eligible=True, scales=[21])
         try:
@@ -371,6 +391,51 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
             expected = "no N5 closure artifact was supplied for that exact commit"
             if expected not in str(exc):
                 fail(f"current N5-open branch reported the wrong release refusal: {exc}")
+
+        stale_inherited_gaps = Path(raw).parent / f"stale-inherited-gaps-{Path(raw).name}.json"
+        stale_registry = json.loads(live_gaps.read_text(encoding="utf-8"))
+        stale_registry["gaps"]["carrier-scale-transport-unmeasured"]["depends_on"][
+            "tos_enforced_launch_cap"
+        ] = 22
+        stale_inherited_gaps.write_text(json.dumps(stale_registry), encoding="utf-8")
+        try:
+            module.create_manifest(
+                repo=repo_root,
+                config=complete_config(),
+                criteria_path=criteria,
+                matrix_path=matrix,
+                mode="release",
+                n5_closure_path=None,
+                correctness_questions_path=resolved_questions,
+                measurement_gaps_path=stale_inherited_gaps,
+            )
+            fail("stale inherited-consensus facts closed a measurement gap")
+        except module.ManifestError as exc:
+            expected = (
+                "carrier-scale-transport-unmeasured does not pin the inherited Simplex dependencies"
+            )
+            if expected not in str(exc):
+                fail(f"stale inherited gap evidence reported the wrong refusal: {exc}")
+
+        # The live registry uses the separately reviewed inherited-Simplex
+        # closure. It must likewise expose the independent N5 refusal rather
+        # than retaining a decorative measurement-gap block.
+        try:
+            module.create_manifest(
+                repo=repo_root,
+                config=complete_config(),
+                criteria_path=criteria,
+                matrix_path=matrix,
+                mode="release",
+                n5_closure_path=None,
+                correctness_questions_path=resolved_questions,
+                measurement_gaps_path=live_gaps,
+            )
+            fail("live inherited evidence bypassed the exact-commit N5 closure")
+        except module.ManifestError as exc:
+            expected = "no N5 closure artifact was supplied for that exact commit"
+            if expected not in str(exc):
+                fail(f"live inherited gap closure reported the wrong next refusal: {exc}")
 
         diagnostic = module.create_manifest(
             repo=repo_root,

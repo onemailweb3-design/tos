@@ -28,6 +28,34 @@ REQUIRED_MEASUREMENT_GAP_IDS = (
     "sustained-finality-distribution-unmeasured",
 )
 
+INHERITED_SIMPLEX_DEPENDENCIES = {
+    "ton_current_consensus": "Simplex",
+    "ton_production_committee_approx": 400,
+    "tos_enforced_launch_cap": 21,
+}
+INHERITED_SIMPLEX_FORK_POINT = {
+    "commit": "628506c9e",
+    "validator_consensus_simplex_files": 16,
+}
+INHERITED_SIMPLEX_GAP_EVIDENCE = {
+    "release-scale-matrix-unmeasured": {
+        "upstream_validators_approx": 400,
+        "capped_validators": 21,
+        "relative_scale": "21/400 (about one nineteenth)",
+    },
+    "carrier-scale-transport-unmeasured": {
+        "pq_21_signature_bytes": 50820,
+        "ed25519_400_signature_bytes": 25600,
+        "relative_bytes": "1.99x",
+        "unreachable_structural_carrier_ceiling_bytes": 984260,
+    },
+    "sustained-finality-distribution-unmeasured": {
+        "pq_21_verify_us_at_67_6_each": 1419.6,
+        "ed25519_400_verify_us_at_30_each": 12000,
+        "relative_verify_cost": "0.12x (about one eighth)",
+    },
+}
+
 REQUIRED_SCALES = (21,)
 REQUIRED_NETWORK_PROFILES = ("baseline", "launch-wan", "degraded")
 REQUIRED_WORKLOADS = ("consensus-isolation", "target-load", "high-load")
@@ -349,7 +377,26 @@ def validate_open_measurement_gaps(path: Path, *, release: bool) -> None:
         elif status == "RESOLVED":
             if not isinstance(gap.get("resolved_by"), str) or not gap["resolved_by"]:
                 raise ManifestError(f"resolved measurement gap {gap_id} lacks resolved_by evidence")
-            if gap_id == "release-scale-matrix-unmeasured":
+            resolution_kind = gap.get("resolution_kind")
+            if resolution_kind == "INHERITED_SIMPLEX_WITH_ENFORCED_CAP":
+                if gap.get("depends_on") != INHERITED_SIMPLEX_DEPENDENCIES:
+                    raise ManifestError(
+                        f"resolved measurement gap {gap_id} does not pin the inherited Simplex dependencies"
+                    )
+                if gap.get("fork_point_evidence") != INHERITED_SIMPLEX_FORK_POINT:
+                    raise ManifestError(
+                        f"resolved measurement gap {gap_id} does not pin the Simplex fork-point evidence"
+                    )
+                evidence = gap.get("evidence")
+                if evidence != INHERITED_SIMPLEX_GAP_EVIDENCE[gap_id]:
+                    raise ManifestError(
+                        f"resolved measurement gap {gap_id} has stale inherited-production evidence"
+                    )
+            elif resolution_kind not in (None, "MEASURED_RELEASE_RESULT"):
+                raise ManifestError(
+                    f"measurement gap {gap_id} has unknown resolution_kind {resolution_kind}"
+                )
+            elif gap_id == "release-scale-matrix-unmeasured":
                 evidence_results = gap.get("evidence_results")
                 if (
                     not isinstance(evidence_results, list)
