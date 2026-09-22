@@ -94,6 +94,15 @@ Now move to **the exact commit the announcement names**. Replace
 git checkout <ANNOUNCED_COMMIT>
 ```
 
+If an announced commit was replaced by the privacy-only history rewrite,
+first verify the signed [commit mapping](PRIVACY-PROVENANCE.json) using
+tosman's registered public key, then check out its mapped revision. The
+[cleanup record](PRIVACY-CLEANUP.md) explains why the cryptographic sources
+and ceremony artifacts are unchanged. Use the mapped revision for the
+comparison below and record the revision you actually built in your own
+attestation. This exception permits metadata cleanup, not arbitrary code
+changes.
+
 Check you are where you think you are:
 
 ```sh

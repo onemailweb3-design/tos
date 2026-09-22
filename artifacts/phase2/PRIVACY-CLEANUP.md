@@ -29,3 +29,9 @@ not rewrite earlier repository history or unrelated branches. Hosting caches,
 unreachable Git objects, forks and previously downloaded copies are not erased
 by a force-push or asset replacement. Removing server-retained historical
 objects may require GitHub support; no such purge is claimed here.
+
+After this cleanup, an authenticated GitHub API check still retrieved an old
+commit by its original ID. The live branch and ceremony tags point to the
+sanitized history, but old server objects are not yet purged. GitHub decides
+whether a support removal request qualifies; this cleanup does not promise
+that it will remove already-public metadata.
