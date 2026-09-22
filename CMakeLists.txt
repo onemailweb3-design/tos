@@ -808,6 +808,15 @@ target_include_directories(test-measurement-contract PRIVATE ${CMAKE_CURRENT_SOU
 target_link_libraries(test-measurement-contract PRIVATE full-node validator-measurement tos_block tos_crypto
                       tos_pq_consensus tl_api tl_lite_api tdutils)
 
+add_executable(n6-microbench test/pq-native/n6-microbench.cpp)
+target_include_directories(n6-microbench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                           ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
+target_link_libraries(n6-microbench PRIVATE tos_block tos_crypto tos_pq_consensus_signer tos_pq_consensus
+                      tl_api tl_lite_api tl-lite-utils tdutils tdactor)
+target_compile_definitions(n6-microbench PRIVATE
+  N6_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+  N6_COMPILER="${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}")
+
 add_executable(test-pq-lite-forward-proof test/pq-native/pq-lite-forward-proof-test.cpp)
 target_include_directories(test-pq-lite-forward-proof PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                            ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
