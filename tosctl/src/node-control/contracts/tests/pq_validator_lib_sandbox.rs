@@ -438,9 +438,10 @@ fn the_contract_builds_the_bytes_the_vectors_freeze() {
     set_global_id(&mut chain, -239);
     let probe = deploy(&mut chain);
 
-    let vectors =
-        std::fs::read_to_string(repo_root().join("test/pq-native/authorisation-preimage-vectors.tsv"))
-            .expect("the shared preimage vectors");
+    let vectors = std::fs::read_to_string(
+        repo_root().join("test/pq-native/authorisation-preimage-vectors.tsv"),
+    )
+    .expect("the shared preimage vectors");
     let expected = |name: &str| -> String {
         vectors
             .lines()

@@ -112,10 +112,12 @@ jobs:
       # requires it to still be there.
       - name: Vector files match their generators
         run: |
-          cmake --build build --target authorisation-preimage-vectors-gen vote-carrier-vectors-gen \
-            controller-auth-vectors-gen descriptor-verdict-vectors-gen config43-vectors-gen \
-            validator-descr-vectors-gen pq-bytes-vectors-gen validator-set-hash-vectors-gen \
-            validator-session-vectors-gen validator-set-cases-gen -j2
+          mapfile -t vector_generators < <(./scripts/check-vector-files.sh --list-generators)
+          if [ "${#vector_generators[@]}" -eq 0 ]; then
+            echo "vector check failed: generator manifest is empty" >&2
+            exit 1
+          fi
+          cmake --build build --target "${vector_generators[@]}" -j2
           ./scripts/check-vector-files.sh . build
 
       - name: Build the post-quantum key tool

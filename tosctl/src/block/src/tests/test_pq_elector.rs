@@ -13,8 +13,10 @@ fn fill(byte: u8) -> UInt256 {
 }
 
 fn vectors() -> std::collections::HashMap<String, (usize, String)> {
-    let path =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../../../test/pq-native/authorisation-preimage-vectors.tsv");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../test/pq-native/authorisation-preimage-vectors.tsv"
+    );
     let text = std::fs::read_to_string(path).expect("the shared preimage vectors");
     let mut cases = std::collections::HashMap::new();
     for line in text.lines() {
