@@ -15,6 +15,10 @@ using pq_block_signature_test::candidate;
 using pq_block_signature_test::clone_pairs;
 using pq_block_signature_test::Fixture;
 using pq_block_signature_test::require_ok;
+using tos::validator::PendingFinalityCapacity;
+
+constexpr auto SharedCapacity = PendingFinalityCapacity::Shared;
+constexpr auto ValidatorCapacity = PendingFinalityCapacity::ValidatorReserved;
 
 struct ProcessingResult {
   bool accepted{false};
@@ -27,7 +31,7 @@ ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::Bl
   int sender = 0;
   for (const auto& signature_set : arrivals) {
     auto serialized_bytes = serialize_tl_object(signature_set->tl(), true).size();
-    if (!store.admit(0, sender++, signature_set, serialized_bytes, false, true).admitted()) {
+    if (!store.admit(0, sender++, signature_set, serialized_bytes, SharedCapacity, false, true).admitted()) {
       return {};
     }
   }
@@ -59,7 +63,7 @@ int main() {
   }
 
   tos::validator::PendingFinalityStore<int, int, int> permanent_failure;
-  permanent_failure.admit(0, 0, 7, 4096, false, true);
+  permanent_failure.admit(0, 0, 7, 4096, SharedCapacity, false, true);
   auto* permanent_candidates = permanent_failure.get_if_exists(0);
   permanent_candidates->begin_processing();
   if (permanent_candidates->resolve_front_failure(tos::ErrorCode::protoviolation).action !=
@@ -70,7 +74,8 @@ int main() {
   }
 
   tos::validator::PendingFinalityStore<int, int, int> expired_failure;
-  expired_failure.admit(0, 0, 7, 4096, false, true, tos::validator::pending_finality_retention_seconds);
+  expired_failure.admit(0, 0, 7, 4096, SharedCapacity, false, true,
+                        tos::validator::pending_finality_retention_seconds);
   auto* expired_candidates = expired_failure.get_if_exists(0);
   double retry_time = 0;
   while (retry_time < tos::validator::pending_finality_retention_seconds) {
@@ -118,8 +123,8 @@ int main() {
   }
 
   tos::validator::PendingFinalityStore<int, int, int> policy_rejection_check;
-  if (!policy_rejection_check.admit(0, 0, 0, 1, true, true).admitted() ||
-      policy_rejection_check.admit(0, 1, 1, 1, false, true).rejection !=
+  if (!policy_rejection_check.admit(0, 0, 0, 1, ValidatorCapacity, true, true).admitted() ||
+      policy_rejection_check.admit(0, 1, 1, 1, SharedCapacity, false, true).rejection !=
           tos::validator::PendingFinalityRejection::Policy) {
     std::cerr << "PENDING_FINALITY_POLICY_REJECTION_FAILURE: unverified evidence displaced verified finality\n";
     return 1;
@@ -127,39 +132,66 @@ int main() {
 
   tos::validator::PendingFinalityStore<int, int, int> sender_budget_check;
   if (!sender_budget_check
-           .admit(1, 7, 1, tos::validator::pending_finality_sender_budget_bytes, false, true)
+           .admit(1, 7, 1, tos::validator::pending_finality_sender_budget_bytes, SharedCapacity, false, true)
            .admitted() ||
-      sender_budget_check.admit(2, 7, 2, 1, false, true).rejection !=
+      sender_budget_check.admit(2, 7, 2, 1, SharedCapacity, false, true).rejection !=
           tos::validator::PendingFinalityRejection::SenderBudget) {
     std::cerr << "PENDING_FINALITY_SENDER_BUDGET_FAILURE: one sender exceeded its 1048576-byte share\n";
     return 1;
   }
   tos::validator::PendingFinalityStore<int, int, int> total_budget_check;
-  for (std::size_t i = 0; i < tos::validator::pending_finality_max_senders - 1; ++i) {
+  constexpr auto public_sender_shares = tos::validator::pending_finality_public_budget_bytes /
+                                        tos::validator::pending_finality_sender_budget_bytes;
+  for (std::size_t i = 0; i < public_sender_shares; ++i) {
     if (!total_budget_check
              .admit(static_cast<int>(i), static_cast<int>(i), static_cast<int>(i),
-                    tos::validator::pending_finality_sender_budget_bytes, false, true)
+                    tos::validator::pending_finality_sender_budget_bytes, SharedCapacity, false, true)
              .admitted()) {
-      std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: an authenticated sender lost its reserved share\n";
+      std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: a public peer lost its shared-pool allowance\n";
       return 1;
     }
   }
-  if (!total_budget_check
-           .admit(static_cast<int>(tos::validator::pending_finality_max_senders - 1),
-                  static_cast<int>(tos::validator::pending_finality_max_senders - 1), 1,
-                  tos::validator::pending_finality_sender_budget_bytes, false, true)
-           .admitted()) {
-    std::cerr << "PENDING_FINALITY_HONEST_SHARE_FAILURE: earlier Byzantine senders excluded the final validator\n";
+  if (total_budget_check
+          .admit(1000, 1000, 1000, tos::validator::pending_finality_minimum_charge_bytes, SharedCapacity, false, true)
+          .rejection != tos::validator::PendingFinalityRejection::SharedBudget) {
+    std::cerr << "PENDING_FINALITY_PUBLIC_BUDGET_FAILURE: public peers exceeded their 16777216-byte shared pool\n";
     return 1;
   }
-  if (total_budget_check
-          .admit(1001, 1001, 1001, tos::validator::pending_finality_minimum_charge_bytes, false, true)
-          .rejection != tos::validator::PendingFinalityRejection::TotalBudget) {
-    std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: store exceeded its validator-set-sized byte budget\n";
+  if (!total_budget_check
+           .admit(2000, 2000, 1, tos::validator::pending_finality_sender_budget_bytes, ValidatorCapacity, false, true)
+           .admitted()) {
+    std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: non-validator peers exhausted validator reserved capacity\n";
+    return 1;
+  }
+  tos::validator::PendingFinalityStore<int, int, int> reserved_budget_check;
+  for (std::size_t i = 0; i < tos::validator::pending_finality_max_validator_senders; ++i) {
+    if (!reserved_budget_check
+             .admit(static_cast<int>(i), static_cast<int>(i), static_cast<int>(i),
+                    tos::validator::pending_finality_sender_budget_bytes, ValidatorCapacity, false, true)
+             .admitted()) {
+      std::cerr << "PENDING_FINALITY_VALIDATOR_BUDGET_FAILURE: a committee authority lost its reserved share\n";
+      return 1;
+    }
+  }
+  if (reserved_budget_check
+          .admit(1001, 1001, 1001, tos::validator::pending_finality_minimum_charge_bytes, ValidatorCapacity, false,
+                 true)
+          .rejection != tos::validator::PendingFinalityRejection::ValidatorReservedBudget) {
+    std::cerr << "PENDING_FINALITY_VALIDATOR_BUDGET_FAILURE: committee evidence exceeded its 419430400-byte pool\n";
     return 1;
   }
 
   Fixture fixture;
+  auto validator_descriptors = fixture.validator_set->export_vector();
+  auto validator_peer = tos::validator::validator_transport_root(validator_descriptors.front());
+  auto unrelated_peer = tos::PublicKeyHash{pq_block_signature_test::hash_of("unrelated-public-overlay-peer")};
+  if (!tos::validator::pending_finality_sender_is_validator(
+          tos::validator::PendingBlockFinalitySender::remote(validator_peer), validator_descriptors) ||
+      tos::validator::pending_finality_sender_is_validator(
+          tos::validator::PendingBlockFinalitySender::remote(unrelated_peer), validator_descriptors)) {
+    std::cerr << "PENDING_FINALITY_AUTHORITY_CLASSIFICATION_FAILURE: transport sender was assigned to the wrong pool\n";
+    return 1;
+  }
   auto candidate_data = candidate(fixture.id);
   const std::vector<std::size_t> quorum_signers{0, 1};
   auto valid_pairs = fixture.sign(quorum_signers, fixture.session, Fixture::slot, candidate_data, true, fixture.id);
@@ -182,8 +214,33 @@ int main() {
   }
   const block::PQFinalityVerificationContext context{fixture.validator_set, fixture.id, fixture.session};
 
+  tos::validator::PendingFinalityStore<int, int, td::Ref<block::BlockSignatureSet>> authority_reservation_gate;
+  for (std::size_t i = 0; i < public_sender_shares; ++i) {
+    if (!authority_reservation_gate
+             .admit(static_cast<int>(i), static_cast<int>(i), invalid,
+                    tos::validator::pending_finality_sender_budget_bytes, SharedCapacity, false, true)
+             .admitted()) {
+      std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: public peers did not fill their shared pool\n";
+      return 1;
+    }
+  }
+  if (!authority_reservation_gate
+           .admit(100, 100, valid, tos::validator::pending_finality_sender_budget_bytes, ValidatorCapacity, false,
+                  true)
+           .admitted()) {
+    std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: non-validator peers exhausted validator reserved capacity\n";
+    return 1;
+  }
+  auto* reserved_candidate = authority_reservation_gate.get_if_exists(100)->begin_processing();
+  if (reserved_candidate == nullptr ||
+      block::verify_pq_finality(context, *reserved_candidate->evidence, block::FinalityRole::Final).is_error()) {
+    std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: admitted validator evidence was not accepted\n";
+    return 1;
+  }
+  authority_reservation_gate.get_if_exists(100)->complete_front(true);
+
   tos::validator::PendingFinalityStore<int, int, td::Ref<block::BlockSignatureSet>> retry_then_accept;
-  if (!retry_then_accept.admit(0, 0, valid, 4096, false, true).admitted()) {
+  if (!retry_then_accept.admit(0, 0, valid, 4096, ValidatorCapacity, false, true).admitted()) {
     std::cerr << "PENDING_FINALITY_RETRY_FAILURE: valid certificate was not admitted\n";
     return 1;
   }
@@ -216,14 +273,14 @@ int main() {
   auto valid_bytes = serialize_tl_object(valid->tl(), true).size();
   constexpr int old_candidate_limit = 4;
   for (int i = 0; i < old_candidate_limit; ++i) {
-    auto admission = isolated_store.admit(0, 1, invalid, invalid_bytes, false, true);
+    auto admission = isolated_store.admit(0, 1, invalid, invalid_bytes, ValidatorCapacity, false, true);
     if ((i == 0 && !admission.admitted()) ||
         (i != 0 && admission.rejection != tos::validator::PendingFinalityRejection::SenderAlreadyPending)) {
       std::cerr << "PENDING_FINALITY_SENDER_ISOLATION_FAILURE: one sender occupied more than one block candidate\n";
       return 1;
     }
   }
-  if (!isolated_store.admit(0, 2, valid, valid_bytes, false, true).admitted() ||
+  if (!isolated_store.admit(0, 2, valid, valid_bytes, ValidatorCapacity, false, true).admitted() ||
       isolated_store.get_if_exists(0)->size() != 2) {
     std::cerr << "PENDING_FINALITY_SENDER_ISOLATION_FAILURE: honest sender was excluded by a Byzantine sender\n";
     return 1;
@@ -278,7 +335,10 @@ int main() {
   std::cout << "PENDING_FINALITY_TRANSPORT_DEDUP_OK: evidence-distinct finalities have distinct transport ids\n";
   std::cout << "PENDING_FINALITY_SENDER_ISOLATION_OK: four bad arrivals from one sender did not exclude another sender\n";
   std::cout << "PENDING_FINALITY_BYTE_BUDGET_OK: total="
-            << tos::validator::pending_finality_total_budget_bytes << " per_sender=1048576 minimum_charge=4096"
-            << " sender_shares=" << tos::validator::pending_finality_max_senders << "\n";
+            << tos::validator::pending_finality_total_budget_bytes
+            << " public_shared=" << tos::validator::pending_finality_public_budget_bytes
+            << " validator_reserved=" << tos::validator::pending_finality_validator_reserved_budget_bytes
+            << " per_sender=1048576 minimum_charge=4096 validator_shares="
+            << tos::validator::pending_finality_max_validator_senders << "\n";
   return 0;
 }

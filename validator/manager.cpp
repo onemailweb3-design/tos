@@ -707,12 +707,27 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
                             << block_id.to_str() << " rejection=" << static_cast<int>(ingress.rejection);
     co_return td::Unit{};
   }
+  bool validator_capacity = ingress.sender.local;
+  if (!validator_capacity) {
+    auto state = Ref<MasterchainStateQ>(last_masterchain_state_);
+    auto source_matches = [&](const Ref<block::ValidatorSet> &set) {
+      return set.not_null() && set->get_catchain_seqno() == finality.sig_set->get_catchain_seqno() &&
+             set->get_validator_set_hash() == finality.sig_set->get_validator_set_hash() &&
+             pending_finality_sender_is_validator(ingress.sender, set->export_vector());
+    };
+    validator_capacity = source_matches(
+                             state->get_next_validator_set(block_id.shard_full(), finality.sig_set->get_catchain_seqno())) ||
+                         source_matches(
+                             state->get_validator_set(block_id.shard_full(), finality.sig_set->get_catchain_seqno()));
+  }
+  const auto capacity = validator_capacity ? PendingFinalityCapacity::ValidatorReserved
+                                           : PendingFinalityCapacity::Shared;
   auto admission_time = td::Time::now();
   pending_block_finality_.erase_expired(admission_time);
   auto expires_at = admission_time + pending_finality_retention_seconds;
   auto admission = pending_block_finality_.admit(
       block_id, std::move(ingress.sender), PendingBlockFinalityCandidate{finality.sig_set, source},
-      ingress.accounted_bytes, signatures_verified, incoming_is_final, expires_at);
+      ingress.accounted_bytes, capacity, signatures_verified, incoming_is_final, expires_at);
   if (!admission.admitted()) {
     VLOG(VALIDATOR_DEBUG) << "dropping block finality broadcast because its sender-isolated byte-bounded store did "
                              "not admit it: block="

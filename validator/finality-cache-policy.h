@@ -18,7 +18,15 @@
 namespace tos::validator {
 
 enum class PendingFinalityAdmission { Keep, Append, Replace };
-enum class PendingFinalityRejection { None, Policy, SenderAlreadyPending, SenderBudget, TotalBudget };
+enum class PendingFinalityRejection {
+  None,
+  Policy,
+  SenderAlreadyPending,
+  SenderBudget,
+  SharedBudget,
+  ValidatorReservedBudget
+};
+enum class PendingFinalityCapacity { Shared, ValidatorReserved };
 enum class PendingFinalityFailureAction { Retry, DiscardPermanent, DiscardExpired };
 
 struct PendingFinalityFailureResult {
@@ -71,20 +79,29 @@ struct PendingFinalityAdmissionResult {
 
 // Remote entries are charged by their received boxed-TL payload bytes; local
 // entries use their measured intrinsic signature bytes. A minimum charge for
-// either source bounds both memory and object count: at most 4096
-// minimum-sized candidates can be pending globally.
+// either source bounds both memory and object count: at most 256 candidates per
+// sender and 106496 minimum-charged candidates across both pools.
 inline constexpr std::size_t pending_finality_sender_budget_bytes = 1024 * 1024;
 inline constexpr std::size_t pending_finality_minimum_charge_bytes = 4096;
-inline constexpr std::size_t pending_finality_max_senders = tos::pq::PQConsensusLimits{}.max_certificate_signers;
-static_assert(pending_finality_max_senders <=
+inline constexpr std::size_t pending_finality_public_budget_bytes = 16 * 1024 * 1024;
+inline constexpr std::size_t pending_finality_max_validator_senders =
+    tos::pq::PQConsensusLimits{}.max_certificate_signers;
+static_assert(pending_finality_max_validator_senders <=
               std::numeric_limits<std::size_t>::max() / pending_finality_sender_budget_bytes);
-// A byte budget smaller than one full sender share per maximum-size validator
-// set lets distinct authenticated Byzantine validators consume every byte before
-// an honest validator arrives.  Keep the per-sender cap, but reserve one such
-// share for every authority that can belong to the target set.  This is a hard
-// upper bound, not a preallocation: the store only owns bytes actually received.
+// Public shard overlays admit non-validator peers, so peer cardinality cannot
+// justify a committee-sized global budget. Non-validator senders share a fixed
+// 16 MiB pool. A disjoint pool reserves one 1 MiB share for each transport
+// authority in the largest admitted validator set, ensuring public peers cannot
+// crowd valid committee evidence out. The reserved pool holds one complete
+// maximum-size committee; it does not promise independent reservations across
+// a validator-set rotation. These are hard upper bounds rather than
+// preallocations; together they cap retained unverified evidence at 416 MiB.
+inline constexpr std::size_t pending_finality_validator_reserved_budget_bytes =
+    pending_finality_max_validator_senders * pending_finality_sender_budget_bytes;
+static_assert(pending_finality_public_budget_bytes <=
+              std::numeric_limits<std::size_t>::max() - pending_finality_validator_reserved_budget_bytes);
 inline constexpr std::size_t pending_finality_total_budget_bytes =
-    pending_finality_max_senders * pending_finality_sender_budget_bytes;
+    pending_finality_public_budget_bytes + pending_finality_validator_reserved_budget_bytes;
 
 // A verified cached value keeps the old strength policy: final replaces
 // approve, while equal strength and downgrades keep the verified value.
@@ -116,6 +133,7 @@ class PendingFinalityCandidates {
     Evidence evidence;
     Sender sender;
     std::size_t accounted_bytes;
+    PendingFinalityCapacity capacity;
     bool verified;
     bool is_final;
     double expires_at{std::numeric_limits<double>::max()};
@@ -140,8 +158,9 @@ class PendingFinalityCandidates {
     return action;
   }
 
-  PendingFinalityAdmission admit(Evidence evidence, Sender sender, std::size_t accounted_bytes, bool verified,
-                                  bool is_final, double expires_at) {
+  PendingFinalityAdmission admit(Evidence evidence, Sender sender, std::size_t accounted_bytes,
+                                  PendingFinalityCapacity capacity, bool verified, bool is_final,
+                                  double expires_at) {
     auto action = admission(verified, is_final);
     if (action == PendingFinalityAdmission::Keep) {
       return action;
@@ -149,8 +168,8 @@ class PendingFinalityCandidates {
     if (action == PendingFinalityAdmission::Replace) {
       entries_.clear();
     }
-    entries_.push_back(Entry{std::move(evidence), std::move(sender), accounted_bytes, verified, is_final, expires_at,
-                             0, pending_finality_initial_retry_seconds});
+    entries_.push_back(Entry{std::move(evidence), std::move(sender), accounted_bytes, capacity, verified, is_final,
+                             expires_at, 0, pending_finality_initial_retry_seconds});
     return action;
   }
 
@@ -175,6 +194,16 @@ class PendingFinalityCandidates {
     std::size_t result = 0;
     for (const auto &entry : entries_) {
       if (entry.sender == sender) {
+        result += entry.accounted_bytes;
+      }
+    }
+    return result;
+  }
+
+  std::size_t accounted_bytes(PendingFinalityCapacity capacity) const {
+    std::size_t result = 0;
+    for (const auto &entry : entries_) {
+      if (entry.capacity == capacity) {
         result += entry.accounted_bytes;
       }
     }
@@ -268,7 +297,8 @@ class PendingFinalityStore {
   using Candidates = PendingFinalityCandidates<Evidence, Sender>;
 
   PendingFinalityAdmissionResult admit(const BlockKey &block, Sender sender, Evidence evidence,
-                                       std::size_t serialized_bytes, bool verified, bool is_final,
+                                       std::size_t serialized_bytes, PendingFinalityCapacity capacity, bool verified,
+                                       bool is_final,
                                        double expires_at = std::numeric_limits<double>::max()) {
     auto it = entries_.find(block);
     auto action = it == entries_.end() ? PendingFinalityAdmission::Replace
@@ -281,23 +311,29 @@ class PendingFinalityStore {
     }
 
     const auto charge = std::max(serialized_bytes, pending_finality_minimum_charge_bytes);
-    const auto removed_total = action == PendingFinalityAdmission::Replace && it != entries_.end()
-                                   ? it->second.accounted_bytes()
-                                   : 0;
     const auto removed_sender = action == PendingFinalityAdmission::Replace && it != entries_.end()
                                     ? it->second.accounted_bytes(sender)
                                     : 0;
+    const auto removed_capacity = action == PendingFinalityAdmission::Replace && it != entries_.end()
+                                      ? it->second.accounted_bytes(capacity)
+                                      : 0;
     if (pending_finality_exceeds_budget(sender_bytes(sender), removed_sender, charge,
                                         pending_finality_sender_budget_bytes)) {
       return {PendingFinalityAdmission::Keep, PendingFinalityRejection::SenderBudget};
     }
-    if (pending_finality_exceeds_budget(total_bytes(), removed_total, charge, pending_finality_total_budget_bytes)) {
-      return {PendingFinalityAdmission::Keep, PendingFinalityRejection::TotalBudget};
+    const auto capacity_budget = capacity == PendingFinalityCapacity::ValidatorReserved
+                                     ? pending_finality_validator_reserved_budget_bytes
+                                     : pending_finality_public_budget_bytes;
+    if (pending_finality_exceeds_budget(capacity_bytes(capacity), removed_capacity, charge, capacity_budget)) {
+      return {PendingFinalityAdmission::Keep,
+              capacity == PendingFinalityCapacity::ValidatorReserved
+                  ? PendingFinalityRejection::ValidatorReservedBudget
+                  : PendingFinalityRejection::SharedBudget};
     }
     if (it == entries_.end()) {
       it = entries_.emplace(block, Candidates{}).first;
     }
-    return {it->second.admit(std::move(evidence), std::move(sender), charge, verified, is_final, expires_at),
+    return {it->second.admit(std::move(evidence), std::move(sender), charge, capacity, verified, is_final, expires_at),
             PendingFinalityRejection::None};
   }
 
@@ -342,6 +378,15 @@ class PendingFinalityStore {
     for (const auto &[unused, candidates] : entries_) {
       (void)unused;
       result += candidates.accounted_bytes(sender);
+    }
+    return result;
+  }
+
+  std::size_t capacity_bytes(PendingFinalityCapacity capacity) const {
+    std::size_t result = 0;
+    for (const auto &[unused, candidates] : entries_) {
+      (void)unused;
+      result += candidates.accounted_bytes(capacity);
     }
     return result;
   }

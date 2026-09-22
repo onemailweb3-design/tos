@@ -7,8 +7,10 @@
 
 #include <cstddef>
 #include <optional>
+#include <vector>
 
 #include "keys/keys.hpp"
+#include "validator/validator-transport-authority.h"
 
 namespace tos::validator {
 
@@ -67,6 +69,23 @@ inline PendingFinalityIngressDecision prepare_pending_finality_ingress(
   }
   return {PendingBlockFinalitySender::local_source(), *local_signature_bytes,
           PendingFinalityIngressRejection::None};
+}
+
+// Only the transport identity carried by a descriptor in the exact validator
+// set governing this evidence is entitled to the committee-reserved capacity.
+// Public-overlay peers remain authenticated transport senders, but they are not
+// consensus authorities and therefore draw from the shared public pool.
+inline bool pending_finality_sender_is_validator(const PendingBlockFinalitySender &sender,
+                                                 const std::vector<ValidatorDescr> &validators) {
+  if (sender.local) {
+    return true;
+  }
+  for (const auto &validator : validators) {
+    if (validator_transport_root(validator) == sender.peer) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace tos::validator

@@ -46,6 +46,15 @@ require_marker validator/manager.cpp \
   'if (!admission.admitted()) {' \
   'manager no longer stops after the pending store rejects evidence'
 require_marker validator/manager.cpp \
+  'pending_finality_sender_is_validator(ingress.sender, set->export_vector())' \
+  'manager no longer classifies the authenticated sender against the governing validator set'
+require_marker validator/manager.cpp \
+  'set->get_validator_set_hash() == finality.sig_set->get_validator_set_hash()' \
+  'manager grants reserved capacity without matching the evidence validator-set hash'
+require_marker validator/manager.cpp \
+  'ingress.accounted_bytes, capacity, signatures_verified' \
+  'manager no longer passes the authority capacity class into the pending store'
+require_marker validator/manager.cpp \
   'new_block_finality_broadcast(finality.clone(), BroadcastSource::consensus_overlay)' \
   'locally originated finality no longer uses the explicit local-source path'
 
