@@ -18,26 +18,57 @@ require_marker() {
   fi
 }
 
+# Match a complete call/expression after collapsing whitespace.  This pins an
+# argument to the call that consumes it without making clang-format line wraps
+# part of the security contract.
+require_statement_marker() {
+  local file="$1"
+  local anchor="$2"
+  local terminator="$3"
+  local marker="$4"
+  local description="$5"
+  if ! awk -v anchor="$anchor" -v terminator="$terminator" -v marker="$marker" '
+      index($0, anchor) { collecting = 1; statement = "" }
+      collecting {
+        statement = statement " " $0
+        if (index($0, terminator)) {
+          gsub(/[[:space:]]+/, " ", statement)
+          if (index(statement, marker)) found = 1
+          collecting = 0
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    ' "$root/$file"; then
+    echo "FINALITY_ADMISSION_SOURCE_FAILURE: $description ($file)" >&2
+    failed=1
+  fi
+}
+
 require_marker validator/full-node-shard.cpp \
   'block_finality_broadcast_transport_id(finality)' \
   'public Plumtree finality route lost its evidence-aware transport id'
 require_marker validator/full-node-fast-sync-overlays.cpp \
   'block_finality_broadcast_transport_id(finality)' \
   'fast-sync Plumtree finality route lost its evidence-aware transport id'
-require_marker validator/full-node-shard.cpp \
-  'src, BroadcastSource::public_overlay, false' \
+require_statement_marker validator/full-node-shard.cpp \
+  '&FullNode::process_block_finality_broadcast' ');' \
+  'std::move(parsed_finality), src, BroadcastSource::public_overlay, false' \
   'public finality ingress no longer carries its authenticated sender'
-require_marker validator/full-node-fast-sync-overlays.cpp \
-  'src, BroadcastSource::fast_sync_overlay, true' \
+require_statement_marker validator/full-node-fast-sync-overlays.cpp \
+  '&FullNode::process_block_finality_broadcast' ');' \
+  'std::move(parsed_finality), src, BroadcastSource::fast_sync_overlay, true' \
   'fast-sync finality ingress no longer carries its authenticated sender'
-require_marker validator/full-node-custom-overlays.cpp \
-  'src, BroadcastSource::custom_overlay, !block_senders_.contains(local_id_)' \
+require_statement_marker validator/full-node-custom-overlays.cpp \
+  '&FullNode::process_block_finality_broadcast' ');' \
+  'std::move(parsed_finality), src, BroadcastSource::custom_overlay, !block_senders_.contains(local_id_)' \
   'custom-overlay finality ingress no longer carries its authenticated sender'
-require_marker validator/full-node.cpp \
+require_statement_marker validator/full-node.cpp \
+  '&ValidatorManagerInterface::new_block_finality_broadcast' '.detach("full-node finality broadcast");' \
   'std::move(finality), source, td::optional<PublicKeyHash>(source_peer)' \
   'full-node finality ingress no longer hands the authenticated sender to the manager'
-require_marker validator/manager.cpp \
-  'prepare_pending_finality_ingress(source_peer ? &*source_peer : nullptr' \
+require_statement_marker validator/manager.cpp \
+  'prepare_pending_finality_ingress(' ');' \
+  'source_peer ? &*source_peer : nullptr, finality.received_bytes, local_signature_bytes' \
   'manager admission no longer applies its checked accounting and sender decision'
 require_marker validator/manager.cpp \
   'if (!ingress.admitted()) {' \
@@ -54,8 +85,9 @@ require_marker validator/manager.cpp \
 require_marker validator/manager.cpp \
   'pending_finality_authority_memo_.get({shard, claimed_catchain_seqno}' \
   'manager no longer shares memoized validator sets between authority classification and classical verification'
-require_marker validator/manager.cpp \
-  'pending_finality_coordinate_is_admissible(state->get_shard_from_config(shard, true).not_null(),' \
+require_statement_marker validator/manager.cpp \
+  'pending_finality_coordinate_is_admissible(' ')) {' \
+  'state->get_shard_from_config(shard, true).not_null(), current_catchain_seqno, claimed_catchain_seqno' \
   'manager authority classification no longer requires an exact configured shard before set computation'
 require_marker validator/pending-finality-ingress.h \
   'pending_finality_catchain_is_current_or_next(current, claimed)' \
@@ -69,15 +101,17 @@ require_marker validator/manager.cpp \
 require_marker validator/manager.cpp \
   '*pending_finality_authority_memo_state_ != last_masterchain_block_id_' \
   'manager no longer keys authority-memo lifetime to the trusted masterchain state'
-require_marker validator/manager.cpp \
-  'check_finality_signatures(finality.block_id, finality.sig_set, std::move(validator_sets))' \
+require_statement_marker validator/manager.cpp \
+  'check_finality_signatures(' ';' \
+  'finality.block_id, finality.sig_set, std::move(validator_sets)' \
   'classical finality verification no longer consumes validator sets from the shared authority memo'
 if sed -n '/static td::actor::Task<> check_finality_signatures/,/^}/p' "$root/validator/manager.cpp" | \
     grep -qF 'get_validator_set('; then
   echo "FINALITY_ADMISSION_SOURCE_FAILURE: classical finality verification recomputes a validator set outside the shared memo" >&2
   failed=1
 fi
-require_marker validator/manager.cpp \
+require_statement_marker validator/manager.cpp \
+  'pending_block_finality_.admit(' ');' \
   'ingress.accounted_bytes, capacity, signatures_verified' \
   'manager no longer passes the authority capacity class into the pending store'
 require_marker validator/manager.cpp \
