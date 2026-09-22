@@ -1282,6 +1282,9 @@ add_dependencies(all-tests validator-engine lite-client tos-pq-consensus-key)
 add_test(NAME finality-evidence-admission-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-evidence-admission.sh ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(finality-evidence-admission-source PROPERTIES LABELS "source-guard")
+add_test(NAME finality-evidence-admission-marker-mutations
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/finality-evidence-admission-marker-test.py)
+set_tests_properties(finality-evidence-admission-marker-mutations PROPERTIES LABELS "source-guard")
 add_test(NAME pending-finality-retry-policy-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-retry-policy.sh ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(pending-finality-retry-policy-source PROPERTIES LABELS "source-guard")
