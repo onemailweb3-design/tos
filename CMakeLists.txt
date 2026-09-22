@@ -1197,6 +1197,8 @@ tos_test(test-validator-transport-authority)
 tos_test(test-pending-finality-cache)
 add_test(NAME finality-evidence-admission-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-evidence-admission.sh ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME pending-finality-retry-policy-source
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-retry-policy.sh ${CMAKE_CURRENT_SOURCE_DIR})
 tos_test(test-pq-lite-forward-proof)
 tos_test(test-download-next-blocks-validation)
 tos_test(test-ext-message-pool)

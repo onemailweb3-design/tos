@@ -47,6 +47,50 @@ ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::Bl
 }  // namespace
 
 int main() {
+  if (tos::validator::pending_finality_failure_action(tos::ErrorCode::timeout, 1) !=
+      tos::validator::PendingFinalityFailureAction::Retry) {
+    std::cerr << "PENDING_FINALITY_TIMEOUT_CLASSIFICATION_FAILURE: verification timeout was treated as permanent\n";
+    return 1;
+  }
+  if (!tos::validator::pending_finality_exceeds_budget(1, 2, 0, 10)) {
+    std::cerr << "PENDING_FINALITY_BUDGET_ARITHMETIC_FAILURE: removed bytes exceeded current accounting without rejection\n";
+    return 1;
+  }
+
+  tos::validator::PendingFinalityStore<int, int, int> permanent_failure;
+  permanent_failure.admit(0, 0, 7, 4096, false, true);
+  auto* permanent_candidates = permanent_failure.get_if_exists(0);
+  permanent_candidates->begin_processing();
+  if (permanent_candidates->resolve_front_failure(tos::ErrorCode::protoviolation) !=
+          tos::validator::PendingFinalityFailureAction::DiscardPermanent ||
+      !permanent_candidates->empty()) {
+    std::cerr << "PENDING_FINALITY_PERMANENT_FAILURE: inconsistent evidence was retained for retry\n";
+    return 1;
+  }
+
+  tos::validator::PendingFinalityStore<int, int, int> exhausted_failure;
+  exhausted_failure.admit(0, 0, 7, 4096, false, true);
+  auto* exhausted_candidates = exhausted_failure.get_if_exists(0);
+  for (std::size_t attempt = 1; attempt <= tos::validator::pending_finality_max_attempts; ++attempt) {
+    if (exhausted_candidates->begin_processing() == nullptr) {
+      std::cerr << "PENDING_FINALITY_RETRY_BOUND_FAILURE: candidate vanished before the retry bound\n";
+      return 1;
+    }
+    auto action = exhausted_candidates->resolve_front_failure(tos::ErrorCode::notready);
+    auto expected = attempt == tos::validator::pending_finality_max_attempts
+                        ? tos::validator::PendingFinalityFailureAction::DiscardExhausted
+                        : tos::validator::PendingFinalityFailureAction::Retry;
+    if (action != expected) {
+      std::cerr << "PENDING_FINALITY_RETRY_BOUND_FAILURE: transient candidate did not stop at attempt "
+                << tos::validator::pending_finality_max_attempts << "\n";
+      return 1;
+    }
+  }
+  if (!exhausted_candidates->empty()) {
+    std::cerr << "PENDING_FINALITY_RETRY_BOUND_FAILURE: exhausted candidate retained its sender slot\n";
+    return 1;
+  }
+
   auto peer = tos::PublicKeyHash::zero();
   auto missing_remote_bytes = tos::validator::prepare_pending_finality_ingress(&peer, 0);
   if (missing_remote_bytes.admitted() ||
@@ -130,6 +174,31 @@ int main() {
   }
   const block::PQFinalityVerificationContext context{fixture.validator_set, fixture.id, fixture.session};
 
+  tos::validator::PendingFinalityStore<int, int, td::Ref<block::BlockSignatureSet>> retry_then_accept;
+  if (!retry_then_accept.admit(0, 0, valid, 4096, false, true).admitted()) {
+    std::cerr << "PENDING_FINALITY_RETRY_FAILURE: valid certificate was not admitted\n";
+    return 1;
+  }
+  auto* retry_candidates = retry_then_accept.get_if_exists(0);
+  if (retry_candidates->begin_processing() == nullptr ||
+      retry_candidates->resolve_front_failure(tos::ErrorCode::notready) !=
+          tos::validator::PendingFinalityFailureAction::Retry ||
+      retry_candidates->empty()) {
+    std::cerr << "PENDING_FINALITY_RETRY_FAILURE: valid evidence was discarded while required state was not ready\n";
+    return 1;
+  }
+  auto* retried = retry_candidates->begin_processing();
+  if (retried == nullptr ||
+      block::verify_pq_finality(context, *retried->evidence, block::FinalityRole::Final).is_error()) {
+    std::cerr << "PENDING_FINALITY_RETRY_FAILURE: retained evidence was not valid on the later attempt\n";
+    return 1;
+  }
+  retry_candidates->complete_front(true);
+  if (!retry_candidates->empty()) {
+    std::cerr << "PENDING_FINALITY_RETRY_FAILURE: a later successful attempt did not accept the evidence\n";
+    return 1;
+  }
+
   tos::validator::PendingFinalityStore<int, int, td::Ref<block::BlockSignatureSet>> isolated_store;
   auto invalid_bytes = serialize_tl_object(invalid->tl(), true).size();
   auto valid_bytes = serialize_tl_object(valid->tl(), true).size();
@@ -188,6 +257,11 @@ int main() {
     return 1;
   }
   std::cout << "PENDING_FINALITY_ORDER_OK: first cryptographically valid final accepted in both arrival orders\n";
+  std::cout << "PENDING_FINALITY_RETRY_OK: notready retained valid evidence and a later attempt accepted it\n";
+  std::cout << "PENDING_FINALITY_TIMEOUT_CLASSIFICATION_OK: verification timeout remains transient\n";
+  std::cout << "PENDING_FINALITY_PERMANENT_OK: protocol violation was discarded without retry\n";
+  std::cout << "PENDING_FINALITY_RETRY_BOUND_OK: transient evidence freed its slot after "
+            << tos::validator::pending_finality_max_attempts << " attempts\n";
   std::cout << "PENDING_FINALITY_INGRESS_OK: missing accounting fails closed and authenticated senders retain attribution\n";
   std::cout << "PENDING_FINALITY_TRANSPORT_DEDUP_OK: evidence-distinct finalities have distinct transport ids\n";
   std::cout << "PENDING_FINALITY_SENDER_ISOLATION_OK: four bad arrivals from one sender did not exclude another sender\n";

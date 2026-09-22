@@ -11,10 +11,44 @@
 #include <map>
 #include <utility>
 
+#include "common/errorcode.h"
+
 namespace tos::validator {
 
 enum class PendingFinalityAdmission { Keep, Append, Replace };
 enum class PendingFinalityRejection { None, Policy, SenderAlreadyPending, SenderBudget, TotalBudget };
+enum class PendingFinalityFailureAction { Retry, DiscardPermanent, DiscardExhausted };
+
+// Three attempts allow two opportunities for masterchain/proof state to become
+// available after the first notready result, while preventing one candidate
+// from retaining its sender slot indefinitely. The short delay yields to the
+// actor work that can satisfy that dependency; timeout is classified the same
+// way, but slow signature verification is not the motivating test case.
+inline constexpr std::size_t pending_finality_max_attempts = 3;
+inline constexpr double pending_finality_retry_delay_seconds = 0.25;
+
+constexpr PendingFinalityFailureAction pending_finality_failure_action(int error_code, std::size_t attempts) {
+  if (error_code != ErrorCode::notready && error_code != ErrorCode::timeout) {
+    return PendingFinalityFailureAction::DiscardPermanent;
+  }
+  if (attempts >= pending_finality_max_attempts) {
+    return PendingFinalityFailureAction::DiscardExhausted;
+  }
+  return PendingFinalityFailureAction::Retry;
+}
+
+constexpr bool pending_finality_exceeds_budget(std::size_t current, std::size_t removed, std::size_t added,
+                                               std::size_t budget) {
+  // `removed` is structurally the sum of entries selected from `current`: both
+  // values are computed from the same store immediately before this call, and
+  // no mutation occurs between them. Keep the check explicit nonetheless;
+  // accounting corruption must reject rather than rely on unsigned wraparound.
+  if (removed > current) {
+    return true;
+  }
+  current -= removed;
+  return current > budget || added > budget - current;
+}
 
 struct PendingFinalityAdmissionResult {
   PendingFinalityAdmission action{PendingFinalityAdmission::Keep};
@@ -65,6 +99,7 @@ class PendingFinalityCandidates {
     std::size_t accounted_bytes;
     bool verified;
     bool is_final;
+    std::size_t attempts{0};
   };
 
   PendingFinalityAdmission admission(bool verified, bool is_final) const {
@@ -93,7 +128,7 @@ class PendingFinalityCandidates {
     if (action == PendingFinalityAdmission::Replace) {
       entries_.clear();
     }
-    entries_.push_back(Entry{std::move(evidence), std::move(sender), accounted_bytes, verified, is_final});
+    entries_.push_back(Entry{std::move(evidence), std::move(sender), accounted_bytes, verified, is_final, 0});
     return action;
   }
 
@@ -129,7 +164,22 @@ class PendingFinalityCandidates {
       return nullptr;
     }
     processing_ = true;
+    entries_.front().attempts++;
     return &entries_.front();
+  }
+
+  PendingFinalityFailureAction resolve_front_failure(int error_code) {
+    if (!processing_ || entries_.empty()) {
+      return PendingFinalityFailureAction::DiscardPermanent;
+    }
+    auto action = pending_finality_failure_action(error_code, entries_.front().attempts);
+    if (action == PendingFinalityFailureAction::Retry) {
+      processing_ = false;
+    } else {
+      entries_.pop_front();
+      processing_ = false;
+    }
+    return action;
   }
 
   void complete_front(bool accepted) {
@@ -195,10 +245,11 @@ class PendingFinalityStore {
     const auto removed_sender = action == PendingFinalityAdmission::Replace && it != entries_.end()
                                     ? it->second.accounted_bytes(sender)
                                     : 0;
-    if (exceeds_budget(sender_bytes(sender), removed_sender, charge, pending_finality_sender_budget_bytes)) {
+    if (pending_finality_exceeds_budget(sender_bytes(sender), removed_sender, charge,
+                                        pending_finality_sender_budget_bytes)) {
       return {PendingFinalityAdmission::Keep, PendingFinalityRejection::SenderBudget};
     }
-    if (exceeds_budget(total_bytes(), removed_total, charge, pending_finality_total_budget_bytes)) {
+    if (pending_finality_exceeds_budget(total_bytes(), removed_total, charge, pending_finality_total_budget_bytes)) {
       return {PendingFinalityAdmission::Keep, PendingFinalityRejection::TotalBudget};
     }
     if (it == entries_.end()) {
@@ -241,11 +292,6 @@ class PendingFinalityStore {
   }
 
  private:
-  static bool exceeds_budget(std::size_t current, std::size_t removed, std::size_t added, std::size_t budget) {
-    current -= removed;
-    return current > budget || added > budget - current;
-  }
-
   std::map<BlockKey, Candidates> entries_;
 };
 

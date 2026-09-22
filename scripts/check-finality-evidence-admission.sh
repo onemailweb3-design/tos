@@ -45,6 +45,19 @@ require_marker validator/manager.cpp \
 require_marker validator/manager.cpp \
   'if (!admission.admitted()) {' \
   'manager no longer stops after the pending store rejects evidence'
+require_marker validator/manager.cpp \
+  'new_block_finality_broadcast(finality.clone(), BroadcastSource::consensus_overlay)' \
+  'locally originated finality no longer uses the explicit local-source path'
+
+# Five occurrences are the interface declaration, implementation declaration,
+# implementation definition, authenticated full-node call, and explicit local
+# consensus call. A sixth occurrence is an unclassified ingress route.
+caller_sites=$(grep -R --include='*.cpp' --include='*.h' --include='*.hpp' \
+  -F 'new_block_finality_broadcast' "$root/validator" | wc -l)
+if [ "$caller_sites" -ne 5 ]; then
+  echo "FINALITY_ADMISSION_SOURCE_FAILURE: new_block_finality_broadcast has $caller_sites declaration/call sites, expected 5 classified sites" >&2
+  failed=1
+fi
 require_marker validator/full-node-shard.cpp \
   'parsed_finality.received_bytes = received_bytes' \
   'public finality ingress no longer records the received payload size'
