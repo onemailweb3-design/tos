@@ -1,4 +1,5 @@
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -47,12 +48,12 @@ ProcessingResult process_finality_candidates(const std::vector<td::Ref<block::Bl
 }  // namespace
 
 int main() {
-  if (tos::validator::pending_finality_failure_action(tos::ErrorCode::timeout, 1) !=
+  if (tos::validator::pending_finality_failure_action(tos::ErrorCode::timeout, 0, 60) !=
       tos::validator::PendingFinalityFailureAction::Retry) {
     std::cerr << "PENDING_FINALITY_TIMEOUT_CLASSIFICATION_FAILURE: verification timeout was treated as permanent\n";
     return 1;
   }
-  if (!tos::validator::pending_finality_exceeds_budget(1, 2, 0, 10)) {
+  if (!tos::validator::pending_finality_exceeds_budget(0, std::numeric_limits<std::size_t>::max(), 0, 10)) {
     std::cerr << "PENDING_FINALITY_BUDGET_ARITHMETIC_FAILURE: removed bytes exceeded current accounting without rejection\n";
     return 1;
   }
@@ -61,33 +62,34 @@ int main() {
   permanent_failure.admit(0, 0, 7, 4096, false, true);
   auto* permanent_candidates = permanent_failure.get_if_exists(0);
   permanent_candidates->begin_processing();
-  if (permanent_candidates->resolve_front_failure(tos::ErrorCode::protoviolation) !=
+  if (permanent_candidates->resolve_front_failure(tos::ErrorCode::protoviolation).action !=
           tos::validator::PendingFinalityFailureAction::DiscardPermanent ||
       !permanent_candidates->empty()) {
     std::cerr << "PENDING_FINALITY_PERMANENT_FAILURE: inconsistent evidence was retained for retry\n";
     return 1;
   }
 
-  tos::validator::PendingFinalityStore<int, int, int> exhausted_failure;
-  exhausted_failure.admit(0, 0, 7, 4096, false, true);
-  auto* exhausted_candidates = exhausted_failure.get_if_exists(0);
-  for (std::size_t attempt = 1; attempt <= tos::validator::pending_finality_max_attempts; ++attempt) {
-    if (exhausted_candidates->begin_processing() == nullptr) {
-      std::cerr << "PENDING_FINALITY_RETRY_BOUND_FAILURE: candidate vanished before the retry bound\n";
+  tos::validator::PendingFinalityStore<int, int, int> expired_failure;
+  expired_failure.admit(0, 0, 7, 4096, false, true, tos::validator::pending_finality_retention_seconds);
+  auto* expired_candidates = expired_failure.get_if_exists(0);
+  double retry_time = 0;
+  while (retry_time < tos::validator::pending_finality_retention_seconds) {
+    if (expired_candidates->begin_processing(retry_time) == nullptr) {
+      std::cerr << "PENDING_FINALITY_RETRY_DEADLINE_FAILURE: candidate was unavailable at its scheduled retry\n";
       return 1;
     }
-    auto action = exhausted_candidates->resolve_front_failure(tos::ErrorCode::notready);
-    auto expected = attempt == tos::validator::pending_finality_max_attempts
-                        ? tos::validator::PendingFinalityFailureAction::DiscardExhausted
-                        : tos::validator::PendingFinalityFailureAction::Retry;
-    if (action != expected) {
-      std::cerr << "PENDING_FINALITY_RETRY_BOUND_FAILURE: transient candidate did not stop at attempt "
-                << tos::validator::pending_finality_max_attempts << "\n";
+    auto failure = expired_candidates->resolve_front_failure(tos::ErrorCode::notready, retry_time);
+    if (failure.action != tos::validator::PendingFinalityFailureAction::Retry || failure.retry_at <= retry_time ||
+        failure.retry_at > tos::validator::pending_finality_retention_seconds) {
+      std::cerr << "PENDING_FINALITY_RETRY_DEADLINE_FAILURE: backoff escaped the retention deadline\n";
       return 1;
     }
+    retry_time = failure.retry_at;
   }
-  if (!exhausted_candidates->empty()) {
-    std::cerr << "PENDING_FINALITY_RETRY_BOUND_FAILURE: exhausted candidate retained its sender slot\n";
+  if (expired_failure.erase_expired(retry_time) != 1 || expired_failure.get_if_exists(0) != nullptr ||
+      tos::validator::pending_finality_failure_action(tos::ErrorCode::notready, retry_time, retry_time) !=
+          tos::validator::PendingFinalityFailureAction::DiscardExpired) {
+    std::cerr << "PENDING_FINALITY_RETRY_DEADLINE_FAILURE: expired candidate retained its sender slot\n";
     return 1;
   }
 
@@ -181,13 +183,17 @@ int main() {
   }
   auto* retry_candidates = retry_then_accept.get_if_exists(0);
   if (retry_candidates->begin_processing() == nullptr ||
-      retry_candidates->resolve_front_failure(tos::ErrorCode::notready) !=
+      retry_candidates->resolve_front_failure(tos::ErrorCode::notready, 0).action !=
           tos::validator::PendingFinalityFailureAction::Retry ||
       retry_candidates->empty()) {
     std::cerr << "PENDING_FINALITY_RETRY_FAILURE: valid evidence was discarded while required state was not ready\n";
     return 1;
   }
-  auto* retried = retry_candidates->begin_processing();
+  if (retry_candidates->begin_processing(tos::validator::pending_finality_initial_retry_seconds / 2) != nullptr) {
+    std::cerr << "PENDING_FINALITY_RETRY_FAILURE: retained evidence retried before its backoff elapsed\n";
+    return 1;
+  }
+  auto* retried = retry_candidates->begin_processing(tos::validator::pending_finality_initial_retry_seconds);
   if (retried == nullptr ||
       block::verify_pq_finality(context, *retried->evidence, block::FinalityRole::Final).is_error()) {
     std::cerr << "PENDING_FINALITY_RETRY_FAILURE: retained evidence was not valid on the later attempt\n";
@@ -260,8 +266,8 @@ int main() {
   std::cout << "PENDING_FINALITY_RETRY_OK: notready retained valid evidence and a later attempt accepted it\n";
   std::cout << "PENDING_FINALITY_TIMEOUT_CLASSIFICATION_OK: verification timeout remains transient\n";
   std::cout << "PENDING_FINALITY_PERMANENT_OK: protocol violation was discarded without retry\n";
-  std::cout << "PENDING_FINALITY_RETRY_BOUND_OK: transient evidence freed its slot after "
-            << tos::validator::pending_finality_max_attempts << " attempts\n";
+  std::cout << "PENDING_FINALITY_RETRY_DEADLINE_OK: transient evidence freed its slot after "
+            << tos::validator::pending_finality_retention_seconds << " seconds\n";
   std::cout << "PENDING_FINALITY_INGRESS_OK: missing accounting fails closed and authenticated senders retain attribution\n";
   std::cout << "PENDING_FINALITY_TRANSPORT_DEDUP_OK: evidence-distinct finalities have distinct transport ids\n";
   std::cout << "PENDING_FINALITY_SENDER_ISOLATION_OK: four bad arrivals from one sender did not exclude another sender\n";

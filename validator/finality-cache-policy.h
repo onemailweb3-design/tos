@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <deque>
+#include <limits>
 #include <map>
 #include <utility>
 
@@ -17,22 +18,30 @@ namespace tos::validator {
 
 enum class PendingFinalityAdmission { Keep, Append, Replace };
 enum class PendingFinalityRejection { None, Policy, SenderAlreadyPending, SenderBudget, TotalBudget };
-enum class PendingFinalityFailureAction { Retry, DiscardPermanent, DiscardExhausted };
+enum class PendingFinalityFailureAction { Retry, DiscardPermanent, DiscardExpired };
 
-// Three attempts allow two opportunities for masterchain/proof state to become
-// available after the first notready result, while preventing one candidate
-// from retaining its sender slot indefinitely. The short delay yields to the
-// actor work that can satisfy that dependency; timeout is classified the same
-// way, but slow signature verification is not the motivating test case.
-inline constexpr std::size_t pending_finality_max_attempts = 3;
-inline constexpr double pending_finality_retry_delay_seconds = 0.25;
+struct PendingFinalityFailureResult {
+  PendingFinalityFailureAction action{PendingFinalityFailureAction::DiscardPermanent};
+  double retry_at{0};
+};
 
-constexpr PendingFinalityFailureAction pending_finality_failure_action(int error_code, std::size_t attempts) {
+// The retention bound is wall-clock time because notready waits on network,
+// database and chain-progress events rather than on a bounded computation. It
+// matches the manager's existing 60-second block-data wait on this path. An
+// exponential retry delay avoids a tight actor loop while still probing state
+// changes throughout that window. The expiry timer independently frees the
+// sender slot even if no triggering event ever arrives.
+inline constexpr double pending_finality_retention_seconds = 60.0;
+inline constexpr double pending_finality_initial_retry_seconds = 0.5;
+inline constexpr double pending_finality_max_retry_seconds = 8.0;
+
+constexpr PendingFinalityFailureAction pending_finality_failure_action(int error_code, double now,
+                                                                       double expires_at) {
   if (error_code != ErrorCode::notready && error_code != ErrorCode::timeout) {
     return PendingFinalityFailureAction::DiscardPermanent;
   }
-  if (attempts >= pending_finality_max_attempts) {
-    return PendingFinalityFailureAction::DiscardExhausted;
+  if (now >= expires_at) {
+    return PendingFinalityFailureAction::DiscardExpired;
   }
   return PendingFinalityFailureAction::Retry;
 }
@@ -99,7 +108,9 @@ class PendingFinalityCandidates {
     std::size_t accounted_bytes;
     bool verified;
     bool is_final;
-    std::size_t attempts{0};
+    double expires_at{std::numeric_limits<double>::max()};
+    double retry_not_before{0};
+    double retry_delay{pending_finality_initial_retry_seconds};
   };
 
   PendingFinalityAdmission admission(bool verified, bool is_final) const {
@@ -120,7 +131,7 @@ class PendingFinalityCandidates {
   }
 
   PendingFinalityAdmission admit(Evidence evidence, Sender sender, std::size_t accounted_bytes, bool verified,
-                                  bool is_final) {
+                                  bool is_final, double expires_at) {
     auto action = admission(verified, is_final);
     if (action == PendingFinalityAdmission::Keep) {
       return action;
@@ -128,7 +139,8 @@ class PendingFinalityCandidates {
     if (action == PendingFinalityAdmission::Replace) {
       entries_.clear();
     }
-    entries_.push_back(Entry{std::move(evidence), std::move(sender), accounted_bytes, verified, is_final, 0});
+    entries_.push_back(Entry{std::move(evidence), std::move(sender), accounted_bytes, verified, is_final, expires_at,
+                             0, pending_finality_initial_retry_seconds});
     return action;
   }
 
@@ -159,27 +171,46 @@ class PendingFinalityCandidates {
     return result;
   }
 
-  const Entry *begin_processing() {
+  const Entry *begin_processing(double now = 0) {
+    erase_expired(now);
     if (processing_ || entries_.empty()) {
       return nullptr;
     }
+    if (entries_.front().retry_not_before > now) {
+      return nullptr;
+    }
     processing_ = true;
-    entries_.front().attempts++;
     return &entries_.front();
   }
 
-  PendingFinalityFailureAction resolve_front_failure(int error_code) {
+  PendingFinalityFailureResult resolve_front_failure(int error_code, double now = 0) {
     if (!processing_ || entries_.empty()) {
-      return PendingFinalityFailureAction::DiscardPermanent;
+      return {};
     }
-    auto action = pending_finality_failure_action(error_code, entries_.front().attempts);
+    auto &entry = entries_.front();
+    auto action = pending_finality_failure_action(error_code, now, entry.expires_at);
     if (action == PendingFinalityFailureAction::Retry) {
+      entry.retry_not_before = std::min(now + entry.retry_delay, entry.expires_at);
+      entry.retry_delay = std::min(entry.retry_delay * 2, pending_finality_max_retry_seconds);
       processing_ = false;
+      return {action, entry.retry_not_before};
     } else {
       entries_.pop_front();
       processing_ = false;
+      return {action, 0};
     }
-    return action;
+  }
+
+  std::size_t erase_expired(double now) {
+    auto old_size = entries_.size();
+    bool processing_front_expired = processing_ && !entries_.empty() && entries_.front().expires_at <= now;
+    entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
+                                  [now](const Entry &entry) { return entry.expires_at <= now; }),
+                   entries_.end());
+    if (processing_front_expired) {
+      processing_ = false;
+    }
+    return old_size - entries_.size();
   }
 
   void complete_front(bool accepted) {
@@ -227,7 +258,8 @@ class PendingFinalityStore {
   using Candidates = PendingFinalityCandidates<Evidence, Sender>;
 
   PendingFinalityAdmissionResult admit(const BlockKey &block, Sender sender, Evidence evidence,
-                                       std::size_t serialized_bytes, bool verified, bool is_final) {
+                                       std::size_t serialized_bytes, bool verified, bool is_final,
+                                       double expires_at = std::numeric_limits<double>::max()) {
     auto it = entries_.find(block);
     auto action = it == entries_.end() ? PendingFinalityAdmission::Replace
                                        : it->second.admission(verified, is_final);
@@ -255,8 +287,21 @@ class PendingFinalityStore {
     if (it == entries_.end()) {
       it = entries_.emplace(block, Candidates{}).first;
     }
-    return {it->second.admit(std::move(evidence), std::move(sender), charge, verified, is_final),
+    return {it->second.admit(std::move(evidence), std::move(sender), charge, verified, is_final, expires_at),
             PendingFinalityRejection::None};
+  }
+
+  std::size_t erase_expired(double now) {
+    std::size_t erased = 0;
+    for (auto it = entries_.begin(); it != entries_.end();) {
+      erased += it->second.erase_expired(now);
+      if (it->second.empty()) {
+        it = entries_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    return erased;
   }
 
   Candidates *get_if_exists(const BlockKey &block) {

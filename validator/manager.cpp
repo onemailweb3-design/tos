@@ -245,7 +245,7 @@ void ValidatorManagerImpl::new_block_broadcast(BlockBroadcast broadcast, bool si
     return;
   }
   if (!need_monitor(broadcast.block_id.shard_full())) {
-    promise.set_error(td::Status::Error(ErrorCode::notready, "not monitoring shard"));
+    promise.set_error(td::Status::Error("not monitoring shard"));
     return;
   }
   auto sig_set = broadcast.sig_set;
@@ -276,7 +276,7 @@ void ValidatorManagerImpl::validate_block_broadcast_signatures(BlockBroadcast br
     return;
   }
   if (!need_monitor(broadcast.block_id.shard_full())) {
-    promise.set_error(td::Status::Error(ErrorCode::notready, "not monitoring shard"));
+    promise.set_error(td::Status::Error("not monitoring shard"));
     return;
   }
   td::actor::create_actor<ValidateBroadcast>("broadcast-sigcheck", std::move(broadcast), last_masterchain_block_handle_,
@@ -707,15 +707,23 @@ td::actor::Task<> ValidatorManagerImpl::new_block_finality_broadcast(BlockFinali
                             << block_id.to_str() << " rejection=" << static_cast<int>(ingress.rejection);
     co_return td::Unit{};
   }
+  auto admission_time = td::Time::now();
+  pending_block_finality_.erase_expired(admission_time);
+  auto expires_at = admission_time + pending_finality_retention_seconds;
   auto admission = pending_block_finality_.admit(
       block_id, std::move(ingress.sender), PendingBlockFinalityCandidate{finality.sig_set, source},
-      ingress.accounted_bytes, signatures_verified, incoming_is_final);
+      ingress.accounted_bytes, signatures_verified, incoming_is_final, expires_at);
   if (!admission.admitted()) {
     VLOG(VALIDATOR_DEBUG) << "dropping block finality broadcast because its sender-isolated byte-bounded store did "
                              "not admit it: block="
                           << block_id.to_str() << " rejection=" << static_cast<int>(admission.rejection);
     co_return td::Unit{};
   }
+  delay_action(
+      [SelfId = actor_id(this), block_id]() {
+        td::actor::send_closure(SelfId, &ValidatorManagerImpl::expire_pending_block_finality, block_id);
+      },
+      td::Timestamp::at(expires_at));
   if (signatures_verified && !block_id.is_masterchain() && incoming_is_final && has_local_validator_keys()) {
     generate_shard_block_description(block_id, finality.sig_set).start().detach();
   }
@@ -918,7 +926,7 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
     return;
   }
 
-  auto finality = pending->begin_processing();
+  auto finality = pending->begin_processing(td::Time::now());
   if (finality == nullptr) {
     return;
   }
@@ -969,12 +977,25 @@ void ValidatorManagerImpl::try_process_pending_block_finality(BlockIdExt block_i
                       });
 }
 
-void ValidatorManagerImpl::schedule_pending_block_finality_retry(BlockIdExt block_id) {
+void ValidatorManagerImpl::schedule_pending_block_finality_retry(BlockIdExt block_id, double retry_at) {
   delay_action(
       [SelfId = actor_id(this), block_id]() {
         td::actor::send_closure(SelfId, &ValidatorManagerImpl::try_process_pending_block_finality, block_id);
       },
-      td::Timestamp::in(pending_finality_retry_delay_seconds));
+      td::Timestamp::at(retry_at));
+}
+
+void ValidatorManagerImpl::expire_pending_block_finality(BlockIdExt block_id) {
+  auto pending = pending_block_finality_.get_if_exists(block_id);
+  if (pending == nullptr) {
+    return;
+  }
+  pending->erase_expired(td::Time::now());
+  if (pending->empty()) {
+    pending_block_finality_.erase(block_id);
+  } else {
+    try_process_pending_block_finality(block_id);
+  }
 }
 
 void ValidatorManagerImpl::failed_pending_block_finality(BlockIdExt block_id, td::Status error, td::Slice operation) {
@@ -982,15 +1003,15 @@ void ValidatorManagerImpl::failed_pending_block_finality(BlockIdExt block_id, td
   if (pending == nullptr || !pending->processing()) {
     return;
   }
-  auto action = pending->resolve_front_failure(error.code());
-  if (action == PendingFinalityFailureAction::Retry) {
+  auto failure = pending->resolve_front_failure(error.code(), td::Time::now());
+  if (failure.action == PendingFinalityFailureAction::Retry) {
     VLOG(VALIDATOR_DEBUG) << "transient failure while attempting to " << operation << " for pending block finality "
                           << block_id.to_str() << ": " << error;
-    schedule_pending_block_finality_retry(block_id);
+    schedule_pending_block_finality_retry(block_id, failure.retry_at);
     return;
   }
-  VLOG(VALIDATOR_INFO) << (action == PendingFinalityFailureAction::DiscardExhausted
-                               ? "retry bound exhausted while attempting to "
+  VLOG(VALIDATOR_INFO) << (failure.action == PendingFinalityFailureAction::DiscardExpired
+                               ? "retention deadline expired while attempting to "
                                : "permanent failure while attempting to ")
                        << operation << " for pending block finality " << block_id.to_str() << ": " << error;
   if (pending->empty()) {

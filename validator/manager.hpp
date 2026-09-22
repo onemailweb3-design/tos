@@ -618,7 +618,8 @@ class ValidatorManagerImpl : public ValidatorManager {
   void add_cached_block_data(BlockIdExt block_id, td::BufferSlice data);
   void try_process_pending_block_finality(BlockIdExt block_id);
   void failed_pending_block_finality(BlockIdExt block_id, td::Status error, td::Slice operation);
-  void schedule_pending_block_finality_retry(BlockIdExt block_id);
+  void schedule_pending_block_finality_retry(BlockIdExt block_id, double retry_at);
+  void expire_pending_block_finality(BlockIdExt block_id);
   void checked_pending_block_finality(BlockIdExt block_id, BlockBroadcast broadcast, BroadcastSource source,
                                       bool was_final, td::Result<td::Unit> result);
   void processed_pending_block_finality(BlockIdExt block_id, bool was_final, td::Result<td::Unit> result);

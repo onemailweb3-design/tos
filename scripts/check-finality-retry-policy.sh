@@ -34,11 +34,17 @@ if grep -qF 'pending->complete_front(false);' "$root/validator/manager.cpp"; the
 fi
 
 require_marker validator/manager.cpp \
-  'pending->resolve_front_failure(error.code())' \
+  'pending->resolve_front_failure(error.code(), td::Time::now())' \
   'manager no longer applies the bounded transient/permanent failure decision'
 require_marker validator/manager.cpp \
-  'schedule_pending_block_finality_retry(block_id);' \
+  'schedule_pending_block_finality_retry(block_id, failure.retry_at);' \
   'manager no longer schedules another attempt after retaining transient evidence'
+require_marker validator/manager.cpp \
+  'expire_pending_block_finality, block_id' \
+  'manager no longer schedules independent expiry of an admitted candidate'
+require_marker validator/manager.cpp \
+  'pending->erase_expired(td::Time::now())' \
+  'manager expiry callback no longer frees expired sender slots'
 require_marker validator/manager.cpp \
   'error.code() == ErrorCode::notready || error.code() == ErrorCode::timeout' \
   'proof-creation failures no longer distinguish transient local state from bad block bytes'
@@ -64,9 +70,9 @@ require_regex validator/validate-broadcast.cpp \
   'ErrorCode::protoviolation,\s*"bad validator set hash"' \
   'validator-set mismatch with an exact key block is no longer a permanent protocol violation'
 
-monitoring_transient_sites=$(grep -cF 'ErrorCode::notready, "not monitoring shard"' "$root/validator/manager.cpp")
-if [ "$monitoring_transient_sites" -ne 2 ]; then
-  echo "PENDING_FINALITY_RETRY_SOURCE_FAILURE: expected 2 transient not-monitoring-shard creation sites, found $monitoring_transient_sites (validator/manager.cpp)" >&2
+monitoring_permanent_sites=$(grep -cF 'td::Status::Error("not monitoring shard")' "$root/validator/manager.cpp")
+if [ "$monitoring_permanent_sites" -ne 2 ]; then
+  echo "PENDING_FINALITY_RETRY_SOURCE_FAILURE: expected 2 permanent not-monitoring-shard creation sites, found $monitoring_permanent_sites (validator/manager.cpp)" >&2
   failed=1
 fi
 
