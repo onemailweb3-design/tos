@@ -25,9 +25,10 @@ struct PendingFinalityAdmissionResult {
   }
 };
 
-// These bounds charge the canonical serialized signature-set bytes, with a
-// minimum charge for small objects. They bound both memory and object count:
-// at most 4096 minimum-sized candidates can be pending globally.
+// Remote entries are charged by their received boxed-TL payload bytes; local
+// entries use their measured intrinsic signature bytes. A minimum charge for
+// either source bounds both memory and object count: at most 4096
+// minimum-sized candidates can be pending globally.
 inline constexpr std::size_t pending_finality_total_budget_bytes = 16 * 1024 * 1024;
 inline constexpr std::size_t pending_finality_sender_budget_bytes = 1024 * 1024;
 inline constexpr std::size_t pending_finality_minimum_charge_bytes = 4096;

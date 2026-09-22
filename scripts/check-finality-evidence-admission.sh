@@ -37,8 +37,14 @@ require_marker validator/full-node.cpp \
   'std::move(finality), source, td::optional<PublicKeyHash>(source_peer)' \
   'full-node finality ingress no longer hands the authenticated sender to the manager'
 require_marker validator/manager.cpp \
-  'PendingBlockFinalitySender::remote(*source_peer)' \
-  'manager admission no longer partitions unverified evidence by authenticated sender'
+  'prepare_pending_finality_ingress(source_peer ? &*source_peer : nullptr' \
+  'manager admission no longer applies its checked accounting and sender decision'
+require_marker validator/manager.cpp \
+  'if (!ingress.admitted()) {' \
+  'manager no longer fails closed when ingress accounting rejects evidence'
+require_marker validator/manager.cpp \
+  'if (!admission.admitted()) {' \
+  'manager no longer stops after the pending store rejects evidence'
 require_marker validator/full-node-shard.cpp \
   'parsed_finality.received_bytes = received_bytes' \
   'public finality ingress no longer records the received payload size'
@@ -49,7 +55,7 @@ require_marker validator/full-node-custom-overlays.cpp \
   'parsed_finality.received_bytes = received_bytes' \
   'custom-overlay finality ingress no longer records the received payload size'
 require_marker validator/manager.cpp \
-  'auto accounted_bytes = finality.received_bytes' \
+  'finality.received_bytes' \
   'manager admission no longer charges the received payload bytes'
 
 if grep -qF 'serialize_tl_object(finality.sig_set->tl(), true)' "$root/validator/manager.cpp"; then

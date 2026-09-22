@@ -49,6 +49,7 @@
 #include "manager-init.h"
 #include "manager-resource-policy.h"
 #include "node-consensus-status.h"
+#include "pending-finality-ingress.h"
 #include "queue-size-counter.hpp"
 #include "shard-block-retainer.hpp"
 #include "shard-block-verifier.hpp"
@@ -72,27 +73,6 @@ class AppliedExtMessageCleanupActor;
 struct PendingBlockFinalityCandidate {
   td::Ref<block::BlockSignatureSet> sig_set;
   BroadcastSource source;
-};
-
-struct PendingBlockFinalitySender {
-  bool local{true};
-  PublicKeyHash peer;
-
-  static PendingBlockFinalitySender local_source() {
-    return {};
-  }
-  static PendingBlockFinalitySender remote(PublicKeyHash peer) {
-    return {false, peer};
-  }
-  bool operator==(const PendingBlockFinalitySender &other) const {
-    return local == other.local && (local || peer == other.peer);
-  }
-  bool operator<(const PendingBlockFinalitySender &other) const {
-    if (local != other.local) {
-      return local < other.local;
-    }
-    return !local && peer < other.peer;
-  }
 };
 
 class BlockHandleLru : public td::ListNode {
