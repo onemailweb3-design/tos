@@ -206,6 +206,7 @@ Commits:
 - `b64af02c37f01a5f9543385c6adba130298bd156` — evidence-aware Plumtree identity and authenticated-sender, byte-bounded pending finality admission.
 - `30b68d257b4b69a030b4ea2eaa4b6f4e740467aa` — remote pending evidence charged by its exact received payload bytes without pre-admission reserialization.
 - `1175bc561` — transient pending finality failures retain evidence for bounded delayed retries; permanent coordinate mismatches fail immediately.
+- `b37e5c7c1` — pending finality retention is bounded by a 60-second admission deadline with exponential backoff and independent expiry.
 
 | Design gate | Registered subject test | Proves | Does not prove |
 |---|---|---|---|
@@ -216,7 +217,7 @@ Commits:
 | Accepted-chain regressions restored by §10.5.3 | `test-consensus-simplex2-pq-state-resolver-catch-up`, `test-consensus-simplex2-pq-empty-chain-restart` | A lagging node recovers an evicted finalized ID through live DB lookup; a chain longer than 4096 empty candidates resumes after a cold resolver restart and reuses its completed-ancestor cache. | The five crash cuts required by §10.5.4. |
 | JSON-RPC unsupported-carrier behavior | `test-json-rpc-parse` | A PQ lite signature set produces error `-32603` with an explicit unsupported-carrier message, while genuine absence remains the only path to an empty classical list. | Rendering PQ signatures in the public JSON model. |
 | Unverified finality admission | `test-pending-finality-cache`, `finality-evidence-admission-source` | Public and fast-sync Plumtree IDs commit to the block and canonical signature set; authenticated sender identity and the exact received boxed-TL byte count reach the manager without reserialization; the manager's shared ingress decision rejects a remote zero byte count and a missing local measurement, attributes remote evidence to the authenticated peer, and attributes local evidence separately; one sender gets one unverified candidate per block and at most 1 MiB, while the store has a 16 MiB byte budget with a 4096-byte minimum charge; invalid/valid arrivals from distinct senders preserve arrival order and the valid final is accepted. | A live Plumtree peer graph or the actor-scheduled `ValidatorManagerImpl` coroutine. The behavioural gate drives the exact production transport-ID helper, ingress decision, and pending-store implementation; the source gate pins their composition in the manager and transport ingress. It cannot distinguish a legitimately local manager call from an upstream remote path that incorrectly omits its authenticated peer; that handoff remains source-pinned. Locally originated evidence has no received payload and is charged by intrinsic signature bytes. |
-| Pending-finality transient recovery | `test-pending-finality-cache`, `pending-finality-retry-policy-source` | `notready`/`timeout` retains evidence for another attempt, a later success consumes it, permanent protocol errors discard immediately, and three failed attempts release the sender slot; production verification, proof creation and apply failures use this decision and schedule retained entries. The three same-object validator-coordinate mismatches are created as `protoviolation`. | Actor timing and successful delayed callback delivery under a stopped/restarted manager. The behavioural gate drives the production state transition; the source gate pins the manager's scheduling composition and error classifications. |
+| Pending-finality transient recovery | `test-pending-finality-cache`, `pending-finality-retry-policy-source` | `notready`/`timeout` retains evidence for exponential-backoff retries within a 60-second wall-clock deadline, a later success consumes it, the independent expiry timer frees its sender slot even without another event, and permanent protocol errors discard immediately; production verification, proof creation and apply failures use this decision. The three same-object validator-coordinate mismatches are created as `protoviolation`. | Actor timing and successful delayed callback delivery under a stopped/restarted manager. The behavioural gate drives the production state transition and deterministic deadline/backoff arithmetic; the source gate pins the manager's scheduling composition and error classifications. |
 
 The nine persisted corruption rows and their asserted reasons are: constructor →
 `unsupported carrier for post-quantum validator set`; validator ID →
@@ -284,8 +285,11 @@ Mutations observed:
   `PENDING_FINALITY_TIMEOUT_CLASSIFICATION_FAILURE: verification timeout was treated as permanent`.
 - Retrying a protocol violation produced
   `PENDING_FINALITY_PERMANENT_FAILURE: inconsistent evidence was retained for retry`.
-- Removing the retry-attempt bound produced
-  `PENDING_FINALITY_RETRY_BOUND_FAILURE: transient candidate did not stop at attempt 3`.
+- Removing the retention-deadline expiry produced
+  `PENDING_FINALITY_RETRY_DEADLINE_FAILURE: expired candidate retained its sender slot`.
+- Removing the checked-subtraction precondition and exercising a corruption-shaped
+  `removed = SIZE_MAX` produced
+  `PENDING_FINALITY_BUDGET_ARITHMETIC_FAILURE: removed bytes exceeded current accounting without rejection`.
 - Removing delayed rescheduling after a retained transient failure produced
   `PENDING_FINALITY_RETRY_SOURCE_FAILURE: manager no longer schedules another attempt after retaining transient evidence (validator/manager.cpp)`.
 - Reclassifying each of the three permanent coordinate mismatches back to
