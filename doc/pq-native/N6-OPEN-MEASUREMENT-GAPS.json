@@ -7,9 +7,9 @@
   ],
   "gaps": {
     "release-scale-matrix-unmeasured": {
-      "observation": "The required 21/32/64/100 release scales have not been measured; this host runs only the separate 4-validator minimum-BFT functional tier.",
-      "reason": "The available measurement server is a 6-core KVM guest with 11.68 GiB RAM. Co-locating 21 validators would reserve about 8.0 GiB for the N5 pending-finality budget alone and would not represent the one-validator-per-host topology required by section 0.5.",
-      "closure_condition": "Run every required release scale with one validator per reviewed host or VM at the exact N5-complete measured commit and retain the manifests and results.",
+      "observation": "The required 21-validator release scale has not been measured; this host runs only the separate 4-validator minimum-BFT functional tier.",
+      "reason": "The required scale now matches the enforced 21-validator launch ceiling, but the available measurement server is a 6-core KVM guest with 11.68 GiB RAM. Co-locating 21 validators would reserve about 8.0 GiB for the N5 pending-finality budget alone and would not represent the one-validator-per-host topology required by section 0.5.",
+      "closure_condition": "Run the required 21-validator release scale with one validator per reviewed host or VM at the exact N5-complete measured commit and retain the manifest and result.",
       "status": "OPEN"
     },
     "carrier-scale-transport-unmeasured": {

@@ -28,7 +28,7 @@ REQUIRED_MEASUREMENT_GAP_IDS = (
     "sustained-finality-distribution-unmeasured",
 )
 
-REQUIRED_SCALES = (21, 32, 64, 100)
+REQUIRED_SCALES = (21,)
 REQUIRED_NETWORK_PROFILES = ("baseline", "launch-wan", "degraded")
 REQUIRED_WORKLOADS = ("consensus-isolation", "target-load", "high-load")
 POSITIVE_CRITERIA_FIELDS = (
@@ -391,7 +391,8 @@ def validate_open_measurement_gaps(path: Path, *, release: bool) -> None:
                     measured_scales.update(scales)
                 if measured_scales != set(REQUIRED_SCALES):
                     raise ManifestError(
-                        "release-scale evidence does not cover required scales 21/32/64/100"
+                        "release-scale evidence does not cover required scales "
+                        + "/".join(str(scale) for scale in REQUIRED_SCALES)
                     )
         else:
             raise ManifestError(f"measurement gap {gap_id} has unknown status {status}")

@@ -101,7 +101,7 @@ def complete_criteria() -> dict[str, object]:
     return {
         "schema_version": 1,
         "release_hardware_profile": "test-hardware",
-        "required_scales": [21, 32, 64, 100],
+        "required_scales": [21],
         "required_network_profiles": ["baseline", "launch-wan", "degraded"],
         "required_workloads": ["consensus-isolation", "target-load", "high-load"],
         "max_p99_persisted_finality_ms": 1,
@@ -334,7 +334,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
 
         # Removing the override marker is not sufficient: the result must also
         # be independently eligible for release evidence.
-        write_scale_result(local_override=False, release_eligible=False, scales=[21, 32, 64, 100])
+        write_scale_result(local_override=False, release_eligible=False, scales=[21])
         try:
             module.create_manifest(
                 repo=repo_root,
@@ -354,7 +354,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
 
         # Resolving both registered measurement gaps with eligible evidence
         # exposes the next independent refusal, the exact-commit N5 closure.
-        write_scale_result(local_override=False, release_eligible=True, scales=[21, 32, 64, 100])
+        write_scale_result(local_override=False, release_eligible=True, scales=[21])
         try:
             module.create_manifest(
                 repo=repo_root,

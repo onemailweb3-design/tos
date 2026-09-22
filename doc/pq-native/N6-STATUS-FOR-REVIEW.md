@@ -226,13 +226,28 @@ has been produced on this branch.
 
 ## Open release-measurement gaps
 
+The required release scale is now `[21]`, matching the enforced launch ceiling
+rather than an owner preference. The ceiling is fail-closed at all four
+committee-forming boundaries: ConfigParam16 and ConfigParam28 updates in
+`crypto/smartcont/config-code.fc`, node configuration admission through
+`Config::validate_pq_launch_resource_config` in `crypto/block/mc-config.cpp`
+and `validator/manager.cpp`, production Genesis in
+`crypto/smartcont/gen-zerostate.fif`, and tostester Genesis in
+`test/tostester/src/tostester/zerostate.py`. This narrowing also rests on the
+inherited-consensus premise: `git ls-tree -r 628506c9e` shows 16 files already
+under `validator/consensus/simplex/` at the fork point, and the reviewed
+upstream production committee is approximately 400 validators. This premise
+was checked against the tree because an earlier review assertion incorrectly
+treated Simplex as project-local. Step 2 changes the required scale only; the
+three registry entries below remain open until each is re-derived separately.
+
 `N6-OPEN-MEASUREMENT-GAPS.json` is a fail-closed release registry parallel to
 the correctness-question registry. Its required ids cannot be removed by
 deleting a gap, and a resolved entry must retain `resolved_by` evidence.
 Release mode currently refuses all three registered gaps by name:
 
-- `release-scale-matrix-unmeasured`: the required 21/32/64/100 matrix remains
-  unchanged and unmeasured. This 6-core KVM guest has 11.68 GiB RAM; 21
+- `release-scale-matrix-unmeasured`: the required 21-validator release point
+  remains unmeasured. This 6-core KVM guest has 11.68 GiB RAM; 21
   colocated validators would reserve about 8.0 GiB for the N5 pending-finality
   budget alone. Closure requires the section 0.5 topology: one validator per
   reviewed host or VM, at the exact N5-complete measured commit.
@@ -288,8 +303,8 @@ Latency is not a hidden flag. `no-simulated-latency.json` and
 The local backend refuses a nonzero profile because it cannot apply network
 shaping; the launch-default profile requires a remote-command deployment with
 external shaping whose backend manifest names the applied profile. Only the
-no-simulated-latency 4-validator point is executed here. The 21/32/64/100
-release scales, the full section 8.1 cliff matrix, and the launch-default run
+no-simulated-latency 4-validator point is executed here. The 21-validator
+release point, the historical section 8.1 cliff matrix, and the launch-default run
 remain explicitly unexecuted and release-ineligible.
 
 The runner accepts larger remote scale lists without changing its result
@@ -312,7 +327,7 @@ That statement is enforced at the gap consumer: resolving
 `release-scale-matrix-unmeasured` requires result files, and the manifest
 validator rejects any cited result carrying the override before considering
 its scale list. A result without the override must still declare release
-eligibility and cover exactly 21/32/64/100.
+eligibility and cover exactly the enforced scale 21.
 
 Instrument-validation evidence was collected from a clean worktree at exact
 commit `e7f1106c1`; it remains diagnostic, co-located and ineligible for release

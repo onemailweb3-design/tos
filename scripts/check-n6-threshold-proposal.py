@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -110,9 +111,75 @@ expected_facts = {
     "pending_finality_minimum_charge_bytes": 4096,
     "pending_finality_total_bytes": 409452160,
     "pending_finality_maximum_candidates": 99963,
+    "launch_validator_cap": 21,
+    "simplex_fork_point_commit": "628506c9e",
+    "simplex_files_at_fork_point": 16,
+    "upstream_production_committee_approx": 400,
 }
 if facts != expected_facts:
     fail("recorded source facts or their arithmetic changed without review")
+
+if criteria.get("required_scales") != [facts["launch_validator_cap"]]:
+    fail("live required scales do not equal the enforced launch ceiling")
+if proposed_criteria["required_scales"].get("proposal") != [facts["launch_validator_cap"]]:
+    fail("proposed required scales do not equal the enforced launch ceiling")
+
+launch_policy = json.loads((root / "config/pq-launch-limits.json").read_text(encoding="utf-8"))
+for field in ("max_total_validators", "max_masterchain_committee", "max_shard_committee"):
+    if launch_policy.get(field) != facts["launch_validator_cap"]:
+        fail(f"launch policy field {field} no longer enforces the proposed scale")
+
+fork_tree = subprocess.run(
+    [
+        "git",
+        "-C",
+        str(root),
+        "ls-tree",
+        "-r",
+        "--name-only",
+        facts["simplex_fork_point_commit"],
+        "--",
+        "validator/consensus/simplex",
+    ],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+if fork_tree.returncode != 0:
+    fail(
+        "cannot verify inherited Simplex at fork point "
+        f"{facts['simplex_fork_point_commit']}: {fork_tree.stderr.strip()}"
+    )
+simplex_files = [line for line in fork_tree.stdout.splitlines() if line]
+if len(simplex_files) != facts["simplex_files_at_fork_point"]:
+    fail(
+        "inherited Simplex fork-point file count changed: "
+        f"expected {facts['simplex_files_at_fork_point']}, got {len(simplex_files)}"
+    )
+
+config_contract = collapsed(root / "crypto/smartcont/config-code.fc")
+for marker in (
+    "max_validators > pq_launch::max_total_validators",
+    "max_main_validators > pq_launch::max_masterchain_committee",
+    "shard_validators_num <= pq_launch::max_shard_committee",
+):
+    if marker not in config_contract:
+        fail(f"on-chain launch-cap enforcement changed: {marker}")
+node_config = collapsed(root / "crypto/block/mc-config.cpp")
+for marker in (
+    "max_validators > tos::pq::launch_limits::max_total_validators",
+    "max_main_validators > tos::pq::launch_limits::max_masterchain_committee",
+    "shard_validators_num > tos::pq::launch_limits::max_shard_committee",
+):
+    if marker not in node_config:
+        fail(f"node launch-cap admission changed: {marker}")
+if "validate_pq_launch_resource_config()" not in collapsed(root / "validator/manager.cpp"):
+    fail("validator manager no longer applies node launch-cap admission")
+if "21 21 4 config.validator_num!" not in collapsed(root / "crypto/smartcont/gen-zerostate.fif"):
+    fail("production Genesis no longer constructs the enforced 21-validator ceiling")
+test_genesis = collapsed(root / "test/tostester/src/tostester/zerostate.py")
+if "validator_count > MAX_MASTERCHAIN_COMMITTEE" not in test_genesis:
+    fail("tostester Genesis no longer refuses committees above the launch ceiling")
 
 zerostate = collapsed(root / "crypto/smartcont/gen-zerostate.fif")
 if zerostate.count("<b 400 32 u, b> <s 0 rot 8 udict! drop") != 2:

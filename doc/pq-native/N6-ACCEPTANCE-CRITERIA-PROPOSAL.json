@@ -52,7 +52,11 @@
     "pending_finality_validator_carrier_shares": 400,
     "pending_finality_minimum_charge_bytes": 4096,
     "pending_finality_total_bytes": 409452160,
-    "pending_finality_maximum_candidates": 99963
+    "pending_finality_maximum_candidates": 99963,
+    "launch_validator_cap": 21,
+    "simplex_fork_point_commit": "628506c9e",
+    "simplex_files_at_fork_point": 16,
+    "upstream_production_committee_approx": 400
   },
   "proposed_criteria": {
     "schema_version": {
@@ -64,8 +68,8 @@
       "rationale": "Hardware-dependent latency and resource fractions are meaningful only on the reviewed CPU, memory, storage and link profile, including the CPU governor and whether turbo or boost is enabled. A throttling governor invalidates a release timing claim because it changes both sustained frequency and tail variance."
     },
     "required_scales": {
-      "proposal": [21, 32, 64, 100],
-      "rationale": "The precommitted matrix tests the Genesis hypothesis and every planned committee-cap step without interpolation."
+      "proposal": [21],
+      "rationale": "The sole release scale is the enforced 21-validator launch ceiling, not an owner preference. ConfigParam16 and ConfigParam28 reject larger configured limits in crypto/smartcont/config-code.fc; node configuration admission rejects them through Config::validate_pq_launch_resource_config in crypto/block/mc-config.cpp and validator/manager.cpp; and both production Genesis in crypto/smartcont/gen-zerostate.fif and tostester Genesis in test/tostester/src/tostester/zerostate.py construct and enforce the same cap. Requiring unreachable 32/64/100 committees after those four enforcement points would not test a production configuration. The narrowing is additionally supported by inherited-consensus evidence: git tree 628506c9e already contains 16 validator/consensus/simplex files, and the reviewed upstream production deployment operates that inherited Simplex and transport stack at approximately 400 validators."
     },
     "required_network_profiles": {
       "proposal": ["baseline", "launch-wan", "degraded"],

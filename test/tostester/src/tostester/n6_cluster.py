@@ -480,7 +480,7 @@ async def run_scale_sweep(
         )
     )
     required_release_scales = criteria.get("required_scales")
-    if required_release_scales != [21, 32, 64, 100]:
+    if required_release_scales != [21]:
         raise ValueError(
             "N6_SCALE_SWEEP_FAILURE: the precommitted release scale requirement changed"
         )
