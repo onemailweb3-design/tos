@@ -19,8 +19,11 @@ independent participant, because independence is about who can compel or
 observe the contributor, and that is unchanged.
 
 As with [tosdev2](tosdev2.md), no public identity evidence is registered for
-this key, so a reader cannot trace it to a person who can be asked, and no
-tool in this repository reports that absence.
+this key, so a reader cannot trace it to a person who can be asked.
+`verify-attestations.py` now reports that absence on the contribution's line
+and in a summary; it did not when this contribution was made, and the
+attestation was signed saying so. See the correction in
+[CONTRIBUTION-3.md](../CONTRIBUTION-3.md).
 
 Only the public key is published. This record is not a contribution, an
 attestation, or a claim that the ceremony's independent-participation

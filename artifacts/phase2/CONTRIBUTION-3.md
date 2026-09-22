@@ -90,6 +90,34 @@ independent than one.
   identity evidence is registered for it.
 - The host serves a live website and was not destroyed afterwards.
 
+## Correction: the attestation's claim about tooling is now out of date
+
+[attestation-3.txt](attestation-3.txt) says of the signing key that "no tool in
+this repository reports that absence". That was accurate for the revision this
+contribution was built from, `f7f14158…`, and for every verifier run recorded
+in this contribution's evidence, all of which used that revision.
+
+It stopped being true in `157cb39062dd603fc80eff197b0d86c139aee6b1`, which
+made `verify-attestations.py` report a register entry carrying no
+`published_at` — on the contribution's own line and again in a summary. That
+commit was authored at 12:24:54Z and this attestation was signed at
+approximately 12:26Z, so the sentence was already stale when it was signed.
+Nobody noticed until afterwards.
+
+The signed bytes are **not** being edited. An accepted contribution is not
+rewritten, and a signature over corrected text would be a different document
+pretending to be this one. The correction lives here instead, and the current
+tool's actual output is recorded in
+[evidence/identity-evidence-report.log](evidence/identity-evidence-report.log):
+
+```
+  3  signed by tosdev3 -- NOT independent of the operator, NO PUBLIC IDENTITY EVIDENCE
+```
+
+The underlying fact the sentence was reporting is unchanged and still true:
+no public identity evidence is registered for this key. What changed is that
+a reader no longer has to take a contributor's word for the gap.
+
 ## Next contribution
 
 The ceremony remains open and still needs what it has not got. Register your

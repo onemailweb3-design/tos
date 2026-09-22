@@ -14,11 +14,11 @@
 
 No public identity evidence is registered for this key. `roster.json` carries
 no `published_at` for it, so a reader cannot trace it to a person who can be
-asked, and this repository is the only place it appears. That is a weakness in
-this entry rather than something the verifier reports: the register is held
-only to a name, a boolean and a parseable key, so an entry with no identity
-evidence behind it passes every automated check exactly as a well-evidenced
-one does.
+asked, and this repository is the only place it appears. When this entry was
+registered that weakness was invisible to tooling: the register was held only
+to a name, a boolean and a parseable key, so an entry with no identity
+evidence behind it passed every automated check exactly as a well-evidenced
+one did. `verify-attestations.py` reports it now.
 
 Only the public key is published. This record is not a contribution, an
 attestation, or a claim that the ceremony's independent-participation

@@ -101,9 +101,12 @@ Stated here because none of it is visible in the artifacts afterwards.
   for exactly this reason.
 - **The key has no public identity evidence.** `roster.json` carries no
   `published_at` for tosdev2, so a reader cannot trace the key to a person who
-  can be asked. The register is held only to a name, a boolean and a parseable
-  key, so this entry passes every automated check that a well-evidenced one
-  would. The weakness is real and unreported by any tool.
+  can be asked. When this contribution was accepted the register was held only
+  to a name, a boolean and a parseable key, so this entry passed every
+  automated check that a well-evidenced one would, and no tool said otherwise.
+  `verify-attestations.py` reports it now, in
+  `157cb39062dd603fc80eff197b0d86c139aee6b1`. The gap itself is unchanged; the
+  signed attestation's sentence about tooling describes the state at signing.
 - **The host was not destroyed.** It runs unrelated services. Swap was
   disabled for the whole contribution and restored afterwards with the
   swapfile reporting no used pages, which closes the swap path; it says
