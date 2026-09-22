@@ -274,6 +274,16 @@ fn parameter_present(config: &ConfigParams, index: u32) -> bool {
     config.config_present(index).expect("parameter lookup")
 }
 
+fn configuration_parameters_hash(chain: &Chain) -> [u8; 32] {
+    let account = chain
+        .blockchain
+        .get_account(&chain.config_contract)
+        .expect("the configuration contract is deployed");
+    let data = account.get_data().expect("the configuration contract has storage");
+    let mut slice = chain_block::SliceData::load_cell(data).expect("storage");
+    *slice.checked_drain_reference().expect("the parameter dictionary").repr_hash().as_array()
+}
+
 /// Everything a reply from either contract carries, by the address that sent it, so a
 /// cascade can be read rather than guessed at.
 fn replies(result: &tos_sandbox::SendResult) -> Vec<u32> {
@@ -708,14 +718,19 @@ fn elect_install_and_rotate() -> (Chain, Vec<PqValidator>, u32) {
 }
 
 /// `cfg_proposal#f3 param_id:int32 param_value:(Maybe ^Cell) if_hash_equal:(Maybe uint256)`
-fn proposal_cell(param_id: i32, value: chain_block::Cell) -> chain_block::Cell {
-    use chain_block::IBitstring;
+fn proposal_cell(chain: &Chain, param_id: i32, value: chain_block::Cell) -> chain_block::Cell {
+    use chain_block::{GetRepresentationHash, IBitstring};
     let mut proposal = chain_block::BuilderData::new();
     proposal.append_u8(0xf3).expect("tag");
     proposal.append_i32(param_id).expect("parameter");
     proposal.append_bit_one().expect("a value is present");
     proposal.checked_append_reference(value).expect("value");
-    proposal.append_bit_zero().expect("no expected current value");
+    if let Some(current) = raw_parameter(chain, param_id) {
+        proposal.append_bit_one().expect("an expected current value is present");
+        proposal.append_raw(current.repr_hash().as_slice(), 256).expect("current value hash");
+    } else {
+        proposal.append_bit_zero().expect("no expected current value");
+    }
     proposal.into_cell().expect("proposal")
 }
 
@@ -859,7 +874,7 @@ fn propose_cell(
     query_id: u64,
 ) -> [u8; 32] {
     use chain_block::{GetRepresentationHash, IBitstring};
-    let proposal = proposal_cell(param_id, value);
+    let proposal = proposal_cell(chain, param_id, value);
     let hash: [u8; 32] =
         proposal.hash(0).as_slice()[..32].try_into().expect("a proposal hash is 32 bytes");
 
@@ -878,12 +893,15 @@ fn propose_cell(
         body.append_bit_zero().expect("not a critical parameter");
     }
 
-    let proposer = chain.blockchain.treasury("proposer", 1_000 * TOS).expect("a funded account");
+    // A whole PQ validator set is much larger than the small scalar proposals this
+    // fixture originally carried. Fund the storage price for the largest launch-sized
+    // proposal so a cap refusal cannot be confused with an underfunded proposal.
+    let proposer = chain.blockchain.treasury("proposer", 20_000 * TOS).expect("a funded account");
     let result = chain
         .blockchain
         .send_message(proposer.build_message(
             &chain.config_contract,
-            100 * TOS,
+            10_000 * TOS,
             true,
             Some(body.into_cell().expect("proposal body")),
         ))
@@ -1184,6 +1202,77 @@ fn govern_install_with(
     }
     let installed = parameter_present(&configuration_from_contract(chain), param_id as u32);
     Governed { decided, installed }
+}
+
+fn validator_count_limits(maximum: u16, main: u16, minimum: u16) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut value = chain_block::BuilderData::new();
+    value.append_u16(maximum).expect("max validators");
+    value.append_u16(main).expect("max main validators");
+    value.append_u16(minimum).expect("min validators");
+    value.into_cell().expect("validator-count limits")
+}
+
+fn catchain_limits(shard_validators: u32) -> chain_block::Cell {
+    use chain_block::IBitstring;
+    let mut value = chain_block::BuilderData::new();
+    value.append_u8(0xc2).expect("catchain config tag");
+    value.append_u8(1).expect("flags plus shuffle bit");
+    value.append_u32(250).expect("masterchain lifetime");
+    value.append_u32(250).expect("shard lifetime");
+    value.append_u32(1000).expect("validator lifetime");
+    value.append_u32(shard_validators).expect("shard validator count");
+    value.into_cell().expect("catchain limits")
+}
+
+#[test]
+fn governance_accepts_the_launch_boundary_and_refuses_every_ceiling_above_it() {
+    fn governed_change(param: i32, value: chain_block::Cell, query: u64) -> (Governed, bool) {
+        let (mut chain, validators, _election) = elect_install_and_rotate();
+        require_one_winning_round(&mut chain);
+        let before = configuration_parameters_hash(&chain);
+        let outcome = govern_install(&mut chain, &validators, param, value, query);
+        let changed = configuration_parameters_hash(&chain) != before;
+        (outcome, changed)
+    }
+
+    let (valid_counts, valid_counts_changed) =
+        governed_change(16, validator_count_limits(21, 21, 3), 0x1600);
+    assert!(
+        valid_counts.decided && valid_counts_changed,
+        "the exact Param16 launch boundary was refused"
+    );
+    let (invalid_counts, invalid_counts_changed) =
+        governed_change(16, validator_count_limits(22, 21, 3), 0x1601);
+    assert!(
+        invalid_counts.decided && !invalid_counts_changed,
+        "governance installed ConfigParam16.max_validators=22"
+    );
+
+    let (valid_catchain, valid_catchain_changed) = governed_change(28, catchain_limits(20), 0x2800);
+    assert!(
+        valid_catchain.decided && valid_catchain_changed,
+        "a Param28 shard committee below 21 was refused"
+    );
+    let (invalid_catchain, invalid_catchain_changed) =
+        governed_change(28, catchain_limits(22), 0x2801);
+    assert!(
+        invalid_catchain.decided && !invalid_catchain_changed,
+        "governance installed ConfigParam28.shard_validators_num=22"
+    );
+
+    let valid_set = synthetic_set(1_000_000, 21);
+    let (valid_live_set, valid_live_set_changed) = governed_change(37, valid_set, 0x3700);
+    assert!(
+        valid_live_set.decided && valid_live_set_changed,
+        "governance refused a 21-validator ConfigParam37"
+    );
+    let invalid_set = synthetic_set(1_000_000, 22);
+    let (invalid_live_set, invalid_live_set_changed) = governed_change(37, invalid_set, 0x3701);
+    assert!(
+        invalid_live_set.decided && !invalid_live_set_changed,
+        "governance installed a 22-validator ConfigParam37"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2727,18 +2816,19 @@ fn synthetic_set(now: u32, count: u16) -> chain_block::Cell {
     set.into_cell().expect("a validator set")
 }
 
-/// What the configuration contract spends checking a set before it installs it.
+/// What the configuration contract spends checking a set before it installs it,
+/// at every representative size the enforced launch range can actually reach.
 ///
 /// This runs once per elected set, over every descriptor, and it is the only thing
 /// standing between an election and a Config36 the node would refuse to start from.
 #[test]
-fn the_pre_install_check_is_measured_at_the_sizes_the_chain_allows() {
+fn the_pre_install_check_is_measured_at_the_enforced_launch_sizes() {
     let (mut chain, _treasury, _election) = open_election("preinstall-scale", 200_000 * TOS);
     raise_to_post_quantum_version(&mut chain);
-    raise_validator_ceiling(&mut chain, 400);
+    raise_validator_ceiling(&mut chain, 21);
 
     let mut measured = Vec::new();
-    for (query, count) in [(1u64, 21u16), (2, 100), (3, 400)] {
+    for (query, count) in [(1u64, 4u16), (2, 12), (3, 21)] {
         let set = synthetic_set(chain.blockchain.now(), count);
         let result = chain
             .blockchain
@@ -2775,17 +2865,36 @@ fn the_pre_install_check_is_measured_at_the_sizes_the_chain_allows() {
          transaction may spend"
     );
 
-    // And the cost has to follow the count rather than jump: a check that stopped looking
-    // at every descriptor would flatten here, and nothing else would say so.
+    // And the cost has to follow the count: a check that stopped looking at every
+    // descriptor would flatten here, and nothing else would say so.
     let (small, small_gas) = measured[0];
     assert!(
-        cost > &(small_gas * 8),
+        *cost > small_gas,
         "checking {largest} validators costs {cost} gas against {small_gas} for {small}, so \
          the check is not running over every descriptor"
     );
+
+    let oversized = synthetic_set(chain.blockchain.now(), 22);
+    let refused = chain
+        .blockchain
+        .send_message(
+            tos_sandbox::MessageBuilder::internal(
+                &chain.elector.clone(),
+                &chain.config_contract.clone(),
+                10 * TOS,
+            )
+            .body(set_next_validators_body(4, oversized))
+            .build(),
+        )
+        .expect("the oversized set message is delivered");
+    let tags = replies(&refused);
+    assert!(
+        tags.contains(&VALIDATOR_SET_REFUSED) && !tags.contains(&VALIDATOR_SET_INSTALLED),
+        "a 22-validator set crossed the enforced launch cap: {tags:02x?}"
+    );
 }
 
-/// Raise the validator count the configuration allows, so the sizes above are reachable.
+/// Select a validator ceiling within the compiled launch cap for a focused fixture.
 fn raise_validator_ceiling(chain: &mut Chain, max: u16) {
     use chain_block::IBitstring;
     let mut value = chain_block::BuilderData::new();

@@ -24,7 +24,11 @@ from pytosiq_core.tlb.config import (
 from tostester.install import Install
 from tostester.key import Key
 from tostester.network import NetworkConfig
-from tostester.zerostate import SimplexConsensusConfig, create_zerostate
+from tostester.zerostate import (
+    SimplexConsensusConfig,
+    _launch_validator_counts,
+    create_zerostate,
+)
 
 REPO = Path(__file__).resolve().parents[4]
 # Matches test/integration/test_basic.py's convention: CI's build step
@@ -44,6 +48,39 @@ DNS_VECTORS = json.loads(
     (REPO / "domains/packages/protocol/test/vectors.json").read_text()
 )
 EXPECTED_DNS_ROOT_ID = DNS_VECTORS["root_address"].removeprefix("-1:")
+
+
+def test_launch_validator_count_boundary_is_explicit():
+    assert _launch_validator_counts(21, 21) == {
+        "max_validators": 21,
+        "max_main_validators": 21,
+        "min_validators": 21,
+    }
+    with pytest.raises(ValueError, match="genesis validator count 22 exceeds.*cap 21"):
+        _launch_validator_counts(22, 21)
+
+
+def test_local_genesis_builds_21_validators_and_refuses_22_before_fift(tmp_path):
+    install = Install(BUILD_DIR, REPO)
+    keys = [Key() for _ in range(21)]
+    config = NetworkConfig(shard_validators=21)
+    accepted_dir = tmp_path / "accepted-21"
+    accepted_dir.mkdir()
+    state = _load_masterchain_state(
+        create_zerostate(install, accepted_dir, config, keys).masterchain.file
+    )
+    limits = _config(state, 16, ConfigParam16)
+    validators = _config(state, 34, ConfigParam34).cur_validators
+    assert (limits.max_validators, limits.max_main_validators) == (21, 21)
+    assert (validators.total, validators.main) == (21, 21)
+
+    with pytest.raises(ValueError, match="genesis validator count 22 exceeds.*cap 21"):
+        create_zerostate(
+            install,
+            tmp_path / "refused-22",
+            NetworkConfig(shard_validators=21),
+            [Key() for _ in range(22)],
+        )
 
 
 def _load_masterchain_state(path: Path) -> ShardStateUnsplit:
@@ -218,7 +255,7 @@ def test_validator_election_stage_a_profile_is_isolated_and_accelerated(tmp_path
         catchain.shard_catchain_lifetime,
         catchain.shard_validators_lifetime,
         catchain.shard_validators_num,
-    ) == (250, 250, 1000, 23)
+    ) == (250, 250, 1000, 21)
 
 
 def test_validator_election_experiment_faucet_override_is_stage_a_only(tmp_path):
@@ -328,7 +365,7 @@ def test_validator_economics_profile_matches_bootstrap_spec(tmp_path):
         param16.max_validators,
         param16.max_main_validators,
         param16.min_validators,
-    ) == (400, 100, 4)
+    ) == (21, 21, 4)
 
     param17 = _config(state, 17, ConfigParam17)
     assert (
@@ -349,7 +386,7 @@ def test_validator_economics_profile_matches_bootstrap_spec(tmp_path):
         param28.shard_catchain_lifetime,
         param28.shard_validators_lifetime,
         param28.shard_validators_num,
-    ) == (250, 250, 1000, 23)
+    ) == (250, 250, 1000, 21)
 
     validator_set = _config(state, 34, ConfigParam34).cur_validators
     assert validator_set.total == EXPECTED_VALIDATOR_COUNT
@@ -517,7 +554,7 @@ def test_canonical_genesis_script_accepts_only_four_validator_keys(tmp_path):
         canonical_catchain.shard_catchain_lifetime,
         canonical_catchain.shard_validators_lifetime,
         canonical_catchain.shard_validators_num,
-    ) == (250, 250, 1000, 23)
+    ) == (250, 250, 1000, 21)
     validator_set = _config(state, 34, ConfigParam34).cur_validators
     assert validator_set.total == EXPECTED_VALIDATOR_COUNT
     assert [

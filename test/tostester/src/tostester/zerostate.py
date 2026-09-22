@@ -8,8 +8,32 @@ from tosapi import tos_api
 
 from .install import Install, run_fift
 from .key import Key
+from .pq_launch_limits import (
+    MAX_MASTERCHAIN_COMMITTEE,
+    MAX_SHARD_COMMITTEE,
+    MAX_TOTAL_VALIDATORS,
+)
 
 NANOTOS_PER_TOS = 1_000_000_000
+
+
+def _launch_validator_counts(validator_count: int, minimum: int) -> dict[str, int]:
+    """Construct Param16 from the enforced cap, refusing before Fift sees it."""
+    if validator_count > MAX_MASTERCHAIN_COMMITTEE:
+        raise ValueError(
+            f"genesis validator count {validator_count} exceeds the enforced launch cap "
+            f"{MAX_MASTERCHAIN_COMMITTEE}"
+        )
+    if not 1 <= minimum <= MAX_MASTERCHAIN_COMMITTEE:
+        raise ValueError(
+            f"minimum validator count {minimum} is outside the enforced launch range "
+            f"1..{MAX_MASTERCHAIN_COMMITTEE}"
+        )
+    return {
+        "max_validators": MAX_TOTAL_VALIDATORS,
+        "max_main_validators": MAX_MASTERCHAIN_COMMITTEE,
+        "min_validators": minimum,
+    }
 
 
 def _shard_json_repr(shard: int):
@@ -456,6 +480,12 @@ def create_zerostate(
     pq_validators: list[PqInitialValidator] | None = None,
 ) -> Zerostate:
     pq_validators = [] if pq_validators is None else pq_validators
+    validator_count = len(validator_keys) + len(pq_validators)
+    if not 1 <= config.shard_validators <= MAX_SHARD_COMMITTEE:
+        raise ValueError(
+            f"shard validator count {config.shard_validators} is outside the enforced launch "
+            f"range 1..{MAX_SHARD_COMMITTEE}"
+        )
     if pq_validators and validator_keys:
         raise ValueError(
             "a bootstrap validator set cannot mix classical and post-quantum descriptors"
@@ -497,6 +527,13 @@ def create_zerostate(
     ) != len(validator_keys):
         raise ValueError("validator economics profile requires unique genesis validator keys")
 
+    validator_counts = _launch_validator_counts(
+        validator_count,
+        4
+        if config.validator_economics_profile
+        else max(1, min(validator_count, config.shard_validators)),
+    )
+
     keys: list[str] = []
     for key in validator_keys:
         keys.append(
@@ -516,9 +553,7 @@ def create_zerostate(
             "config_genesis_balance": "TM$500",
             "main_wallet_genesis_balance": "TM$100000",
             "expected_genesis_supply": "TM$101000",
-            "max_validators": 400,
-            "max_main_validators": 100,
-            "min_validators": 4,
+            **validator_counts,
             "min_stake": "TM$10000",
             "max_stake": "TM$10000000",
             "min_total_stake": "TM$40000",
@@ -530,7 +565,7 @@ def create_zerostate(
             "mc_valgroup_lifetime": 250,
             "shard_valgroup_lifetime": 250,
             "shard_validators_lifetime": 1000,
-            "shard_validators_per_group": 23,
+            "shard_validators_per_group": MAX_SHARD_COMMITTEE,
             "original_vset_valid_for": 131072,
         }
         if config.validator_election_stage_a_profile:
@@ -555,9 +590,7 @@ def create_zerostate(
                 "elector_genesis_balance - config_genesis_balance -"
             ),
             "expected_genesis_supply": "TM$5000000000",
-            "max_validators": 40,
-            "max_main_validators": 20,
-            "min_validators": max(1, min(len(keys), config.shard_validators)),
+            **validator_counts,
             "min_stake": "TM$10000",
             "max_stake": "TM$100000",
             "min_total_stake": "TM$10000",

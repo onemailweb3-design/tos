@@ -34,6 +34,7 @@
 #include "block/workchain-execution-dispatch.h"
 #include "common/delay.h"
 #include "common/stats.h"
+#include "crypto/pq/pq-launch-limits.h"
 #include "db/celldb.hpp"
 #include "db/fileref.hpp"
 #include "downloaders/wait-block-data.hpp"
@@ -3122,6 +3123,15 @@ void ValidatorManagerImpl::update_shards() {
       opts_->get_last_fork_masterchain_seqno() <= last_masterchain_seqno_) {
     allow_validate_ = true;
   }
+  auto config_holder = last_masterchain_state_->get_config_holder();
+  auto launch_config = config_holder.is_error()
+                           ? config_holder.move_as_error_prefix("failed to extract launch resource configuration: ")
+                           : config_holder.ok()->validate_pq_launch_resource_config();
+  if (launch_config.is_error()) {
+    LOG(ERROR) << "refusing validator and observer groups for an unsafe launch resource configuration: "
+               << launch_config;
+    allow_validate_ = false;
+  }
   auto exp_vec = last_masterchain_state_->get_shards();
   auto config = last_masterchain_state_->get_consensus_config();
   consensus::ValidatorSessionOptions opts{config};
@@ -3337,40 +3347,42 @@ void ValidatorManagerImpl::update_shards() {
       }
     }
   }
-  for (auto &shard : future_shards) {
-    auto val_set = last_masterchain_state_->get_next_validator_set(shard);
-    if (val_set.is_null()) {
-      continue;
-    }
+  if (allow_validate_) {
+    for (auto &shard : future_shards) {
+      auto val_set = last_masterchain_state_->get_next_validator_set(shard);
+      if (val_set.is_null()) {
+        continue;
+      }
 
-    auto validator_id = get_validator_id(shard, val_set);
-    if (!validator_id.is_zero()) {
-      auto selected_config = last_masterchain_state_->get_selected_new_consensus_config(shard.workchain);
-      if (!selected_config || !selected_config.value().config.protocol_version_supported()) {
-        LOG(ERROR) << "refusing to create future validator group for " << shard.to_str()
-                   << ": consensus config is missing or its protocol version is not supported by this build";
-        continue;
-      }
-      auto val_group_id =
-          block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
-                                                       .global_id = global_id,
-                                                       .validator_options_hash = opts_hash,
-                                                       .simplex_config_cell_hash = selected_config.value().cell_hash,
-                                                       .shard = shard,
-                                                       .catchain_seqno = val_set->get_catchain_seqno(),
-                                                       .validators = val_set->export_vector(),
-                                                       .vertical_seqno = opts_->get_maximal_vertical_seqno(),
-                                                       .last_key_block_seqno = key_seqno,
-                                                       .new_catchain_ids = opts.new_catchain_ids,
-                                                   })
-              .session_id;
-      if (destroyed_validator_sessions_.contains(val_group_id)) {
-        continue;
-      }
-      get_or_make_next_group(shard, val_group_id, val_set, selected_config.value().config);
-      if (shard.is_masterchain() && mc_validator_adnl_id.is_zero()) {
-        mc_validator_adnl_id =
-            adnl::AdnlNodeIdShort{block::validator_adnl_identity(*val_set->get_validator(validator_id))};
+      auto validator_id = get_validator_id(shard, val_set);
+      if (!validator_id.is_zero()) {
+        auto selected_config = last_masterchain_state_->get_selected_new_consensus_config(shard.workchain);
+        if (!selected_config || !selected_config.value().config.protocol_version_supported()) {
+          LOG(ERROR) << "refusing to create future validator group for " << shard.to_str()
+                     << ": consensus config is missing or its protocol version is not supported by this build";
+          continue;
+        }
+        auto val_group_id =
+            block::derive_validator_session_identity(block::ValidatorSessionIdentityInput{
+                                                         .global_id = global_id,
+                                                         .validator_options_hash = opts_hash,
+                                                         .simplex_config_cell_hash = selected_config.value().cell_hash,
+                                                         .shard = shard,
+                                                         .catchain_seqno = val_set->get_catchain_seqno(),
+                                                         .validators = val_set->export_vector(),
+                                                         .vertical_seqno = opts_->get_maximal_vertical_seqno(),
+                                                         .last_key_block_seqno = key_seqno,
+                                                         .new_catchain_ids = opts.new_catchain_ids,
+                                                     })
+                .session_id;
+        if (destroyed_validator_sessions_.contains(val_group_id)) {
+          continue;
+        }
+        get_or_make_next_group(shard, val_group_id, val_set, selected_config.value().config);
+        if (shard.is_masterchain() && mc_validator_adnl_id.is_zero()) {
+          mc_validator_adnl_id =
+              adnl::AdnlNodeIdShort{block::validator_adnl_identity(*val_set->get_validator(validator_id))};
+        }
       }
     }
   }
@@ -3646,6 +3658,15 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
   CHECK(descr);
   auto adnl_id = adnl::AdnlNodeIdShort{block::validator_adnl_identity(*descr)};
 
+  const auto committee_ceiling = shard.is_masterchain() ? tos::pq::launch_limits::max_masterchain_committee
+                                                        : tos::pq::launch_limits::max_shard_committee;
+  const auto committee_size = validator_set->export_vector().size();
+  if (committee_size > committee_ceiling) {
+    LOG(ERROR) << "refusing to create validator group for " << shard.to_str() << ": committee has " << committee_size
+               << " members, above launch ceiling " << committee_ceiling;
+    return {};
+  }
+
   if (!config.protocol_version_supported()) {
     // Fail closed. A missing or unrecognized consensus config (absent
     // parameter, unpack failure, reserved flag bits), or one whose protocol
@@ -3695,6 +3716,14 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_validator_grou
 td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_observer_group(
     ValidatorSessionId session_id, ShardIdFull shard, adnl::AdnlNodeIdShort local_adnl_id,
     td::Ref<block::ValidatorSet> validator_set, NewConsensusConfig config) {
+  const auto committee_ceiling = shard.is_masterchain() ? tos::pq::launch_limits::max_masterchain_committee
+                                                        : tos::pq::launch_limits::max_shard_committee;
+  const auto committee_size = validator_set->export_vector().size();
+  if (committee_size > committee_ceiling) {
+    LOG(ERROR) << "refusing to create observer group for " << shard.to_str() << ": committee has " << committee_size
+               << " members, above launch ceiling " << committee_ceiling;
+    return {};
+  }
   return IValidatorGroup::create_bridge_observer(
       PSTRING() << "valgroup" << shard.to_str(), shard, local_adnl_id, session_id, std::move(validator_set),
       std::move(config), keyring_, adnl_, quic_, overlays_, get_all_validator_adnl_ids(), db_root_, actor_id(this),

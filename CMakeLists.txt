@@ -803,6 +803,9 @@ target_link_libraries(test-pending-finality-cache PRIVATE full-node tos_block to
                       tos_pq_consensus tl_lite_api tdutils)
 target_compile_definitions(test-pending-finality-cache PRIVATE MLD_CONFIG_FILE="consensus-signer-config.h")
 
+add_executable(test-pq-launch-cap test/pq-native/pq-launch-cap-test.cpp)
+target_link_libraries(test-pq-launch-cap PRIVATE tos_block)
+
 add_executable(test-measurement-contract test/test-td-main.cpp test/pq-native/measurement-contract-test.cpp)
 target_include_directories(test-measurement-contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                            ${CMAKE_CURRENT_SOURCE_DIR}/crypto)
@@ -1223,6 +1226,7 @@ tos_test(test-pq-network-parser-resource)
 tos_test(test-pq-signature-persistence)
 tos_test(test-validator-transport-authority)
 tos_test(test-pending-finality-cache)
+tos_test(test-pq-launch-cap)
 add_dependencies(all-tests test-measurement-contract)
 add_test(NAME n6-metric-schema COMMAND test-measurement-contract --filter MetricSchema)
 add_test(NAME n6-monotonic-timestamps COMMAND test-measurement-contract --filter MonotonicTimestamps)
@@ -1243,6 +1247,13 @@ add_test(NAME n6-threshold-proposal
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-n6-threshold-proposal.py
           ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(n6-threshold-proposal PROPERTIES LABELS "source-guard")
+add_test(NAME pq-launch-cap-source
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-pq-launch-cap.py
+          ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(pq-launch-cap-source PROPERTIES LABELS "source-guard")
+add_test(NAME pq-launch-cap-mutations
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/pq-launch-cap-mutations.py)
+set_tests_properties(pq-launch-cap-mutations PROPERTIES LABELS "source-guard" RUN_SERIAL TRUE)
 add_test(NAME n6-microbench-results
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-n6-microbench-results.py
           ${CMAKE_CURRENT_SOURCE_DIR})
