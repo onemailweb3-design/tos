@@ -10,6 +10,17 @@ namespace tos::validator {
 
 namespace detail {
 
+inline td::Status check_governing_global_id(td::int32 header_global_id, const ConfigHolder& governing_config) {
+  TRY_RESULT(config_global_id, governing_config.get_config_global_id());
+  if (header_global_id != config_global_id) {
+    return td::Status::Error(
+        ErrorCode::protoviolation,
+        PSTRING() << "pq finality context: governing state global_id " << header_global_id
+                  << " disagrees with ConfigParam 19 global_id " << config_global_id);
+  }
+  return td::Status::OK();
+}
+
 inline td::Result<block::PQFinalityVerificationContext> derive_pq_finality_context(
     td::int32 global_id, const ValidatorSessionConfig& session_config,
     const td::optional<SelectedNewConsensusConfig>& selected_config, td::Ref<block::ValidatorSet> validator_set,
@@ -36,6 +47,8 @@ inline td::Result<block::PQFinalityVerificationContext> derive_pq_finality_conte
 inline td::Result<block::PQFinalityVerificationContext> derive_pq_finality_context(
     const MasterchainState& governing_state, td::Ref<block::ValidatorSet> validator_set, BlockIdExt block_id,
     td::uint32 vertical_seqno, BlockSeqno previous_key_block_seqno) {
+  TRY_RESULT(governing_config, governing_state.get_config_holder());
+  TRY_STATUS(detail::check_governing_global_id(governing_state.get_global_id(), *governing_config));
   return detail::derive_pq_finality_context(governing_state.get_global_id(), governing_state.get_consensus_config(),
                                             governing_state.get_selected_new_consensus_config(block_id.id.workchain),
                                             std::move(validator_set), block_id, vertical_seqno,
@@ -45,6 +58,7 @@ inline td::Result<block::PQFinalityVerificationContext> derive_pq_finality_conte
 inline td::Result<block::PQFinalityVerificationContext> derive_pq_finality_context(
     const ConfigHolder& governing_config, td::Ref<block::ValidatorSet> validator_set, BlockIdExt block_id,
     td::uint32 vertical_seqno, BlockSeqno previous_key_block_seqno) {
+  TRY_STATUS(detail::check_governing_global_id(governing_config.get_global_id(), governing_config));
   return detail::derive_pq_finality_context(governing_config.get_global_id(), governing_config.get_consensus_config(),
                                             governing_config.get_selected_new_consensus_config(block_id.id.workchain),
                                             std::move(validator_set), block_id, vertical_seqno,

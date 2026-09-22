@@ -1,6 +1,7 @@
 /* Copyright 2026 TOS Blockchain Teams. SPDX-License-Identifier: LGPL-2.0-or-later */
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <mutex>
 #include <optional>
 
@@ -123,12 +124,55 @@ class RootDbRoundTrip {
   td::actor::ActorOwn<Db> db_;
 };
 
+class FocusedConfigHolder final : public ConfigHolder {
+ public:
+  FocusedConfigHolder(td::int32 header_global_id, td::int32 config_global_id,
+                      td::Ref<block::ValidatorSet> validator_set, ValidatorSessionConfig session_config,
+                      SelectedNewConsensusConfig selected_config)
+      : header_global_id_(header_global_id)
+      , config_global_id_(config_global_id)
+      , validator_set_(std::move(validator_set))
+      , session_config_(session_config)
+      , selected_config_(std::move(selected_config)) {
+  }
+
+  td::Ref<block::ValidatorSet> get_total_validator_set(int) const override {
+    return validator_set_;
+  }
+  td::Ref<block::ValidatorSet> get_validator_set(ShardIdFull, UnixTime, CatchainSeqno) const override {
+    return validator_set_;
+  }
+  std::pair<UnixTime, UnixTime> get_validator_set_start_stop(int) const override {
+    return {0, std::numeric_limits<UnixTime>::max()};
+  }
+  td::int32 get_global_id() const override {
+    return header_global_id_;
+  }
+  td::Result<td::int32> get_config_global_id() const override {
+    return config_global_id_;
+  }
+  ValidatorSessionConfig get_consensus_config() const override {
+    return session_config_;
+  }
+  td::optional<SelectedNewConsensusConfig> get_selected_new_consensus_config(WorkchainId) const override {
+    return selected_config_;
+  }
+
+ private:
+  td::int32 header_global_id_;
+  td::int32 config_global_id_;
+  td::Ref<block::ValidatorSet> validator_set_;
+  ValidatorSessionConfig session_config_;
+  SelectedNewConsensusConfig selected_config_;
+};
+
 class FocusedMasterchainState final : public MasterchainState {
  public:
   FocusedMasterchainState(BlockIdExt id, td::int32 global_id, BlockSeqno vertical_seqno,
                           BlockIdExt last_key_block_id, td::Ref<block::ValidatorSet> validator_set,
                           td::Ref<block::McShardHashI> shard_top, ValidatorSessionConfig session_config,
-                          SelectedNewConsensusConfig selected_config, std::vector<BlockIdExt> ancestors)
+                          SelectedNewConsensusConfig selected_config, std::vector<BlockIdExt> ancestors,
+                          td::optional<td::int32> config_global_id = {})
       : id_(std::move(id))
       , global_id_(global_id)
       , vertical_seqno_(vertical_seqno)
@@ -137,7 +181,8 @@ class FocusedMasterchainState final : public MasterchainState {
       , shard_top_(std::move(shard_top))
       , session_config_(session_config)
       , selected_config_(std::move(selected_config))
-      , ancestors_(std::move(ancestors)) {
+      , ancestors_(std::move(ancestors))
+      , config_global_id_(config_global_id ? config_global_id.value() : global_id_) {
   }
 
   bool disable_boc() const override {
@@ -271,7 +316,8 @@ class FocusedMasterchainState final : public MasterchainState {
     return std::find(ancestors_.begin(), ancestors_.end(), block_id) != ancestors_.end();
   }
   td::Result<td::Ref<ConfigHolder>> get_config_holder() const override {
-    return td::Status::Error("focused masterchain state has no ConfigHolder wrapper");
+    return td::Ref<FocusedConfigHolder>{true, global_id_, config_global_id_, validator_set_, session_config_,
+                                        selected_config_};
   }
   block::WorkchainSet get_workchain_list() const override {
     return {};
@@ -293,6 +339,7 @@ class FocusedMasterchainState final : public MasterchainState {
   ValidatorSessionConfig session_config_;
   SelectedNewConsensusConfig selected_config_;
   std::vector<BlockIdExt> ancestors_;
+  td::int32 config_global_id_;
 };
 
 struct LargeFixture {
@@ -690,6 +737,9 @@ void run_proof_consumers() {
   auto current_state = td::Ref<FocusedMasterchainState>{
       true, current_after_key_block, -111, 0, current_after_key_block, shard_validator_set, shard_top, session_options,
       selected_b, std::vector<BlockIdExt>{shard_proof.governing_mc_block_id}};
+  auto mismatched_global_id_state = td::Ref<FocusedMasterchainState>{
+      true, shard_proof.governing_mc_block_id, -111, 0, shard_proof.governing_mc_block_id, shard_validator_set,
+      shard_top, session_options, selected_a, std::vector<BlockIdExt>{}, -112};
 
   int res_flags = 0;
   require_ok(production_top->prevalidate(shard_proof.governing_mc_block_id, governing_state, governing_state,
@@ -701,6 +751,17 @@ void run_proof_consumers() {
                                          ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
                                          res_flags),
              "top-descr-validate-after-key-block-with-governing-state");
+  res_flags = 0;
+  expect_error(production_top->prevalidate(current_after_key_block, current_state, mismatched_global_id_state,
+                                           ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
+                                           res_flags),
+               "governing state global_id -111 disagrees with ConfigParam 19 global_id -112",
+               "top_descr_global_id_disagreement");
+  auto mismatched_config = require_ok(mismatched_global_id_state->get_config_holder(), "mismatched-config-holder");
+  expect_error(derive_pq_finality_context(*mismatched_config, shard_validator_set, shard_proof.block_id, 0,
+                                          shard_proof.governing_mc_block_id.seqno()),
+               "governing state global_id -111 disagrees with ConfigParam 19 global_id -112",
+               "config_holder_global_id_disagreement");
   res_flags = 0;
   expect_error(production_top->prevalidate(current_after_key_block, current_state, current_state,
                                            ShardTopBlockDescrQ::fail_new | ShardTopBlockDescrQ::fail_too_new,
