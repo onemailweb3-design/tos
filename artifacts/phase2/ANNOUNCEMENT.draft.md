@@ -34,26 +34,27 @@ This is the field ceremony 1 got wrong, so it is first.
 The anchor block's hash is
 `0000000000000000000069c13457832a58fd579fe3d654ce239a5a5a8b54400f`,
 read independently from both witnesses on 2026-09-22 and identical from each.
-It is included for one reason: it proves this document was written **after**
-that block existed. A document naming a future height is only worth something
-if it can also be shown not to have been written later, and the pair of bounds
-— written after 968,125, all contributions in before 970,141 — is what gives
-it that.
+This is an anchor for observers to check, not a publication timestamp. A copy
+written after the ceremony could include the same hash. The publication record
+must independently establish that the complete announcement and pinned roster
+were public before the first contribution and before the closing height.
 
 ### The property this buys, stated exactly
 
-**Contributions close when the chain reaches height 970,141. The beacon is the
-block 144 further on.** So the beacon's hash cannot be computed by anyone,
-including the operator, until 144 blocks after the last contribution was
-accepted.
+**Contributions close when the observed chain reaches height 970,141. The
+beacon is the block 144 further on.** This separates the scheduled contribution
+window from the beacon height without relying on an estimate of block times.
+Unpredictability still depends on the beacon source and its chain assumptions;
+the height gap is not a cryptographic proof that nobody knew the output.
 
-This is a *structural* guarantee, not a probabilistic one, and that is why the
-deadline is expressed in blocks rather than in wall-clock time. Blocks arrive
-one at a time in an order everyone can see; "before the chain reached
-970,141" is a fact an outside auditor can check against the record's own
-timestamps and the published contributions. A calendar deadline would have to
-be trusted, and a fast fortnight of mining could have moved the beacon inside
-the contribution window without anyone noticing.
+The ceremony record contains no timestamps, and neither the contribution CLI
+nor the attestation verifier enforces this deadline. The operator must close
+intake at the announced height and retain independently observable publication
+evidence for every accepted contribution. At close, publish and archive the
+ordered contribution digests and final pre-beacon transcript, with the observed
+chain height and hash. Verifiers must check this evidence separately from the
+pairing and signature checks. If the timing cannot be established, or the
+beacon becomes known before intake closes, do not finalise this ceremony.
 
 ### These two heights are confirmed; the anchor decays
 
@@ -92,12 +93,16 @@ could aim at a `delta` prepared in advance.
 
 | | |
 |---|---|
-| repository commit | `TO FIX — the commit this is published at` |
+| repository code commit | `TO FIX — the clean, published code revision participants will build` |
 | circuit | 18,107 constraints, 19 instance variables, QAP domain 2^15 |
 | phase 1 | Zcash Sapling, slice sha256 `1bfd7acdb3ecbfaaa695ab159a7a643a2eb58203a4d93361040c6bd4c2aa3d6e` |
 | inheriting | 87 attested human contributions and a public random beacon |
 | starting key sha256 | `018853105392e4e0ef82ae59514f137b1f1a19892023b70b72ef58941b017c04` |
 | opening transcript | `7dcfafe1626b5586d5713654c55cc0887590fd789c391ecf1e28bfaf93e66287` |
+
+Pin the code revision before publishing this announcement. The announcement's
+own publication commit is separate; a document cannot contain its own final
+Git commit ID.
 
 The starting key is a function of the circuit and the slice, so it is the same
 value ceremony 1 published — that is a property of the construction, not
@@ -180,8 +185,8 @@ you can read. Two files, about 280 lines, are the whole of that discipline:
 
 Your scalar is drawn inside the contributor, used, and wiped. It is never a
 return value, never written to a file, and cannot be printed — the type
-holding it has no `Display` and its `Debug` prints a placeholder, so logging
-it does not compile.
+holding it has no `Display` and its `Debug` prints a placeholder. Ordinary
+formatting does not compile; debug formatting emits only the placeholder.
 
 Publish your attestation. Then hand the directory on: it is about 6 MB, it
 carries no secret, and any transport will do.

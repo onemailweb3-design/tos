@@ -30,9 +30,10 @@ does not remove it: every contributor could read the beacon before drawing
 their scalar.
 
 **What this ceremony does instead:** the beacon is a block that does not
-exist, and contributions close 144 blocks before it. "Every contribution was
-in before the beacon could be computed" is then structural rather than
-probabilistic, and an outsider can check it.
+exist, and contributions close 144 blocks before it. Independent publication
+evidence must establish that contributions closed before the beacon became
+known. The height gap supplies a schedule, not a proof of unpredictability;
+the ceremony tools do not enforce the deadline.
 
 ### 2. Nothing verified signatures
 
@@ -47,8 +48,8 @@ opens, and it refuses a document naming a contribution the chain does not
 contain, a valid document moved to another position, a signature from a key
 nobody published, a genuine signature over different bytes, a roster listing
 one key under two names, and a ceremony in which no verified contribution
-comes from anyone independent of the operator. Twenty-two cases, each one
-watched to fail.
+comes from anyone declared independent of the operator. Twenty-three cases
+exercise acceptance and refusals for specific reasons.
 
 ### 3. The announcement and the first contribution were published together
 
@@ -78,7 +79,7 @@ the ones before it are already public.
 
 | # | step | who | state |
 |---|---|---|---|
-| 1 | attestation verification exists and can fail | done | `test/shielded-pool/verify-attestations.py`, 22 cases |
+| 1 | attestation verification exists and can fail | done | `test/shielded-pool/verify-attestations.py`, 23 cases |
 | 2 | recruit participants, at least one independent of the operator | **operator** | **blocked — needs people** |
 | 3 | collect each participant's already-public signing key into `roster.json` | operator | blocked on 2 |
 | 4 | fix the beacon height and the closing height | operator | **confirmed 2026-09-22**: close 970,141, beacon 970,285 |

@@ -120,6 +120,11 @@ def load_roster(path: Path) -> dict:
                 f"the roster does not say whether {name!r} is independent of the "
                 "operator, and that is the question the roster exists to answer"
             )
+        if not isinstance(who["independent_of_operator"], bool):
+            raise Refused(
+                f"{name!r}'s independent_of_operator must be a JSON boolean, not "
+                f"{type(who['independent_of_operator']).__name__}"
+            )
         key = who.get("key")
         if not isinstance(key, dict):
             raise Refused(f"{name!r} has no key")
@@ -314,6 +319,11 @@ def verify_gpg(document: Path, signature: Path, roster: dict, keyring: Path) -> 
     """
     home = keyring / "gnupg"
     home.mkdir(mode=0o700, exist_ok=True)
+    # Resolve before restricting the child environment; installations outside
+    # the system binary directories must still use the selected verifier.
+    gpg = shutil.which("gpg")
+    if gpg is None:
+        raise Refused("gpg is not installed; it is required to verify a pgp signature")
     env = {"GNUPGHOME": str(home), "PATH": "/usr/bin:/bin", "LC_ALL": "C"}
 
     fingerprints = {}
@@ -322,7 +332,7 @@ def verify_gpg(document: Path, signature: Path, roster: dict, keyring: Path) -> 
         if key["type"] != "gpg":
             continue
         imported = subprocess.run(
-            ["gpg", "--batch", "--import"],
+            [gpg, "--batch", "--import"],
             input=key["public_key"],
             capture_output=True,
             text=True,
@@ -339,7 +349,7 @@ def verify_gpg(document: Path, signature: Path, roster: dict, keyring: Path) -> 
     # Status on fd 2, payload on fd 1, so the machine-readable verdict and the
     # bytes that were signed come back from one run without being interleaved.
     checked = subprocess.run(
-        ["gpg", "--batch", "--status-fd", "2", "--output", "-", "--decrypt", str(signature)],
+        [gpg, "--batch", "--status-fd", "2", "--output", "-", "--decrypt", str(signature)],
         capture_output=True,
         text=True,
         env=env,

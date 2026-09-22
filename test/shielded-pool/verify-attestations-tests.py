@@ -31,6 +31,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 VERIFIER = HERE / "verify-attestations.py"
 PROTOCOL = "tos-shielded-pool-v1-phase2"
+GPG = shutil.which("gpg")
 
 START = "a" * 64
 C1 = "1" * 64
@@ -108,7 +109,7 @@ def gpg_keygen(home: Path, uid: str) -> tuple:
     env = {"GNUPGHOME": str(home), "PATH": "/usr/bin:/bin", "LC_ALL": "C"}
     subprocess.run(
         [
-            "gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+            GPG, "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
             "--quick-generate-key", uid, "ed25519", "sign", "0",
         ],
         check=True,
@@ -118,7 +119,7 @@ def gpg_keygen(home: Path, uid: str) -> tuple:
         env=env,
     )
     listed = subprocess.run(
-        ["gpg", "--list-secret-keys", "--with-colons"],
+        [GPG, "--list-secret-keys", "--with-colons"],
         check=True,
         capture_output=True,
         text=True,
@@ -128,7 +129,7 @@ def gpg_keygen(home: Path, uid: str) -> tuple:
         line.split(":")[9] for line in listed.stdout.splitlines() if line.startswith("fpr:")
     )
     armoured = subprocess.run(
-        ["gpg", "--armor", "--export", fingerprint],
+        [GPG, "--armor", "--export", fingerprint],
         check=True,
         capture_output=True,
         text=True,
@@ -141,7 +142,7 @@ def gpg_clearsign(home: Path, fingerprint: str, document_path: Path) -> None:
     env = {"GNUPGHOME": str(home), "PATH": "/usr/bin:/bin", "LC_ALL": "C"}
     subprocess.run(
         [
-            "gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+            GPG, "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
             "--local-user", fingerprint, "--clearsign",
             "--output", str(document_path) + ".asc", str(document_path),
         ],
@@ -476,6 +477,22 @@ def case_shared_key(scratch: Path) -> tuple:
     )
 
 
+def case_independence_must_be_boolean(scratch: Path) -> tuple:
+    setup = build(scratch, outsider_independent=False)
+    control = run(setup)
+    if control.returncode == 0 or "no verified contribution" not in control.stderr:
+        raise RuntimeError("the all-dependent control must fail the independence rule")
+    roster_data = json.loads(setup["roster"].read_text())
+    roster_data["participants"][1]["independent_of_operator"] = "false"
+    setup["roster"].write_text(json.dumps(roster_data))
+    return (
+        "a string false cannot declare an independent participant",
+        "must be a JSON boolean",
+        run(setup),
+        None,
+    )
+
+
 def case_shared_principal(scratch: Path) -> tuple:
     setup = build(scratch)
     roster_data = json.loads(setup["roster"].read_text())
@@ -597,6 +614,7 @@ CASES = [
     case_waiver_does_not_rescue_independence,
     case_fingerprint_only_roster,
     case_roster_silent_on_independence,
+    case_independence_must_be_boolean,
     case_shared_key,
     case_shared_principal,
     case_gpg_intact,
@@ -609,7 +627,8 @@ CASES = [
 def main() -> int:
     failures = 0
     for case in CASES:
-        with tempfile.TemporaryDirectory(prefix="tos-attest-test-") as scratch:
+        # Keep room for the agent's Unix socket names on long system temp paths.
+        with tempfile.TemporaryDirectory(prefix="tos-at-") as scratch:
             description, expected, result, positive_failure = case(Path(scratch))
 
         if expected is None:
@@ -645,5 +664,8 @@ def main() -> int:
 if __name__ == "__main__":
     if shutil.which("ssh-keygen") is None:
         print("ssh-keygen is not installed", file=sys.stderr)
+        sys.exit(2)
+    if GPG is None:
+        print("gpg is not installed", file=sys.stderr)
         sys.exit(2)
     sys.exit(main())

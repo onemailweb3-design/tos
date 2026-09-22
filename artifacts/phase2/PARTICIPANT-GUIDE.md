@@ -201,8 +201,8 @@ less ~/tos/tools/shielded-pool-ceremony/src/entropy.rs
 They are the whole of the discipline: the random number is drawn from
 `/dev/urandom` inside the contributor, used, and wiped. It is never returned,
 never written to a file, and cannot be printed — the type holding it has no
-`Display`, and its `Debug` prints a placeholder, so logging it is a compile
-error rather than a leak.
+`Display`, and its `Debug` prints a placeholder. Ordinary formatting does not
+compile; debug formatting emits only the placeholder.
 
 **This is why the script builds from source instead of shipping you a
 binary.** If you run a binary somebody handed you, the thing you are attesting
