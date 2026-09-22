@@ -9,12 +9,16 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "test/tostester/src"))
 
+import tostester.n6_cluster as n6_cluster  # noqa: E402
 from tostester.n6_cluster import (  # noqa: E402
     analyze_live_finality,
+    load_latency_profile,
+    validate_latency_backend,
     validate_lite_transport_source,
     validate_node_isolation,
 )
@@ -54,6 +58,63 @@ async def check_backends(directory: Path) -> None:
         "nodes": ["node-1"],
         "provisioning": "external",
     }
+
+
+async def check_scale_driver(directory: Path) -> None:
+    calls: list[int] = []
+
+    launch_profile = load_latency_profile(
+        ROOT / "test/pq-native/n6-scale-profiles/launch-default.json"
+    )
+    try:
+        validate_latency_backend(launch_profile, LocalProcessBackend().manifest())
+        raise AssertionError("local backend accepted an unapplied launch latency profile")
+    except ValueError as error:
+        assert "declares the applied network profile" in str(error)
+    validate_latency_backend(
+        launch_profile,
+        {"kind": "remote-command", "network_profile": "launch-default"},
+    )
+
+    async def fake_run_cluster(
+        install, artifact_dir, backend, validators, base_port, require_lite, latency_profile_path
+    ):
+        del install, artifact_dir, backend, base_port, require_lite, latency_profile_path
+        calls.append(validators)
+        return {
+            "nodes": [
+                {"role": "validator", "name": f"validator-{index}"}
+                for index in range(validators)
+            ]
+            + [{"role": "non-validator-verifier", "name": "verifier"}],
+            "consensus_milestones": {
+                "time_to_first_proposal_ns": 1,
+                "time_to_first_notarization_certificate_ns": 2,
+                "time_to_first_final_certificate_ns": 3,
+            },
+        }
+
+    class FakeRemoteBackend:
+        def manifest(self):
+            return {"kind": "remote-command"}
+
+    original = n6_cluster.run_cluster
+    n6_cluster.run_cluster = fake_run_cluster
+    try:
+        result = await n6_cluster.run_scale_sweep(
+            SimpleNamespace(source_dir=ROOT),
+            directory / "scale-sweep",
+            FakeRemoteBackend(),
+            [4, 7],
+            ROOT / "test/pq-native/n6-scale-profiles/no-simulated-latency.json",
+            31000,
+        )
+    finally:
+        n6_cluster.run_cluster = original
+    assert calls == [4, 7]
+    assert [point["booted_validators"] for point in result["scale_points"]] == [4, 7]
+    assert result["required_release_scales"] == [21, 32, 64, 100]
+    assert result["required_release_scales_measured"] == []
 
 
 def main() -> int:
@@ -99,6 +160,13 @@ def main() -> int:
         )
         validate_lite_transport_source(ROOT)
         asyncio.run(check_backends(root))
+        asyncio.run(check_scale_driver(root))
+        no_latency = load_latency_profile(
+            ROOT / "test/pq-native/n6-scale-profiles/no-simulated-latency.json"
+        )
+        launch = load_latency_profile(ROOT / "test/pq-native/n6-scale-profiles/launch-default.json")
+        assert no_latency.application == "none" and no_latency.one_way_latency_ms == [0.0, 0.0]
+        assert launch.application == "external-network-shaping"
     print(
         "N6_CLUSTER_RUNNER_OK: local and remote-command backends share the manifest and evidence contract"
     )

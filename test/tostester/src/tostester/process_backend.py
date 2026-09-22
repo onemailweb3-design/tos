@@ -67,8 +67,9 @@ class RemoteCommandBackend(ProcessBackend):
     staging those files belongs to deployment tooling, not this test library.
     """
 
-    def __init__(self, commands: Mapping[str, Sequence[str]]):
+    def __init__(self, commands: Mapping[str, Sequence[str]], network_profile: str | None = None):
         self._commands = {name: tuple(command) for name, command in commands.items()}
+        self._network_profile = network_profile
         if not self._commands or any(not command for command in self._commands.values()):
             raise ValueError("remote-command inventory must contain non-empty commands")
 
@@ -103,8 +104,11 @@ class RemoteCommandBackend(ProcessBackend):
         )
 
     def manifest(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "kind": "remote-command",
             "nodes": sorted(self._commands),
             "provisioning": "external",
         }
+        if self._network_profile is not None:
+            result["network_profile"] = self._network_profile
+        return result

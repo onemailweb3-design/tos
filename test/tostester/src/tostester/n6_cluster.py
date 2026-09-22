@@ -28,6 +28,57 @@ class FinalityRouteEvidence:
     verification_ns: int
 
 
+@dataclass(frozen=True)
+class ConsensusMilestones:
+    time_to_first_proposal_ns: int
+    time_to_first_notarization_certificate_ns: int
+    time_to_first_final_certificate_ns: int
+
+
+@dataclass(frozen=True)
+class LatencyProfile:
+    name: str
+    one_way_latency_ms: list[float]
+    application: str
+
+
+def load_latency_profile(path: Path) -> LatencyProfile:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise ValueError("N6_SCALE_SWEEP_FAILURE: latency profile schema_version is not 1")
+    name = value.get("name")
+    latency = value.get("one_way_latency_ms")
+    application = value.get("application")
+    if not isinstance(name, str) or not name:
+        raise ValueError("N6_SCALE_SWEEP_FAILURE: latency profile has no name")
+    if (
+        not isinstance(latency, list)
+        or len(latency) != 2
+        or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in latency)
+        or latency[0] < 0
+        or latency[0] > latency[1]
+    ):
+        raise ValueError("N6_SCALE_SWEEP_FAILURE: latency profile has an invalid range")
+    if application not in ("none", "external-network-shaping"):
+        raise ValueError("N6_SCALE_SWEEP_FAILURE: latency profile has an invalid application")
+    if application == "none" and latency != [0, 0]:
+        raise ValueError("N6_SCALE_SWEEP_FAILURE: an unapplied latency profile must be exactly zero")
+    return LatencyProfile(name, [float(item) for item in latency], application)
+
+
+def validate_latency_backend(profile: LatencyProfile, backend_manifest: dict[str, Any]) -> None:
+    if profile.application != "external-network-shaping":
+        return
+    if (
+        backend_manifest["kind"] != "remote-command"
+        or backend_manifest.get("network_profile") != profile.name
+    ):
+        raise ValueError(
+            "N6_SCALE_SWEEP_FAILURE: launch latency requires a remote-command backend "
+            "that declares the applied network profile"
+        )
+
+
 def read_trace(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
@@ -92,6 +143,43 @@ def analyze_live_finality(trace_paths: list[Path]) -> FinalityRouteEvidence:
         "N6_LIVE_FINALITY_OVERLAY_FAILURE: no finality payload crossed from one process "
         "through Plumtree to a different process and completed trusted PQ verification"
     )
+
+
+def analyze_consensus_milestones(
+    trace_paths: list[Path], measurement_started_wall_ns: int
+) -> ConsensusMilestones:
+    events = [
+        event for path in trace_paths for event in read_trace(path) if event.get("kind") == "trace"
+    ]
+
+    def elapsed(stage: str) -> int:
+        timestamps = [
+            event.get("wall_unix_ns") for event in events if event.get("stage") == stage
+        ]
+        if not timestamps or any(not isinstance(value, int) for value in timestamps):
+            raise RuntimeError(f"N6_SCALE_SWEEP_FAILURE: no {stage} milestone was observed")
+        result = min(timestamps) - measurement_started_wall_ns
+        if result < 0:
+            raise RuntimeError(
+                f"N6_SCALE_SWEEP_FAILURE: {stage} predates the recorded measurement start; "
+                "remote hosts require synchronized clocks"
+            )
+        return result
+
+    result = ConsensusMilestones(
+        time_to_first_proposal_ns=elapsed("candidate_generated"),
+        time_to_first_notarization_certificate_ns=elapsed(
+            "notarization_certificate_observed"
+        ),
+        time_to_first_final_certificate_ns=elapsed("finalization_certificate_observed"),
+    )
+    if not (
+        result.time_to_first_proposal_ns
+        <= result.time_to_first_notarization_certificate_ns
+        <= result.time_to_first_final_certificate_ns
+    ):
+        raise RuntimeError("N6_SCALE_SWEEP_FAILURE: consensus milestones are out of order")
+    return result
 
 
 def validate_node_isolation(nodes: list[dict[str, Any]]) -> None:
@@ -192,11 +280,17 @@ async def run_cluster(
     validators: int,
     base_port: int,
     require_lite: bool,
+    latency_profile_path: Path | None = None,
 ) -> dict[str, Any]:
     from .network import Network, StartOptions
 
-    if validators != 4:
-        raise ValueError("N6.3 diagnostic Genesis currently requires exactly four PQ validators")
+    if validators < 4:
+        raise ValueError("N6.3 diagnostic Genesis requires at least four PQ validators")
+    latency_profile = load_latency_profile(
+        latency_profile_path
+        or install.source_dir / "test/pq-native/n6-scale-profiles/no-simulated-latency.json"
+    )
+    validate_latency_backend(latency_profile, backend.manifest())
     artifact_dir.mkdir(parents=True, exist_ok=False)
     network_dir = artifact_dir / "network"
     network_dir.mkdir()
@@ -217,6 +311,7 @@ async def run_cluster(
         "backend": backend.manifest(),
         "validators": validators,
         "base_port": base_port,
+        "latency_profile": asdict(latency_profile),
         "clock_domain": {
             "queueing_and_verification": "per-process monotonic",
             "local_propagation": "same-host wall clock",
@@ -248,6 +343,7 @@ async def run_cluster(
         all_nodes = [*validator_nodes, verifier]
         for key_file in network_dir.glob("node*/keyring/*"):
             key_file.chmod(0o600)
+        measurement_started_wall_ns = time.time_ns()
         await dht.run(StartOptions(threads=1, verbosity=3))
         for node in all_nodes:
             trace_path = node.directory / "n6-trace.jsonl"
@@ -283,6 +379,7 @@ async def run_cluster(
                 await asyncio.sleep(0.25)
         if evidence is None:
             evidence = analyze_live_finality(trace_paths)
+        milestones = analyze_consensus_milestones(trace_paths, measurement_started_wall_ns)
 
         lite: dict[str, Any] | None = None
         if require_lite:
@@ -324,6 +421,7 @@ async def run_cluster(
         node_results = [
             {
                 "name": node.name,
+                "role": "validator" if index < validators else "non-validator-verifier",
                 "db_root": str(node.directory),
                 "adnl_identity": node.adnl_identity.hex(),
                 "ports": list(node.transport_ports),
@@ -345,6 +443,7 @@ async def run_cluster(
             "backend": backend.manifest(),
             "nodes": node_results,
             "live_finality": asdict(evidence),
+            "consensus_milestones": asdict(milestones),
             "lite": lite,
             "consensus_correctness_verdict": "NOT_MADE_MERKLE_DIAGNOSIS_OPEN",
         }
@@ -354,3 +453,70 @@ async def run_cluster(
         monitor_stop.set()
         await asyncio.gather(*monitors)
         return result
+
+
+async def run_scale_sweep(
+    install: Any,
+    artifact_dir: Path,
+    backend: Any,
+    scales: list[int],
+    profile_path: Path,
+    base_port: int,
+) -> dict[str, Any]:
+    if not scales or len(scales) != len(set(scales)) or any(scale < 4 for scale in scales):
+        raise ValueError("N6_SCALE_SWEEP_FAILURE: scales must be unique integers of at least four")
+    profile = load_latency_profile(profile_path)
+    if backend.manifest()["kind"] == "local-process" and scales != [4]:
+        raise ValueError(
+            "N6_SCALE_SWEEP_FAILURE: this local host is restricted to the 4-validator minimum-BFT tier"
+        )
+    criteria = json.loads(
+        (install.source_dir / "doc/pq-native/N6-ACCEPTANCE-CRITERIA.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    required_release_scales = criteria.get("required_scales")
+    if required_release_scales != [21, 32, 64, 100]:
+        raise ValueError(
+            "N6_SCALE_SWEEP_FAILURE: the precommitted release scale requirement changed"
+        )
+    artifact_dir.mkdir(parents=True, exist_ok=False)
+    points: list[dict[str, Any]] = []
+    for index, scale in enumerate(scales):
+        point = await run_cluster(
+            install,
+            artifact_dir / f"validators-{scale}",
+            backend,
+            scale,
+            base_port + index * 1000,
+            False,
+            profile_path,
+        )
+        booted_validators = sum(1 for node in point["nodes"] if node["role"] == "validator")
+        if booted_validators != scale:
+            raise RuntimeError(
+                f"N6_SCALE_SWEEP_FAILURE: requested scale {scale} booted {booted_validators} validators"
+            )
+        points.append(
+            {
+                "requested_validators": scale,
+                "booted_validators": booted_validators,
+                "fault_tolerance": (scale - 1) // 3,
+                **point["consensus_milestones"],
+            }
+        )
+    result = {
+        "schema_version": 1,
+        "evidence_class": "MINIMUM_BFT_FUNCTIONAL_DIAGNOSTIC",
+        "release_evidence_eligible": False,
+        "latency_profile": asdict(profile),
+        "scale_points": points,
+        "required_release_scales": required_release_scales,
+        "required_release_scales_measured": [],
+        "full_required_matrix_executed": False,
+        "consensus_correctness_verdict": "NOT_MADE_MERKLE_DIAGNOSIS_OPEN",
+    }
+    (artifact_dir / "scale-sweep-result.json").write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return result

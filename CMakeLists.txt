@@ -1266,6 +1266,13 @@ add_test(NAME n6-lite-framed-tcp
 set_tests_properties(n6-live-finality-overlay n6-lite-framed-tcp PROPERTIES
   LABELS "n6-cluster"
   TIMEOUT 240)
+add_test(NAME n6-scale-sweep-minimum-bft
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run-n6-scale-sweep-gate.sh
+          ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
+          ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-scale-profiles/no-simulated-latency.json 29800)
+set_tests_properties(n6-scale-sweep-minimum-bft PROPERTIES
+  LABELS "n6-scale-sweep"
+  TIMEOUT 240)
 add_dependencies(all-tests validator-engine lite-client tos-pq-consensus-key)
 add_test(NAME finality-evidence-admission-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-evidence-admission.sh ${CMAKE_CURRENT_SOURCE_DIR})

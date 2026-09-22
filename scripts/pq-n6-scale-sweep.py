@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the N6.3 diagnostic multi-process PQ cluster scaffold."""
+"""Run the diagnostic N6 scale-sweep instrument."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from tostester.install import Install
-from tostester.n6_cluster import run_cluster
+from tostester.n6_cluster import run_scale_sweep
 from tostester.process_backend import LocalProcessBackend, RemoteCommandBackend
 
 
@@ -17,9 +17,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
     parser.add_argument("--artifact-dir", type=Path, required=True)
-    parser.add_argument("--validators", type=int, default=4)
-    parser.add_argument("--base-port", type=int, default=29400)
-    parser.add_argument("--scenario", choices=("live-finality", "lite-framed-tcp"), required=True)
+    parser.add_argument("--profile", type=Path, required=True)
+    parser.add_argument("--scales", type=int, nargs="+", required=True)
+    parser.add_argument("--base-port", type=int, default=29800)
     parser.add_argument("--remote-command-inventory", type=Path)
     return parser.parse_args()
 
@@ -30,15 +30,15 @@ async def main() -> int:
     if args.remote_command_inventory is None:
         backend = LocalProcessBackend()
     else:
-        inventory = json.loads(args.remote_command_inventory.read_text())
+        inventory = json.loads(args.remote_command_inventory.read_text(encoding="utf-8"))
         backend = RemoteCommandBackend(inventory["commands"], inventory.get("network_profile"))
-    result = await run_cluster(
+    result = await run_scale_sweep(
         Install(args.build_dir.resolve(), root),
         args.artifact_dir.resolve(),
         backend,
-        args.validators,
+        args.scales,
+        args.profile.resolve(),
         args.base_port,
-        args.scenario == "lite-framed-tcp",
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

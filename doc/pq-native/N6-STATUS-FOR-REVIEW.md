@@ -260,3 +260,33 @@ Mutation evidence:
 |---|---|---|
 | Delete an open gap but retain its required id | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: open measurement gaps reported the wrong release refusal: measurement-gap registry required ids and entries differ` |
 | Mark both measurement gaps resolved with `resolved_by` evidence | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: open measurement gaps reported the wrong release refusal: release-grade measurement refuses commit ...: no N5 closure artifact was supplied for that exact commit` |
+
+## N6.5 scale-sweep instrument
+
+Registered diagnostic gate: `n6-scale-sweep-minimum-bft` (label
+`n6-scale-sweep`). It boots the only tier this host can support honestly: four
+PQ Genesis validators (`n = 3f + 1`, `f = 1`) plus a distinct non-validator
+consumer. The result records the requested and actually booted validator
+counts and separately records time to the first proposal, first notarization
+certificate and first FinalCert from production consensus trace events.
+
+Latency is not a hidden flag. `no-simulated-latency.json` and
+`launch-default.json` are separate inputs retained in the manifest/result.
+The local backend refuses a nonzero profile because it cannot apply network
+shaping; the launch-default profile requires a remote-command deployment with
+external shaping whose backend manifest names the applied profile. Only the
+no-simulated-latency 4-validator point is executed here. The 21/32/64/100
+release scales, the full section 8.1 cliff matrix, and the launch-default run
+remain explicitly unexecuted and release-ineligible.
+
+The runner accepts larger remote scale lists without changing its result
+contract. Its fast contract gate drives two distinct requested values through
+the actual boot-count argument and checks both reported counts. Fixing the
+boot argument to the first scale makes the second point fail with
+`N6_SCALE_SWEEP_FAILURE: requested scale 7 booted 4 validators`; this prevents
+a list-shaped driver from silently measuring one cluster repeatedly.
+
+This tier proves only minimum-BFT protocol progress, message flow and carrier
+transport. It makes no launch-sizing, carrier-ceiling, network-capacity or
+consensus-correctness claim, and it does not resolve either open measurement
+gap.
