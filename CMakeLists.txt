@@ -1099,15 +1099,19 @@ target_link_libraries(all_tests INTERFACE tdutils tdactor tdnet tdfec tos_db tos
 endif()
 #END internal
 
-set(TEST_OPTIONS "--regression ${CMAKE_CURRENT_SOURCE_DIR}/test/regression-tests.ans --filter -Bench")
-separate_arguments(TEST_OPTIONS)
 set(BENCHMARK_FILTER "--filter -Bench")
 separate_arguments(BENCHMARK_FILTER)
+function(tos_regression_test TEST_NAME)
+  tos_test(${TEST_NAME}
+    --regression ${CMAKE_CURRENT_SOURCE_DIR}/test/regression-tests.ans
+    --regression-cache ${CMAKE_CURRENT_BINARY_DIR}/${TEST_NAME}.regression-cache
+    ${BENCHMARK_FILTER})
+endfunction()
 tos_test(test-ed25519 ${BENCHMARK_FILTER})
 tos_test(test-bigint)
-tos_test(test-vm ${TEST_OPTIONS})
-tos_test(test-fift ${TEST_OPTIONS})
-tos_test(test-cells ${TEST_OPTIONS})
+tos_regression_test(test-vm)
+tos_regression_test(test-fift)
+tos_regression_test(test-cells)
 tos_test(test-smartcont)
 tos_test(test-net)
 tos_test(test-tdactor)
@@ -1248,12 +1252,15 @@ tos_test(test-quorum)
 tos_test(test-emulator)
 
 tos_test(test-fec)
-tos_test(test-tddb ${TEST_OPTIONS})
+tos_regression_test(test-tddb)
 set_tests_properties(test-tddb PROPERTIES ENVIRONMENT
   "TOS_ROCKSDB_BLOCK_CACHE_SIZE=33554432;TOS_ROCKSDB_CRITICAL_WRITE_BUFFER_SIZE=67108864;TOS_ROCKSDB_CRITICAL_WRITE_BUFFER_ALLOW_STALL=1;TOS_ROCKSDB_GLOBAL_WRITE_BUFFER_SIZE=134217728;TOS_ROCKSDB_GLOBAL_WRITE_BUFFER_ALLOW_STALL=1")
-tos_test(test-db ${TEST_OPTIONS})
+tos_regression_test(test-db)
 add_test(NAME benchmark-exclusion-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-benchmark-exclusion.sh ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME regression-fixture-concurrency
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-regression-concurrency.sh
+          ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 # Network-safety regressions. test-quic-sender is a multi-suite binary (it also
 # holds large-scale/fairness suites that must not gate every change), so the
