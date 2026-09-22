@@ -135,20 +135,36 @@ int main() {
 
   tos::validator::PendingFinalityStore<int, int, int> sender_budget_check;
   if (!sender_budget_check
-           .admit(1, 7, 1, tos::validator::pending_finality_sender_budget_bytes, SharedCapacity, false, true, NoExpiry)
+           .admit(1, 7, 1, tos::validator::pending_finality_sender_per_block_budget_bytes, SharedCapacity, false,
+                  true, NoExpiry)
            .admitted() ||
-      sender_budget_check.admit(2, 7, 2, 1, SharedCapacity, false, true, NoExpiry).rejection !=
-          tos::validator::PendingFinalityRejection::SenderBudget) {
-    std::cerr << "PENDING_FINALITY_SENDER_BUDGET_FAILURE: one sender exceeded its 1048576-byte share\n";
+      !sender_budget_check
+           .admit(2, 7, 2, tos::validator::pending_finality_sender_per_block_budget_bytes, SharedCapacity, false,
+                  true, NoExpiry)
+           .admitted()) {
+    std::cerr << "PENDING_FINALITY_PER_BLOCK_SENDER_FAILURE: one sender could not retain maximum-size evidence for two blocks\n";
+    return 1;
+  }
+  if (sender_budget_check
+          .admit(3, 7, 3, tos::validator::pending_finality_sender_per_block_budget_bytes + 1, SharedCapacity, false,
+                 true, NoExpiry)
+          .rejection != tos::validator::PendingFinalityRejection::SenderBudget) {
+    std::cerr << "PENDING_FINALITY_SENDER_BUDGET_FAILURE: one block exceeded the measured maximum carrier size\n";
     return 1;
   }
   tos::validator::PendingFinalityStore<int, int, int> total_budget_check;
-  constexpr auto public_sender_shares = tos::validator::pending_finality_public_budget_bytes /
-                                        tos::validator::pending_finality_sender_budget_bytes;
+  static_assert(tos::validator::pending_finality_public_budget_bytes ==
+                tos::validator::pending_finality_public_candidate_slots *
+                    block::pq::pq_block_finality_broadcast_max_bytes);
+  static_assert(tos::validator::pending_finality_validator_reserved_budget_bytes ==
+                tos::validator::pending_finality_max_validator_senders *
+                    block::pq::pq_block_finality_broadcast_max_bytes);
+  constexpr auto public_sender_shares = tos::validator::pending_finality_public_candidate_slots;
   for (std::size_t i = 0; i < public_sender_shares; ++i) {
     if (!total_budget_check
              .admit(static_cast<int>(i), static_cast<int>(i), static_cast<int>(i),
-                    tos::validator::pending_finality_sender_budget_bytes, SharedCapacity, false, true, NoExpiry)
+                    tos::validator::pending_finality_sender_per_block_budget_bytes, SharedCapacity, false, true,
+                    NoExpiry)
              .admitted()) {
       std::cerr << "PENDING_FINALITY_TOTAL_BUDGET_FAILURE: a public peer lost its shared-pool allowance\n";
       return 1;
@@ -162,8 +178,8 @@ int main() {
     return 1;
   }
   if (!total_budget_check
-           .admit(2000, 2000, 1, tos::validator::pending_finality_sender_budget_bytes, ValidatorCapacity, false, true,
-                  NoExpiry)
+           .admit(2000, 2000, 1, tos::validator::pending_finality_sender_per_block_budget_bytes, ValidatorCapacity,
+                  false, true, NoExpiry)
            .admitted()) {
     std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: non-validator peers exhausted validator reserved capacity\n";
     return 1;
@@ -172,7 +188,8 @@ int main() {
   for (std::size_t i = 0; i < tos::validator::pending_finality_max_validator_senders; ++i) {
     if (!reserved_budget_check
              .admit(static_cast<int>(i), static_cast<int>(i), static_cast<int>(i),
-                    tos::validator::pending_finality_sender_budget_bytes, ValidatorCapacity, false, true, NoExpiry)
+                    tos::validator::pending_finality_sender_per_block_budget_bytes, ValidatorCapacity, false, true,
+                    NoExpiry)
              .admitted()) {
       std::cerr << "PENDING_FINALITY_VALIDATOR_BUDGET_FAILURE: a committee authority lost its reserved share\n";
       return 1;
@@ -182,7 +199,7 @@ int main() {
           .admit(1001, 1001, 1001, tos::validator::pending_finality_minimum_charge_bytes, ValidatorCapacity, false,
                  true, NoExpiry)
           .rejection != tos::validator::PendingFinalityRejection::ValidatorReservedBudget) {
-    std::cerr << "PENDING_FINALITY_VALIDATOR_BUDGET_FAILURE: committee evidence exceeded its 419430400-byte pool\n";
+    std::cerr << "PENDING_FINALITY_VALIDATOR_BUDGET_FAILURE: committee evidence exceeded its exact 400-carrier pool\n";
     return 1;
   }
 
@@ -312,15 +329,16 @@ int main() {
   for (std::size_t i = 0; i < public_sender_shares; ++i) {
     if (!authority_reservation_gate
              .admit(static_cast<int>(i), static_cast<int>(i), invalid,
-                    tos::validator::pending_finality_sender_budget_bytes, SharedCapacity, false, true, NoExpiry)
+                    tos::validator::pending_finality_sender_per_block_budget_bytes, SharedCapacity, false, true,
+                    NoExpiry)
              .admitted()) {
       std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: public peers did not fill their shared pool\n";
       return 1;
     }
   }
   if (!authority_reservation_gate
-           .admit(100, 100, valid, tos::validator::pending_finality_sender_budget_bytes, ValidatorCapacity, false,
-                  true, NoExpiry)
+           .admit(100, 100, valid, tos::validator::pending_finality_sender_per_block_budget_bytes,
+                  ValidatorCapacity, false, true, NoExpiry)
            .admitted()) {
     std::cerr << "PENDING_FINALITY_AUTHORITY_RESERVATION_FAILURE: non-validator peers exhausted validator reserved capacity\n";
     return 1;
@@ -432,7 +450,8 @@ int main() {
             << tos::validator::pending_finality_total_budget_bytes
             << " public_shared=" << tos::validator::pending_finality_public_budget_bytes
             << " validator_reserved=" << tos::validator::pending_finality_validator_reserved_budget_bytes
-            << " per_sender=1048576 minimum_charge=4096 validator_shares="
+            << " per_sender_per_block=" << tos::validator::pending_finality_sender_per_block_budget_bytes
+            << " minimum_charge=4096 validator_shares="
             << tos::validator::pending_finality_max_validator_senders << "\n";
   std::cout << "PENDING_FINALITY_AUTHORITY_MEMO_OK: cycled_claims=64 computations=2 entries=2"
                " global_cycled_shards="

@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "common/errorcode.h"
+#include "crypto/block/pq-signature-limits.h"
 #include "crypto/pq/pq-consensus.h"
 
 namespace tos::validator {
@@ -79,26 +80,32 @@ struct PendingFinalityAdmissionResult {
 };
 
 // Remote entries are charged by their received boxed-TL payload bytes; local
-// entries use their measured intrinsic signature bytes. A minimum charge for
-// either source bounds both memory and object count: at most 256 candidates per
-// sender and 106496 minimum-charged candidates across both pools.
-inline constexpr std::size_t pending_finality_sender_budget_bytes = 1024 * 1024;
+// entries use their measured intrinsic signature bytes. Each sender may retain
+// one unverified candidate per block, and that block-local candidate may occupy
+// exactly the measured maximum 400-signer carrier. A minimum charge for either
+// source bounds both memory and object count.
+inline constexpr std::size_t pending_finality_sender_per_block_budget_bytes =
+    block::pq::pq_block_finality_broadcast_max_bytes;
 inline constexpr std::size_t pending_finality_minimum_charge_bytes = 4096;
-inline constexpr std::size_t pending_finality_public_budget_bytes = 16 * 1024 * 1024;
+inline constexpr std::size_t pending_finality_public_candidate_slots = 16;
 inline constexpr std::size_t pending_finality_max_validator_senders =
     tos::pq::PQConsensusLimits{}.max_certificate_signers;
 static_assert(pending_finality_max_validator_senders <=
-              std::numeric_limits<std::size_t>::max() / pending_finality_sender_budget_bytes);
+              std::numeric_limits<std::size_t>::max() / pending_finality_sender_per_block_budget_bytes);
 // Public shard overlays admit non-validator peers, so peer cardinality cannot
 // justify a committee-sized global budget. Non-validator senders share a fixed
-// 16 MiB pool. A disjoint pool reserves one 1 MiB share for each transport
-// authority in the largest admitted validator set, ensuring public peers cannot
-// crowd valid committee evidence out. The reserved pool holds one complete
-// maximum-size committee; it does not promise independent reservations across
-// a validator-set rotation. These are hard upper bounds rather than
-// preallocations; together they cap retained unverified evidence at 416 MiB.
+// 16-candidate pool. A disjoint pool reserves one measured maximum-size carrier
+// for each transport authority in the largest admitted validator set, ensuring
+// public peers cannot crowd valid committee evidence out and preventing rounded
+// MiB shares from admitting more than 400 committee senders. The reserved pool
+// holds one complete maximum-size committee; it does not promise independent
+// reservations across a validator-set rotation. These are hard upper bounds
+// rather than preallocations; together they cap retained unverified evidence at
+// 409452160 bytes (about 390.48 MiB).
+inline constexpr std::size_t pending_finality_public_budget_bytes =
+    pending_finality_public_candidate_slots * pending_finality_sender_per_block_budget_bytes;
 inline constexpr std::size_t pending_finality_validator_reserved_budget_bytes =
-    pending_finality_max_validator_senders * pending_finality_sender_budget_bytes;
+    pending_finality_max_validator_senders * pending_finality_sender_per_block_budget_bytes;
 static_assert(pending_finality_public_budget_bytes <=
               std::numeric_limits<std::size_t>::max() - pending_finality_validator_reserved_budget_bytes);
 inline constexpr std::size_t pending_finality_total_budget_bytes =
@@ -317,8 +324,9 @@ class PendingFinalityStore {
     const auto removed_capacity = action == PendingFinalityAdmission::Replace && it != entries_.end()
                                       ? it->second.accounted_bytes(capacity)
                                       : 0;
-    if (pending_finality_exceeds_budget(sender_bytes(sender), removed_sender, charge,
-                                        pending_finality_sender_budget_bytes)) {
+    const auto block_sender_bytes = it == entries_.end() ? 0 : it->second.accounted_bytes(sender);
+    if (pending_finality_exceeds_budget(block_sender_bytes, removed_sender, charge,
+                                        pending_finality_sender_per_block_budget_bytes)) {
       return {PendingFinalityAdmission::Keep, PendingFinalityRejection::SenderBudget};
     }
     const auto capacity_budget = capacity == PendingFinalityCapacity::ValidatorReserved
@@ -369,15 +377,6 @@ class PendingFinalityStore {
     for (const auto &[unused, candidates] : entries_) {
       (void)unused;
       result += candidates.accounted_bytes();
-    }
-    return result;
-  }
-
-  std::size_t sender_bytes(const Sender &sender) const {
-    std::size_t result = 0;
-    for (const auto &[unused, candidates] : entries_) {
-      (void)unused;
-      result += candidates.accounted_bytes(sender);
     }
     return result;
   }

@@ -20,6 +20,12 @@ inline constexpr std::size_t pq_block_signature_bytes = tos::pq::mldsa44_signatu
 inline constexpr std::size_t pq_block_signatures_hard_max_bytes = 1U << 20;
 inline constexpr std::size_t pq_candidate_data_max_bytes = 1024;
 
+// Exact generated-TL size of the frozen 400-signer
+// tosNode.blockFinalityBroadcast carrier. The carrier-capacity gate serializes
+// the real object and compares it with this value; pending unverified evidence
+// budgets use the same measurement instead of a rounded MiB share.
+inline constexpr std::size_t pq_block_finality_broadcast_max_bytes = 984260;
+
 static_assert(pq_block_signatures_max_signers == 400);
 static_assert(pq_block_signature_bytes == 2420);
 

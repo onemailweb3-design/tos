@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "adnl/adnl-ext-limits.h"
+#include "crypto/block/pq-signature-limits.h"
 #include "crypto/block/signature-set.h"
 #include "crypto/pq/mldsa44.h"
 #include "overlay/broadcast-plumtree.hpp"
@@ -145,6 +146,12 @@ void check_node(std::size_t signers) {
          " recorded=" + std::to_string(expected_inner) + " actual=" + std::to_string(signature_set.size()));
   }
   auto payload = finality_broadcast_tl(signatures);
+  if (signers == block::pq::pq_block_signatures_max_signers &&
+      payload.size() != block::pq::pq_block_finality_broadcast_max_bytes) {
+    fail("CARRIER_PENDING_BUDGET_SIZE_MISMATCH recorded=" +
+         std::to_string(block::pq::pq_block_finality_broadcast_max_bytes) +
+         " actual=" + std::to_string(payload.size()));
+  }
   const auto recorded = recorded_size("complete-tosNode.blockFinalityBroadcast", signers);
   if (recorded.serialized_bytes != payload.size()) {
     std::fprintf(stderr, "CARRIER_RECORDED_SIZE_MISMATCH route=node signers=%zu recorded=%zu actual=%zu\n", signers,
