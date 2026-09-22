@@ -36,9 +36,10 @@ def test_pq_signature_tl_vectors_match_generated_schemas():
         parsed, consumed = schemas.deserialize(wire)
 
         if reason == "wrong_constructor":
-            assert not isinstance(parsed, dict) or parsed.get("@type") != "liteServer.signatureSet.simplexPq", (
-                f"PYTHON_TL_VECTOR_UNEXPECTED_ACCEPT case={name} expected={reason}"
-            )
+            assert (
+                not isinstance(parsed, dict)
+                or parsed.get("@type") != "liteServer.signatureSet.simplexPq"
+            ), f"PYTHON_TL_VECTOR_UNEXPECTED_ACCEPT case={name} expected={reason}"
             continue
 
         assert consumed == len(wire), f"PYTHON_TL_VECTOR_TRAILING case={name}"

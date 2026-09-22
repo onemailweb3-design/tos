@@ -19,7 +19,9 @@ STATUSES = {"definition", "historical", "placeholder", "reachable"}
 # Occurrences rather than lines are counted so checked-in generated sources
 # cannot hide two carrier sites on one minified line.
 MARKERS = {
-    "cpp_factory": re.compile(r"\bBlockSignatureSet::create_(?:ordinary|simplex(?:_approve)?)\s*\("),
+    "cpp_factory": re.compile(
+        r"\bBlockSignatureSet::create_(?:ordinary|simplex(?:_approve)?)\s*\("
+    ),
     "cpp_fetch": re.compile(r"\bBlockSignatureSet::fetch\s*\("),
     "verify": re.compile(r"\bcheck_(?:approve_)?signatures\s*\("),
     "cpp_class": re.compile(r"\bBlockSignatureSet(?:Ordinary|Simplex)\b"),
@@ -28,7 +30,9 @@ MARKERS = {
     "lite_tl": re.compile(r"\bliteServer\.signatureSet\.(?:ordinary|simplex)\b"),
     "cpp_node_tl": re.compile(r"\btosNode_signatureSet_(?:ordinary|simplex)\b"),
     "cpp_lite_tl": re.compile(r"\bliteServer_signatureSet_(?:ordinary|simplex)\b"),
-    "rust_generated_tl": re.compile(r"\b(?:TosNode|LiteServer)_SignatureSet_(?:Ordinary|Simplex)\b"),
+    "rust_generated_tl": re.compile(
+        r"\b(?:TosNode|LiteServer)_SignatureSet_(?:Ordinary|Simplex)\b"
+    ),
     "rust_variant": re.compile(r"\bBlockSignaturesVariant::(?:Ordinary|Simplex)\b"),
     "rust_simplex": re.compile(r"\bBlockSignaturesSimplex\b"),
     "rust_ordinary": re.compile(
@@ -38,7 +42,9 @@ MARKERS = {
     "raw_tag_write": re.compile(
         r"^(?![^\n]*block_signatures)[^\n]*\bstore_long_bool\b[^\n]*\b0x(?:11|12)\b", re.MULTILINE
     ),
-    "carrier_io": re.compile(r"\b(?:sig_set|sig_set_|signatures|signatures_)->(?:serialize|tl|tl_lite)\s*\("),
+    "carrier_io": re.compile(
+        r"\b(?:sig_set|sig_set_|signatures|signatures_)->(?:serialize|tl|tl_lite)\s*\("
+    ),
 }
 
 
@@ -87,14 +93,18 @@ def declared_sites(tracked: set[str]) -> tuple[dict[tuple[str, str], int], list[
         if marker != "*" and marker not in MARKERS:
             errors.append(f"classical-carrier check failed: {file} has unknown marker {marker}")
         if key in declared:
-            errors.append(f"classical-carrier check failed: duplicate inventory row for {file} {marker}")
+            errors.append(
+                f"classical-carrier check failed: duplicate inventory row for {file} {marker}"
+            )
             continue
         if status not in STATUSES:
             errors.append(f"classical-carrier check failed: {file} has unknown status {status}")
         try:
             declared[key] = int(count_text)
         except ValueError:
-            errors.append(f"classical-carrier check failed: {file} has invalid site count {count_text}")
+            errors.append(
+                f"classical-carrier check failed: {file} has invalid site count {count_text}"
+            )
     return declared, errors
 
 
@@ -109,7 +119,9 @@ def main() -> int:
     # derivation; keep the misleading dead entry point retired.
     for relative in ("validator/manager-disk.cpp", "validator/manager-disk.hpp"):
         if "get_validator_set_id" in (ROOT / relative).read_text():
-            errors.append(f"classical-carrier check failed: dead disk-manager session helper returned in {relative}")
+            errors.append(
+                f"classical-carrier check failed: dead disk-manager session helper returned in {relative}"
+            )
 
     covered: set[tuple[str, str]] = set()
     for (file, marker), expected_count in declared.items():
