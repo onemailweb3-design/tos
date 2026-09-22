@@ -1282,8 +1282,6 @@ set_tests_properties(
   quic-ctest-isolation-source
   validator-session-assembly-source
   jsonrpc-route-gating
-  n6-manifest-completeness
-  n6-acceptance-criteria
   PROPERTIES LABELS "source-guard")
 
 # Network-safety regressions. test-quic-sender is a multi-suite binary (it also
