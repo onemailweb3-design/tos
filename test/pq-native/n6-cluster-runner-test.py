@@ -9,14 +9,19 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "test/tostester/src"))
 
 from tostester.n6_cluster import (  # noqa: E402
+    ObservedBlock,
+    SustainedObservationConfig,
     analyze_consensus_milestones,
     analyze_live_finality,
     load_latency_profile,
+    require_agreed_masterchain_block,
+    summarize_sustained_observation,
     validate_latency_backend,
     validate_lite_transport_source,
     validate_node_isolation,
@@ -57,6 +62,70 @@ async def check_backends(directory: Path) -> None:
         "nodes": ["node-1"],
         "provisioning": "external",
     }
+
+
+class FakeBlockClient:
+    def __init__(self, root_hash: bytes):
+        self.root_hash = root_hash
+
+    async def lookup_block(self, *, workchain: int, shard: int, seqno: int):
+        return SimpleNamespace(
+            workchain=workchain,
+            shard=shard,
+            seqno=seqno,
+            root_hash=self.root_hash,
+            file_hash=bytes([seqno]) * 32,
+        )
+
+
+async def check_sustained_agreement() -> None:
+    canonical = bytes.fromhex("11" * 32)
+    clients = {name: FakeBlockClient(canonical) for name in ("node-a", "node-b", "node-c")}
+    block_id = await require_agreed_masterchain_block(clients, 7)
+    assert ",7):" in block_id
+
+    clients["node-c"] = FakeBlockClient(bytes.fromhex("22" * 32))
+    try:
+        await require_agreed_masterchain_block(clients, 7)
+    except RuntimeError as error:
+        assert "block-id disagreement at height 7" in str(error)
+        assert "node-a=" in str(error) and "node-c=" in str(error)
+    else:
+        raise AssertionError("nodes on different masterchain blocks were reported as agreeing")
+
+
+def check_sustained_summary() -> None:
+    config = SustainedObservationConfig(
+        blocks=2,
+        seconds=None,
+        target_block_rate_ms=400,
+        slow_interval_factor=3.0,
+    )
+    summary = summarize_sustained_observation(
+        config=config,
+        start_height=5,
+        observed=[
+            ObservedBlock(5, "block-5", 0),
+            ObservedBlock(6, "block-6", 400_000_000),
+            ObservedBlock(7, "block-7", 1_700_000_000),
+        ],
+        per_node_final_height={"node-a": 7, "node-b": 8},
+        checked_from_height=0,
+        agreed_block_ids={5: "block-5", 6: "block-6", 7: "block-7"},
+    )
+    assert summary["masterchain_blocks_produced"] == 2
+    assert summary["per_node_final_height"] == {"node-a": 7, "node-b": 8}
+    assert summary["agreement"]["same_block_per_height"] is True
+    assert summary["agreement"]["checked_through_height"] == 7
+    assert summary["interval_distribution_ms"] == {
+        "count": 2,
+        "minimum": 400.0,
+        "p50": 400.0,
+        "p95": 1300.0,
+        "maximum": 1300.0,
+    }
+    assert summary["slow_intervals"] == [{"from_height": 6, "to_height": 7, "interval_ms": 1300.0}]
+    assert summary["release_evidence_eligible"] is False
 
 
 def check_latency_profile_binding() -> None:
@@ -143,6 +212,8 @@ def main() -> int:
         )
         validate_lite_transport_source(ROOT)
         asyncio.run(check_backends(root))
+        asyncio.run(check_sustained_agreement())
+        check_sustained_summary()
         check_latency_profile_binding()
         no_latency = load_latency_profile(
             ROOT / "test/pq-native/n6-scale-profiles/no-simulated-latency.json"

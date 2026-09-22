@@ -364,3 +364,32 @@ consensus-correctness claim, and it is not the evidence used to resolve any of
 the three retained measurement-gap entries. In particular, its three
 milestones describe one cold-start sequence and are not a sustained-operation
 latency distribution.
+
+## Sustained co-located consensus observation
+
+`pq-n6-cluster.py --scenario sustained-consensus` keeps the real PQ Genesis
+cluster alive for exactly one configured bound: `--sustain-blocks` or
+`--sustain-seconds`. The interval threshold is the Genesis masterchain target
+block rate multiplied by the explicitly recorded `--slow-interval-factor`
+(default 3.0); a mismatch between the observer's target and Genesis is refused.
+
+Height alone is not accepted as agreement. Height 0 is pinned to the unique
+zerostate `BlockIdExt` supplied to every node by the common launch
+configuration. For every produced masterchain height from 1 through the final
+common height, the observer asks every node's own lite-server for the full
+block id and fails immediately if root or file hashes differ. The result
+retains the agreed id per height, every node's final height,
+the exact interval for every newly agreed height, min/p50/p95/max of those
+intervals, and every interval individually exceeding the stated threshold.
+Thus nodes at equal seqno on different chains cannot satisfy the mode, and a
+node that stops following remains visible in `per_node_final_height`.
+
+This is `COLOCATED_DIAGNOSTIC_ONLY` evidence with
+`release_evidence_eligible=false`. Its intervals measure when all colocated
+nodes expose the agreed block; they are not persisted-finality p99 and do not
+resolve the open Merkle correctness question. The registered
+`n6-cluster-runner` gate supplies both a positive same-block control and a
+forked node at height 7. Removing the full-block-id comparison makes the gate
+fail with `nodes on different masterchain blocks were reported as agreeing`.
+It also pins per-node final heights, the interval distribution, and the
+individual slow-interval record rather than accepting an average.

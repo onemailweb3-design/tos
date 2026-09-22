@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from tostester.install import Install
-from tostester.n6_cluster import run_cluster
+from tostester.n6_cluster import SustainedObservationConfig, run_cluster
 from tostester.process_backend import LocalProcessBackend, RemoteCommandBackend
 
 
@@ -19,7 +19,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifact-dir", type=Path, required=True)
     parser.add_argument("--validators", type=int, default=4)
     parser.add_argument("--base-port", type=int, default=29400)
-    parser.add_argument("--scenario", choices=("live-finality", "lite-framed-tcp"), required=True)
+    parser.add_argument(
+        "--scenario",
+        choices=("live-finality", "lite-framed-tcp", "sustained-consensus"),
+        required=True,
+    )
+    duration = parser.add_mutually_exclusive_group()
+    duration.add_argument("--sustain-blocks", type=int)
+    duration.add_argument("--sustain-seconds", type=float)
+    parser.add_argument("--slow-interval-factor", type=float, default=3.0)
     parser.add_argument("--remote-command-inventory", type=Path)
     return parser.parse_args()
 
@@ -32,6 +40,25 @@ async def main() -> int:
     else:
         inventory = json.loads(args.remote_command_inventory.read_text())
         backend = RemoteCommandBackend(inventory["commands"], inventory.get("network_profile"))
+    if args.scenario == "sustained-consensus":
+        if args.sustain_blocks is None and args.sustain_seconds is None:
+            raise ValueError(
+                "N6_SUSTAINED_CONSENSUS_FAILURE: sustained-consensus requires "
+                "--sustain-blocks or --sustain-seconds"
+            )
+        sustained = SustainedObservationConfig(
+            blocks=args.sustain_blocks,
+            seconds=args.sustain_seconds,
+            target_block_rate_ms=400,
+            slow_interval_factor=args.slow_interval_factor,
+        )
+    else:
+        if args.sustain_blocks is not None or args.sustain_seconds is not None:
+            raise ValueError(
+                "N6_SUSTAINED_CONSENSUS_FAILURE: sustained duration requires "
+                "--scenario sustained-consensus"
+            )
+        sustained = None
     result = await run_cluster(
         Install(args.build_dir.resolve(), root),
         args.artifact_dir.resolve(),
@@ -39,6 +66,7 @@ async def main() -> int:
         args.validators,
         args.base_port,
         args.scenario == "lite-framed-tcp",
+        sustained=sustained,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
