@@ -52,7 +52,7 @@ class RegressionTesterImpl : public RegressionTester {
   }
 
   RegressionTesterImpl(string db_path, string db_cache_dir) : db_path_(db_path), db_cache_dir_(db_cache_dir) {
-    load_db(db_path, tests_).ignore();
+    load_db(db_path, tests_, true).ensure();
     // The answer file is the shared resource, so every writer to the same path
     // must derive the same lock regardless of where that caller keeps its cache.
     db_lock_path_ = db_path_ + ".lock";
@@ -108,7 +108,7 @@ class RegressionTesterImpl : public RegressionTester {
     };
 
     std::map<string, TestInfo> latest;
-    load_db(db_path_, latest).ensure();
+    load_db(db_path_, latest, true).ensure();
     for (const auto &[name, info] : tests_) {
       auto [it, inserted] = latest.emplace(name, info);
       if (!inserted && it->second.result_hash != info.result_hash) {
@@ -140,12 +140,20 @@ class RegressionTesterImpl : public RegressionTester {
     }
   }
 
-  Status load_db(CSlice path, std::map<string, TestInfo> &tests) {
-    TRY_RESULT(data, read_file(path));
+  Status load_db(CSlice path, std::map<string, TestInfo> &tests, bool missing_is_empty) {
+    auto data_result = read_file(path);
+    if (data_result.is_error()) {
+      auto error = data_result.move_as_error();
+      if (missing_is_empty && error.code() == ENOENT) {
+        return Status::OK();
+      }
+      return error.move_as_error_prefix(PSLICE() << "Can't read regression database " << path << ": ");
+    }
+    auto data = data_result.move_as_ok();
     ConstParser parser(data.as_slice());
     auto db_magic = parser.read_word();
     if (db_magic != magic()) {
-      return Status::Error(PSLICE() << "Wrong magic " << db_magic);
+      return Status::Error(PSLICE() << "Regression database " << path << " is corrupt: wrong magic " << db_magic);
     }
     while (true) {
       TestInfo info;
