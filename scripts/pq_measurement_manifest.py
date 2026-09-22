@@ -22,6 +22,30 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 
+REQUIRED_SCALES = (21, 32, 64, 100)
+REQUIRED_NETWORK_PROFILES = ("baseline", "launch-wan", "degraded")
+REQUIRED_WORKLOADS = ("consensus-isolation", "target-load", "high-load")
+POSITIVE_CRITERIA_FIELDS = (
+    "max_p99_persisted_finality_ms",
+    "max_p99_block_signature_verify_ms",
+    "max_p99_lite_verify_ms",
+    "max_cpu_fraction",
+    "max_rss_fraction",
+    "max_network_fraction",
+    "max_disk_busy_fraction",
+    "max_finalization_backpressure_fraction",
+    "max_pending_finality_bytes",
+    "max_pending_finality_candidates",
+    "max_authority_classification_p99_ms",
+    "max_finalized_height_stall_ms",
+)
+ZERO_CRITERIA_FIELDS = (
+    "max_unbounded_memory_slope_bytes_per_hour",
+    "safety_violations_allowed",
+    "process_crashes_allowed",
+    "invalid_proofs_accepted",
+)
+
 REQUIRED_PATHS: tuple[tuple[str, ...], ...] = (
     ("schema_version",),
     ("run_id",),
@@ -111,6 +135,65 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def load_acceptance_criteria(path: Path, *, release: bool) -> dict[str, Any]:
+    try:
+        criteria = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError(f"acceptance criteria are unreadable: {exc}") from exc
+    if not isinstance(criteria, dict):
+        raise ManifestError("acceptance criteria root is not an object")
+    if criteria.get("schema_version") != SCHEMA_VERSION:
+        raise ManifestError("acceptance criteria schema_version is not 1")
+    hardware = criteria.get("release_hardware_profile")
+    if not isinstance(hardware, str) or not hardware:
+        raise ManifestError("acceptance criteria lack release_hardware_profile")
+
+    for field, required in (
+        ("required_scales", REQUIRED_SCALES),
+        ("required_network_profiles", REQUIRED_NETWORK_PROFILES),
+        ("required_workloads", REQUIRED_WORKLOADS),
+    ):
+        values = criteria.get(field)
+        if not isinstance(values, list) or any(value not in values for value in required):
+            raise ManifestError(f"acceptance criteria field {field} lacks required entries")
+
+    for field in POSITIVE_CRITERIA_FIELDS + ZERO_CRITERIA_FIELDS:
+        value = criteria.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ManifestError(f"acceptance criteria field {field} is not a non-negative number")
+    for field in (
+        "max_cpu_fraction",
+        "max_rss_fraction",
+        "max_network_fraction",
+        "max_disk_busy_fraction",
+        "max_finalization_backpressure_fraction",
+    ):
+        if criteria[field] > 1:
+            raise ManifestError(f"acceptance criteria field {field} exceeds 1.0")
+    for field in ZERO_CRITERIA_FIELDS:
+        if criteria[field] != 0:
+            raise ManifestError(f"acceptance criteria field {field} must be zero")
+    if release:
+        if hardware == "OWNER_REVIEW_REQUIRED":
+            raise ManifestError("release-grade measurement refuses an unreviewed hardware profile")
+        for field in POSITIVE_CRITERIA_FIELDS:
+            if criteria[field] == 0:
+                raise ManifestError(f"release-grade measurement refuses zero threshold {field}")
+    return criteria
+
+
+def validate_manifest_inputs(
+    manifest: dict[str, Any], criteria_path: Path, matrix_path: Path
+) -> None:
+    for field, path in (
+        ("acceptance_criteria_sha256", criteria_path),
+        ("test_matrix_sha256", matrix_path),
+    ):
+        actual = sha256_file(path)
+        if manifest.get(field) != actual:
+            raise ManifestError(f"manifest {field} does not match {path.name}")
 
 
 def _cpu_model() -> str:
@@ -232,6 +315,8 @@ def create_manifest(
         if dirty:
             raise ManifestError("release-grade measurement refuses a dirty git tree")
 
+    load_acceptance_criteria(criteria_path, release=mode == "release")
+
     host = observed_host()
     host.update(config.get("host", {}))
     manifest: dict[str, Any] = {
@@ -252,6 +337,7 @@ def create_manifest(
         "test_matrix_sha256": sha256_file(matrix_path),
     }
     validate_manifest(manifest)
+    validate_manifest_inputs(manifest, criteria_path, matrix_path)
     return manifest
 
 

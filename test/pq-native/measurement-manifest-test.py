@@ -97,6 +97,32 @@ def complete_config() -> dict[str, object]:
     }
 
 
+def complete_criteria() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "release_hardware_profile": "test-hardware",
+        "required_scales": [21, 32, 64, 100],
+        "required_network_profiles": ["baseline", "launch-wan", "degraded"],
+        "required_workloads": ["consensus-isolation", "target-load", "high-load"],
+        "max_p99_persisted_finality_ms": 1,
+        "max_p99_block_signature_verify_ms": 1,
+        "max_p99_lite_verify_ms": 1,
+        "max_cpu_fraction": 0.5,
+        "max_rss_fraction": 0.5,
+        "max_network_fraction": 0.5,
+        "max_disk_busy_fraction": 0.5,
+        "max_finalization_backpressure_fraction": 0.5,
+        "max_pending_finality_bytes": 1,
+        "max_pending_finality_candidates": 1,
+        "max_authority_classification_p99_ms": 1,
+        "max_unbounded_memory_slope_bytes_per_hour": 0,
+        "max_finalized_height_stall_ms": 1,
+        "safety_violations_allowed": 0,
+        "process_crashes_allowed": 0,
+        "invalid_proofs_accepted": 0,
+    }
+
+
 with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
     root = Path(raw)
     run("git", "init", "-q", cwd=root)
@@ -108,7 +134,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     criteria = root / "criteria.json"
     matrix = root / "matrix.json"
-    criteria.write_text('{"schema_version":1}\n', encoding="utf-8")
+    criteria.write_text(json.dumps(complete_criteria()) + "\n", encoding="utf-8")
     matrix.write_text('{"schema_version":1}\n', encoding="utf-8")
     closure = root / "closure.json"
     closure.write_text(

@@ -1217,6 +1217,8 @@ add_test(NAME n6-instrumentation-byte-equivalence
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME n6-manifest-completeness
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/measurement-manifest-test.py)
+add_test(NAME n6-acceptance-criteria
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/measurement-acceptance-criteria-test.py)
 add_test(NAME finality-evidence-admission-source
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-finality-evidence-admission.sh ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME pending-finality-retry-policy-source
