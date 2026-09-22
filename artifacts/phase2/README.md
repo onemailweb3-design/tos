@@ -1,7 +1,10 @@
-# Phase-2 ceremony — not open
+# Phase-2 ceremony — open participation
 
-**Status: being prepared. Nothing has been contributed. No parameters from
-this directory exist yet, and none may be deployed.**
+**Status: announcement published; preparing contribution 1. Parameters are not
+finalised and must not be deployed.**
+
+See [ANNOUNCEMENT.md](ANNOUNCEMENT.md) for the fixed parameters and open
+registration rules. The publication receipt is recorded before opening.
 
 ## If you are going to contribute
 
@@ -86,8 +89,8 @@ acceptance conditions; neither needs to be arranged before the first contributio
 
 | Step | State |
 |---|---|
-| Publish fixed circuit, code revision, deadline and beacon | prepare completed announcement from the draft |
-| Publish and retain announcement snapshot and publication receipt | before opening |
+| Publish fixed circuit, code revision, deadline and beacon | see published announcement |
+| Publish and retain announcement snapshot and publication receipt | release snapshot and receipt before opening |
 | Register tosman and its new public signing key | public key and initial register published |
 | Open and accept the first signed contribution | after announcement publication |
 | Register and accept additional participants | throughout the contribution window |
@@ -99,7 +102,7 @@ keys or contributions; publish additions with their history.
 
 ## Files
 
-- [ANNOUNCEMENT.draft.md](ANNOUNCEMENT.draft.md): announcement template.
+- [ANNOUNCEMENT.md](ANNOUNCEMENT.md): formal announcement.
 - [PARTICIPANT-GUIDE.md](PARTICIPANT-GUIDE.md): contribution instructions.
 - [roster.template.json](roster.template.json): registration format.
 - [keys/tosman.md](keys/tosman.md): first contributor's public signing identity.

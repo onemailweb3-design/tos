@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 DOCS = [
     "artifacts/phase2/README.md",
     "artifacts/phase2/PARTICIPANT-GUIDE.md",
-    "artifacts/phase2/ANNOUNCEMENT.draft.md",
+    "artifacts/phase2/ANNOUNCEMENT.md",
     "doc/shielded-pool-phase2-runbook.md",
 ]
 
