@@ -59,6 +59,29 @@ async def check_backends(directory: Path) -> None:
     }
 
 
+def check_latency_profile_binding() -> None:
+    launch = load_latency_profile(ROOT / "test/pq-native/n6-scale-profiles/launch-default.json")
+    for manifest in (
+        LocalProcessBackend().manifest(),
+        {"kind": "remote-command"},
+    ):
+        try:
+            validate_latency_backend(launch, manifest)
+        except ValueError as error:
+            if "declares the applied network profile" not in str(error):
+                raise AssertionError(
+                    f"unbound launch latency profile reported the wrong refusal: {error}"
+                ) from error
+        else:
+            raise AssertionError(
+                f"backend without an applied network profile was accepted: {manifest}"
+            )
+    validate_latency_backend(
+        launch,
+        {"kind": "remote-command", "network_profile": "launch-default"},
+    )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -120,6 +143,7 @@ def main() -> int:
         )
         validate_lite_transport_source(ROOT)
         asyncio.run(check_backends(root))
+        check_latency_profile_binding()
         no_latency = load_latency_profile(
             ROOT / "test/pq-native/n6-scale-profiles/no-simulated-latency.json"
         )

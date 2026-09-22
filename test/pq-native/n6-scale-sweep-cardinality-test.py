@@ -64,6 +64,15 @@ async def run_gate(root: Path) -> None:
         )
     if len(set(booted)) != len(booted):
         raise RuntimeError(f"distinct requested scales produced duplicate boot counts: {booted}")
+    if result["required_release_scales"] != [21, 32, 64, 100]:
+        raise RuntimeError(
+            f"release scale requirement changed: {result['required_release_scales']}"
+        )
+    if result["required_release_scales_measured"] != []:
+        raise RuntimeError(
+            "diagnostic sweep claimed required release scales: "
+            f"{result['required_release_scales_measured']}"
+        )
 
 
 def main() -> int:
