@@ -23,7 +23,7 @@ Commits:
 |---|---|---|---|
 | `n5-0-block-signature-measure` | `block-signature-carrier-measure` | Deterministic production serialization at 1/21/32/64/100/400 signers; the 400-signer BOC is 1,020,996 bytes with SHA-256 `0C05E72DD2095B0B3497CEF3422DFBC65B42891BB011C75E769AC245FA0B9B63`. | Network admission, proof verification, or block acceptance. |
 | `n5-0-block-signature-limits` | `block-signature-carrier-bound` | The frozen one-MiB persisted envelope admits the canonical 400-signer object and the production serializer refuses 401 signers. | A 400-member live committee, transport throughput, or cryptographic quorum. |
-| Static route inventory required by §3.3 | `block-signature-carrier-routes` | Every named production limit still equals the recorded value and every route minimum and measured headroom recomputes. | A live overlay peer graph or encrypted external connection; those are separate later gates. |
+| Static route inventory required by §3.3 | `block-signature-carrier-routes` | Every named production limit still equals the recorded value and every route minimum and measured headroom recomputes. | This static inventory does not exercise transport. Sections 6 and 10 add serializer/admission and live framed-TCP gates, but no gate in this stage stands up a live overlay peer graph. |
 
 Mutations observed:
 
@@ -36,7 +36,9 @@ The generated TL codec later established that the projection had invented
 `4 * signer_count + 4` bytes of vector/element framing.  The authoritative node
 and lite sizes are 2,636 / 51,836 / 78,896 / 157,616 / 246,176 / 984,176 bytes
 at 1 / 21 / 32 / 64 / 100 / 400 signers.  The persisted BOC and its frozen
-envelope did not move.
+envelope did not move.  These numbers are the generated-code measurements in
+`test/pq-native/block-signature-carrier-measurements.tsv`, consumed by
+`block-signature-carrier-measure` and `block-signature-carrier-routes`.
 
 ## Section 4: canonical C++ and Rust `#13` codec
 
@@ -93,9 +95,14 @@ Commits:
 - `1347c91435908902296e61b3a76470723baba2c9` — bidirectional classical-carrier inventory and removal of the dead, misleading disk-manager session helper.
 - `1897d48329ca80d21d11f0005c7b4684a1aca50b` — admission-path carrier markers classified by their actual classical-only or PQ-reachable branches.
 - `fe0896df8c8604ca6f4572e3f284bb0b0a7105e6` — session-options hashing moved below consensus to preserve link boundaries.
+- `8c3981f63d7791b7203fceb7311ceb5d17ee8714` — governing header `global_id` checked against ConfigParam 19 at both proof-context entry points.
+- `bf3f7a912941fd64f6fc72a63cc6c3a67f9dd339` — manager session-input assembly made directly testable, with a real serialized-state accessor gate.
 
 The bidirectional classical-carrier inventory contains 50 rows covering 44
-Git-tracked paths, 85 distinct marker entries and 279 source sites.  Its earlier
+Git-tracked paths, 85 distinct marker entries and 279 source sites.  These
+counts are produced by `scripts/check-classical-carrier-sites.py` from
+`test/pq-native/classical-carrier-sites.tsv`; at this head the checker reports
+`entries=85 sites=279`.  Its earlier
 408-site figure included 130 occurrences in eight untracked
 `tl/generate/auto/tl/*` build outputs.  Those derived copies are now excluded;
 their two authoritative tracked schema inputs remain inventoried.
@@ -120,6 +127,12 @@ Mutations observed:
   `PQ_BLOCK_SIGNATURE_UNEXPECTED_ACCEPT case=invalid-surplus-signature expected=pq signatures: invalid signature`.
 - Allowing a legacy cell carrier under a PQ set produced
   `PQ_BLOCK_SIGNATURE_UNEXPECTED_ACCEPT case=cell-ordinary-under-pq-set expected=unsupported carrier for post-quantum validator set`.
+- Bypassing the manager's frozen input assembly produced
+  `MANAGER_SESSION_ASSEMBLY_FROZEN_VECTOR_MISMATCH`.
+- Bypassing the serialized-state `global_id` accessor produced
+  `SHARD_STATE_GLOBAL_ID_MISMATCH header=-17 accessor=0 expected=-17`.
+- Removing one manager group path from the assembly source contract produced
+  `VALIDATOR_SESSION_ASSEMBLY_SOURCE_FAILURE: manager global_id wiring changed count=2 expected=3`.
 
 The Simplex end-to-end and vote-journal tests coexist with the new formula but do
 not exercise it: their bus session ID is a fixture constant.
@@ -136,7 +149,7 @@ Commits:
 |---|---|---|---|
 | `n5-pq-node-tl-checked` | `pq-signature-tl-vectors`, `test-pq-network-parser-resource` | Generated node/lite TL round trips preserve authority fields and structural rejects happen before crypto; compressed-V2 rejects signatures before decompression. | Cryptographic finality or transport delivery. |
 | `n5-pq-node-carrier-capacity` | `pq-node-finality-carrier-capacity` | Complete 21/100/400 signer finality broadcasts match recorded sizes, pass the exact production Plumtree admission predicate, and reach the checked receiver parser. | A live overlay peer graph, FEC propagation, block acceptance, or throughput. |
-| `n5-pq-lite-carrier-capacity` | `pq-lite-forward-proof-carrier-capacity` | Complete 21/100/400 signer lite answer fixtures match recorded sizes, pass the exact ADNL external framed-TCP send/receive predicates, and reach the checked lite parser. | A live encrypted TCP actor pair or trusted-chain advancement. |
+| `n5-pq-lite-carrier-capacity` | `pq-lite-forward-proof-carrier-capacity` | Complete 21/100/400 signer lite answer fixtures match recorded sizes, pass the exact ADNL external framed-TCP send/receive predicates, and reach the checked lite parser. | This capacity-only gate does not run a live encrypted TCP actor pair or advance a trusted chain; section 10's forward-proof gate supplies those two later claims. Neither gate proves public-network deployment, loss behavior, latency, or throughput. |
 
 The design's RLDP wording does not match this tree: production lite queries use
 `AdnlExtClient`/`AdnlExtServer` over framed TCP.  The gate follows that actual
@@ -207,6 +220,15 @@ Commits:
 - `30b68d257b4b69a030b4ea2eaa4b6f4e740467aa` — remote pending evidence charged by its exact received payload bytes without pre-admission reserialization.
 - `1175bc561` — transient pending finality failures retain evidence for bounded delayed retries; permanent coordinate mismatches fail immediately.
 - `b37e5c7c1` — pending finality retention is bounded by a 60-second admission deadline with exponential backoff and independent expiry.
+- `ccbd2e59a0096957c3dd280cda9acd2a3637a5a1` — retry deadline and expiry evidence recorded in the status gate.
+- `937be43d5fc5b9ef3d15a444c5b4fb665b5f86f2` — initial per-validator capacity reservation.
+- `48127da2a27e126d983ba25886919da0cedd2e57` — public and committee evidence separated into disjoint byte pools.
+- `0ba0dcd1e928247dc31dd216c6fbdc5bfe1fa330` — validator-authority classification memoized against trusted state.
+- `65452101e667c97d1ecd42cd924bbeb3d1e3787d` — claimed hashes removed from the computation key and catchain coordinates bounded cheaply.
+- `be7a83ba2fd18a9c1429c30afccea7cf22cc1a90` — authority memo capped globally with an eight-entry LRU.
+- `89e9170976ad2b42c9b30e9a5dc121ce0b2c1f54` — sender accounting made per block and pool sizes derived from the measured carrier.
+- `6206f5401def4aface646789706b664ff45e5672` — the same memoized trusted sets supplied to classical verification.
+- `6bfe0a581b5d32b7ee57990543b6d47850264f9e` — production rejection logs changed from unstable integers to named reasons.
 
 | Design gate | Registered subject test | Proves | Does not prove |
 |---|---|---|---|
@@ -218,6 +240,17 @@ Commits:
 | JSON-RPC unsupported-carrier behavior | `test-json-rpc-parse` | A PQ lite signature set produces error `-32603` with an explicit unsupported-carrier message, while genuine absence remains the only path to an empty classical list. | Rendering PQ signatures in the public JSON model. |
 | Unverified finality admission | `test-pending-finality-cache`, `finality-evidence-admission-source` | Public and fast-sync Plumtree IDs commit to the block and canonical signature set; authenticated sender identity and the exact received boxed-TL byte count reach the manager without reserialization; the manager rejects missing accounting and classifies a remote sender against the exact current/next validator set named by the evidence. An implausible claimed catchain sequence or a shard absent from the exact trusted shard configuration is rejected before set computation. A real split-shard fixture confirms that `get_shard_cc_seqno` alone would let a nonexistent descendant inherit its containing shard's coordinate, while the exact-shard check blocks it. The trusted-state-scoped memo keys computation by `(shard, cc_seqno)`, compares a claimed set hash with the locally computed hash stored inside the entry, and supplies the same computed sets to classical signature verification. Cycling 64 different claimed hash/sequence triples therefore performs only the two current/next computations. Its global eight-entry LRU also bounds the memo while real shard coordinates are cycled beyond the cap; current/next coordinates per shard explain the honest hit rate, not the memory bound. The 400-validator shard-set benchmark measured 390 us and 524,800 copied PQ-key bytes per set on the development host. One sender gets one unverified candidate per block, each capped at the measured 984,260-byte maximum boxed carrier; one sender can therefore retain finality for multiple blocks concurrently. Non-validator public-overlay peers share exactly 16 maximum carriers (15,748,160 bytes); a disjoint 393,704,000-byte pool holds exactly one maximum carrier for each of 400 committee authorities, so rounded MiB shares cannot admit a 401st authority and filling the public pool cannot displace valid validator evidence. The 4096-byte minimum charge and the two pools cap retained unverified finality evidence at exactly 409,452,160 bytes (about 390.48 MiB). Retry/expiry APIs require callers to pass both `now` and `expires_at` explicitly, so omitting the clock is a compile error. | A live Plumtree peer graph or the actor-scheduled `ValidatorManagerImpl` coroutine. The behavioural gate drives the production transport-ID helper, authority memo/classifier, ingress decision, exact-shard/coordinate rule and pending-store implementation; the source gate pins their composition in the manager and transport ingress, including the memo-fed classical verifier. It cannot distinguish a legitimately local manager call from an upstream remote path that incorrectly omits its authenticated peer; that handoff remains source-pinned. Classification uses only a validator set whose hash and catchain sequence match the evidence; evidence naming unavailable historical coordinates uses the public pool until its trusted context is available. The validator-reserved pool does not promise two independent full-committee reservations during a validator-set rotation. Locally originated evidence has no received payload and uses reserved capacity charged by intrinsic signature bytes. |
 | Pending-finality transient recovery | `test-pending-finality-cache`, `pending-finality-retry-policy-source` | `notready`/`timeout` retains evidence for exponential-backoff retries within a 60-second wall-clock deadline, a later success consumes it, the independent expiry timer frees its sender slot even without another event, and permanent protocol errors discard immediately; production verification, proof creation and apply failures use this decision. The three same-object validator-coordinate mismatches are created as `protoviolation`. | Actor timing and successful delayed callback delivery under a stopped/restarted manager. The behavioural gate drives the production state transition and deterministic deadline/backoff arithmetic; the source gate pins the manager's scheduling composition and error classifications. |
+
+Number provenance for the admission rows is explicit in the tree: 984,260 bytes
+is the measured 400-signer boxed finality carrier in
+`test/pq-native/block-signature-carrier-routes.tsv`; the 16-carrier public pool,
+400-authority reserved pool, 4096-byte minimum charge, eight-entry memo cap and
+derived 15,748,160 / 393,704,000 / 409,452,160-byte ceilings are production
+constants asserted by `test-pending-finality-cache`; the 60-second deadline is
+tied in `validator/finality-cache-policy.h` to the manager's existing
+60-second block-data wait; and 390 us plus 524,800 copied PQ-key bytes is the
+20-run, 400-validator development-host measurement recorded beside the
+production authority-memo lookup in `validator/manager.cpp`.
 
 The post-quantum refusal inside the detached classical-only
 `check_finality_signatures` helper is defence-in-depth.  Its sole caller already
@@ -387,7 +420,10 @@ retain the certificate, stop retrying it, and stop production.
 
 ## Registered gaps and explicit non-claims
 
-The following are gaps, not green claims.
+The three remaining closure gaps are item 1, the restart-cut part of item 5,
+and item 7.  The other entries below record resolved rows, deliberate naming
+choices, harness boundaries, evidence-retention limits, or separately scoped
+API/tooling debt; none is silently promoted to a green claim.
 
 1. **Manager actor integration is not exercised.**
    `validator/manager.cpp` now passes a named
@@ -401,6 +437,10 @@ The following are gaps, not green claims.
    harness still assigns a constant `bus->session_id` and is insensitive to this
    wiring.  Thus the pure production assembly is covered; actor initialization and
    group lifecycle remain an explicit pre-Genesis integration gap.
+   **Closure condition and cost:** close it with a zerostate-driven
+   `ValidatorManagerImpl` actor-scheduler harness that observes the created group
+   and session ID; the cost is a new validator-engine scheduler fixture, not
+   another pure derivation test.
 
 2. **Three API/tooling consumers remain incomplete.**
 
@@ -449,6 +489,11 @@ The following are gaps, not green claims.
    that this tree currently lacks.  A mock-only version would not establish the
    required crash property.  These are missing scenarios, not a claim that the
    properties are intrinsically untestable.
+   **Closure condition and cost:** close all five with deterministic production
+   failpoints and restart orchestration across journal, `#13`, BlockProof,
+   finalized marker and DB/archive reconstruction; four need production
+   failpoints, while the reconstruction cut also needs the manager persistence
+   harness.
 
 6. **Mutation transcripts are not repository artifacts.**
    This file records the exact failure lines retained in the implementation/review
@@ -466,6 +511,10 @@ The following are gaps, not green claims.
    for the accepted proof/handle transitions.  The manager interface is broad and
    this tree has no focused fake implementing that orchestration.  This is missing
    integration coverage; the direct matrix is not production-consumer coverage.
+   **Closure condition and cost:** close it with an actor-scheduler fixture whose
+   `ValidatorManager` serves block handles and governing state to a matching
+   proof/state update and exposes the persistence sinks; the cost is a broad
+   manager/DB test fixture rather than a local verifier unit test.
 
    TopBlockDescr no longer shares this gap at its decisive boundary: the focused
    fixture supplies two masterchain-state objects with configuration and shard
