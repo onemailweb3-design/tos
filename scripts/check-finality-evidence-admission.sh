@@ -46,11 +46,17 @@ require_marker validator/manager.cpp \
   'if (!admission.admitted()) {' \
   'manager no longer stops after the pending store rejects evidence'
 require_marker validator/manager.cpp \
-  'pending_finality_sender_is_validator(ingress.sender, set->export_vector())' \
-  'manager no longer classifies the authenticated sender against the governing validator set'
+  'pending_finality_authority_memo_.contains(authority_key, ingress.sender.peer' \
+  'manager no longer memoizes authenticated-sender classification by validator coordinates'
 require_marker validator/manager.cpp \
-  'set->get_validator_set_hash() == finality.sig_set->get_validator_set_hash()' \
+  'set->get_validator_set_hash() != authority_key.validator_set_hash' \
   'manager grants reserved capacity without matching the evidence validator-set hash'
+require_marker validator/manager.cpp \
+  'pending_finality_authority_memo_.clear()' \
+  'manager no longer invalidates authority classifications when trusted state changes'
+require_marker validator/manager.cpp \
+  '*pending_finality_authority_memo_state_ != last_masterchain_block_id_' \
+  'manager no longer keys authority-memo lifetime to the trusted masterchain state'
 require_marker validator/manager.cpp \
   'ingress.accounted_bytes, capacity, signatures_verified' \
   'manager no longer passes the authority capacity class into the pending store'

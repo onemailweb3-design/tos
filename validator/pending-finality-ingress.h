@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstddef>
+#include <deque>
 #include <optional>
 #include <vector>
 
@@ -87,5 +88,68 @@ inline bool pending_finality_sender_is_validator(const PendingBlockFinalitySende
   }
   return false;
 }
+
+struct PendingFinalityAuthorityKey {
+  ShardIdFull shard;
+  CatchainSeqno catchain_seqno;
+  td::uint32 validator_set_hash;
+
+  bool operator==(const PendingFinalityAuthorityKey &other) const {
+    return shard == other.shard && catchain_seqno == other.catchain_seqno &&
+           validator_set_hash == other.validator_set_hash;
+  }
+};
+
+// Repeated unverified broadcasts normally name the same validator coordinates.
+// Cache the locally derived transport roots so a flood pays the validator-set
+// computation once per coordinate triple instead of once per arrival. The
+// manager clears this memo when its trusted masterchain state changes, so a
+// cached negative result cannot survive the state update that makes a set known.
+class PendingFinalityAuthorityMemo {
+ public:
+  template <class Loader>
+  bool contains(const PendingFinalityAuthorityKey &key, const PublicKeyHash &peer, Loader &&loader) {
+    for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+      if (it->key == key) {
+        auto roots = std::move(it->roots);
+        entries_.erase(it);
+        entries_.push_back({key, std::move(roots)});
+        return contains_peer(entries_.back().roots, peer);
+      }
+    }
+    auto roots = loader();
+    if (entries_.size() == max_entries) {
+      entries_.pop_front();
+    }
+    entries_.push_back({key, std::move(roots)});
+    return contains_peer(entries_.back().roots, peer);
+  }
+
+  void clear() {
+    entries_.clear();
+  }
+
+  std::size_t size() const {
+    return entries_.size();
+  }
+
+ private:
+  struct Entry {
+    PendingFinalityAuthorityKey key;
+    std::vector<PublicKeyHash> roots;
+  };
+
+  static bool contains_peer(const std::vector<PublicKeyHash> &roots, const PublicKeyHash &peer) {
+    for (const auto &root : roots) {
+      if (root == peer) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static constexpr std::size_t max_entries = 2;
+  std::deque<Entry> entries_;
+};
 
 }  // namespace tos::validator

@@ -43,6 +43,7 @@ struct PendingFinalityFailureResult {
 inline constexpr double pending_finality_retention_seconds = 60.0;
 inline constexpr double pending_finality_initial_retry_seconds = 0.5;
 inline constexpr double pending_finality_max_retry_seconds = 8.0;
+inline constexpr double pending_finality_no_expiry = std::numeric_limits<double>::max();
 
 constexpr PendingFinalityFailureAction pending_finality_failure_action(int error_code, double now,
                                                                        double expires_at) {
@@ -136,7 +137,7 @@ class PendingFinalityCandidates {
     PendingFinalityCapacity capacity;
     bool verified;
     bool is_final;
-    double expires_at{std::numeric_limits<double>::max()};
+    double expires_at{pending_finality_no_expiry};
     double retry_not_before{0};
     double retry_delay{pending_finality_initial_retry_seconds};
   };
@@ -210,7 +211,7 @@ class PendingFinalityCandidates {
     return result;
   }
 
-  const Entry *begin_processing(double now = 0) {
+  const Entry *begin_processing(double now) {
     erase_expired(now);
     if (processing_ || entries_.empty()) {
       return nullptr;
@@ -222,7 +223,7 @@ class PendingFinalityCandidates {
     return &entries_.front();
   }
 
-  PendingFinalityFailureResult resolve_front_failure(int error_code, double now = 0) {
+  PendingFinalityFailureResult resolve_front_failure(int error_code, double now) {
     if (!processing_ || entries_.empty()) {
       return {};
     }
@@ -298,8 +299,7 @@ class PendingFinalityStore {
 
   PendingFinalityAdmissionResult admit(const BlockKey &block, Sender sender, Evidence evidence,
                                        std::size_t serialized_bytes, PendingFinalityCapacity capacity, bool verified,
-                                       bool is_final,
-                                       double expires_at = std::numeric_limits<double>::max()) {
+                                       bool is_final, double expires_at) {
     auto it = entries_.find(block);
     auto action = it == entries_.end() ? PendingFinalityAdmission::Replace
                                        : it->second.admission(verified, is_final);

@@ -229,6 +229,8 @@ class ValidatorManagerImpl : public ValidatorManager {
   td::LRUCache<BlockIdExt, td::Unit> cached_checked_shard_block_descriptions_{/* max_size = */ 1024};
   PendingFinalityStore<BlockIdExt, PendingBlockFinalitySender, PendingBlockFinalityCandidate>
       pending_block_finality_;
+  td::optional<BlockIdExt> pending_finality_authority_memo_state_;
+  PendingFinalityAuthorityMemo pending_finality_authority_memo_;
 
   td::actor::ActorOwn<ExtMessagePool> ext_message_pool_;
   td::actor::ActorOwn<AppliedExtMessageCleanupActor> applied_ext_message_cleanup_actor_;
