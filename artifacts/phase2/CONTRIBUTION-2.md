@@ -66,19 +66,29 @@ condition. It extends the chain and nothing more.
 ## Publication
 
 [Release](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-2),
-server-published at **2026-09-22T12:00:46Z**; the API response is retained in
+server-published at **2026-09-22T12:06:00Z**; the API response is retained in
 [contribution-2-publication-receipt.json](contribution-2-publication-receipt.json).
 The published attachment was downloaded again afterwards and compared byte for
 byte against the local archive; they are identical, and its SHA-256 is
 `b7ccbe20ec1d6e7a07a8f89b3ebc3ada636718cc52ec86304f9a572586071413`.
 
-A first release of this tag, made a minute earlier at 2026-09-22T11:59:50Z,
-placed the tag on the default branch instead of the contribution commit, which
-is not where a ceremony tag belongs. It was deleted with its tag and recreated
-against `b12c646143f5181b354e38c361d92ef30b9064c7`. The archive bytes and
-digest are unchanged; only the publication timestamp moved. The deleted tag
-was public for about a minute, and deleting it does not remove it from anyone
-who fetched in that window.
+This release was published three times, and the record says so because the
+alternative is a receipt whose timestamp nobody can account for.
+
+1. **11:59:50Z** — created with the tag on the default branch rather than on
+   the contribution commit, which is not where a ceremony tag belongs. Deleted
+   with its tag.
+2. **12:00:46Z** — recreated against `b12c646143f5181b354e38c361d92ef30b9064c7`.
+   The published attachment was downloaded and verified. The operator then
+   deleted this release by accident while clearing the first one.
+3. **12:06:00Z** — recreated again, same tag, same commit, same archive.
+
+The archive's bytes and SHA-256 are identical across all three; only the
+publication and asset-upload timestamps moved, and the current receipt records
+the current ones. Deleting a release does not recall copies already fetched,
+and the tag was public throughout. No ceremony artifact, attestation or
+signature was touched by any of this: it is packaging history, not chain
+history.
 
 ## What this contribution does not establish
 
