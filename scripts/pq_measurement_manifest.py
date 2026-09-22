@@ -25,6 +25,7 @@ REQUIRED_CORRECTNESS_QUESTION_IDS = ("merkle-base-state-mismatch",)
 REQUIRED_MEASUREMENT_GAP_IDS = (
     "release-scale-matrix-unmeasured",
     "carrier-scale-transport-unmeasured",
+    "sustained-finality-distribution-unmeasured",
 )
 
 REQUIRED_SCALES = (21, 32, 64, 100)

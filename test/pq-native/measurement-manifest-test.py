@@ -233,6 +233,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                 "required_gap_ids": [
                     "release-scale-matrix-unmeasured",
                     "carrier-scale-transport-unmeasured",
+                    "sustained-finality-distribution-unmeasured",
                 ],
                 "gaps": {
                     "release-scale-matrix-unmeasured": {
@@ -244,6 +245,13 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                         "evidence_results": [str(scale_result)],
                     },
                     "carrier-scale-transport-unmeasured": {
+                        "observation": "fixture observation",
+                        "reason": "fixture reason",
+                        "closure_condition": "fixture closure condition",
+                        "status": "RESOLVED",
+                        "resolved_by": "fixture run evidence",
+                    },
+                    "sustained-finality-distribution-unmeasured": {
                         "observation": "fixture observation",
                         "reason": "fixture reason",
                         "closure_condition": "fixture closure condition",
@@ -295,7 +303,8 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
         except module.ManifestError as exc:
             expected = (
                 "release-grade measurement refuses open measurement gaps: "
-                "carrier-scale-transport-unmeasured, release-scale-matrix-unmeasured"
+                "carrier-scale-transport-unmeasured, release-scale-matrix-unmeasured, "
+                "sustained-finality-distribution-unmeasured"
             )
             if expected not in str(exc):
                 fail(f"open measurement gaps reported the wrong release refusal: {exc}")

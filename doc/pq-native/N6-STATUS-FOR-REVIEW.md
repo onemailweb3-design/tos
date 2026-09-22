@@ -229,7 +229,7 @@ has been produced on this branch.
 `N6-OPEN-MEASUREMENT-GAPS.json` is a fail-closed release registry parallel to
 the correctness-question registry. Its required ids cannot be removed by
 deleting a gap, and a resolved entry must retain `resolved_by` evidence.
-Release mode currently refuses both registered gaps by name:
+Release mode currently refuses all three registered gaps by name:
 
 - `release-scale-matrix-unmeasured`: the required 21/32/64/100 matrix remains
   unchanged and unmeasured. This 6-core KVM guest has 11.68 GiB RAM; 21
@@ -239,6 +239,17 @@ Release mode currently refuses both registered gaps by name:
 - `carrier-scale-transport-unmeasured`: closure requires a live overlay run at
   a signer count producing a carrier near the 984260-byte ceiling, retaining
   separate payload, queueing, propagation and verification evidence.
+- `sustained-finality-distribution-unmeasured`: the scale sweep records one
+  cold-start time-to-first sequence per process set. Repeating that run yields
+  more cold starts, not the steady-state persisted-finality distribution that
+  `max_p99_persisted_finality_ms` names. Closure requires production trace
+  points that correlate each FinalCert through signatures, BlockProof and the
+  finalized-marker persistence sinks, a declared warmup, and at least 100
+  monotonic per-event samples from one sustained run before reporting p99.
+  At the 400 ms target block interval, 100 post-warmup finalities require at
+  least 40 seconds of observation; setup, warmup, exact-commit release topology
+  and a checker that rejects missing or under-sampled stages are additional
+  costs. Repeated cold-start sweep samples do not close this gap.
 
 The owner-supplied deployment link is 100 Mbps symmetric. A maximum carrier is
 7874080 bits: 78.7 ms at line rate and 157.5 ms after the accepted 0.50 network
@@ -261,7 +272,7 @@ Mutation evidence:
 | Delete an open gap but retain its required id | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: open measurement gaps reported the wrong release refusal: measurement-gap registry required ids and entries differ` |
 | Close the release-scale gap with a result carrying `local_colocation_diagnostic_override=true` | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: co-located release-scale evidence reported the wrong refusal: release-scale-matrix-unmeasured cannot be resolved by local_colocation_diagnostic_override evidence` |
 | Cite a result with the override false but diagnostic eligibility | `n6-manifest-completeness` | `N6_MANIFEST_FAILURE: diagnostic release-scale evidence reported the wrong refusal: release-scale-matrix-unmeasured evidence is not release_evidence_eligible` |
-| Mark both gaps resolved with eligible full-scale evidence | `n6-manifest-completeness` | The measurement-gap refusal disappears and the independent next refusal is `no N5 closure artifact was supplied for that exact commit` |
+| Mark all three gaps resolved with eligible evidence | `n6-manifest-completeness` | The measurement-gap refusal disappears and the independent next refusal is `no N5 closure artifact was supplied for that exact commit` |
 
 ## N6.5 scale-sweep instrument
 
@@ -282,9 +293,10 @@ release scales, the full section 8.1 cliff matrix, and the launch-default run
 remain explicitly unexecuted and release-ineligible.
 
 The runner accepts larger remote scale lists without changing its result
-contract. Its fast contract gate drives two distinct requested values through
-the actual boot-count argument and checks both reported counts. Fixing the
-boot argument to the first scale makes the second point fail with
+contract. The registered `n6-scale-sweep-cardinality` source guard drives two
+distinct requested values through the actual boot-count argument and checks
+both requested and reported counts. Fixing the boot argument to the first
+scale makes the second point fail with
 `N6_SCALE_SWEEP_FAILURE: requested scale 7 booted 4 validators`; this prevents
 a list-shaped driver from silently measuring one cluster repeatedly.
 The milestone analyzer also requires strict proposal < notarization < FinalCert
@@ -319,5 +331,6 @@ on the second point with `requested scale 7 booted 4 validators`.
 
 This tier proves only minimum-BFT protocol progress, message flow and carrier
 transport. It makes no launch-sizing, carrier-ceiling, network-capacity or
-consensus-correctness claim, and it does not resolve either open measurement
-gap.
+consensus-correctness claim, and it does not resolve any of the three open
+measurement gaps. In particular, its three milestones describe one cold-start
+sequence and are not a sustained-operation latency distribution.

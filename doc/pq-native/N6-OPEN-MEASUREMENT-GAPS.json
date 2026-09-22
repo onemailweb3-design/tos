@@ -2,7 +2,8 @@
   "schema_version": 1,
   "required_gap_ids": [
     "release-scale-matrix-unmeasured",
-    "carrier-scale-transport-unmeasured"
+    "carrier-scale-transport-unmeasured",
+    "sustained-finality-distribution-unmeasured"
   ],
   "gaps": {
     "release-scale-matrix-unmeasured": {
@@ -15,6 +16,12 @@
       "observation": "No cluster run has transported a finality carrier near the 984260-byte 400-signer ceiling over the reviewed 100 Mbps symmetric deployment link.",
       "reason": "The 4-validator functional tier carries only an approximately ten-kilobyte certificate and therefore cannot exercise the carrier, admission-pool, fan-out or network-capacity ceilings.",
       "closure_condition": "Run the live overlay scenario at a signer count that produces a carrier near the 984260-byte ceiling on the reviewed deployment network and retain separate payload, queueing, propagation and verification evidence.",
+      "status": "OPEN"
+    },
+    "sustained-finality-distribution-unmeasured": {
+      "observation": "No N6 cluster run reports a sustained-operation distribution of persisted-finality latency; the scale sweep records one first proposal/notarization/FinalCert sequence per cold start.",
+      "reason": "Repeated cold starts produce repeated first-event observations, not many finality-latency samples inside steady-state operation, so they cannot establish the p99 quantity used by max_p99_persisted_finality_ms.",
+      "closure_condition": "After a declared warmup, observe and correlate many production finality events through persistence during one sustained run, retain the per-event monotonic latency samples, and report a distribution with enough samples to support its claimed percentile rather than a first-event timestamp.",
       "status": "OPEN"
     }
   }

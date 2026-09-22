@@ -1257,6 +1257,11 @@ add_test(NAME n6-cluster-runner
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-cluster-runner-test.py)
 set_tests_properties(n6-cluster-runner PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/test/tostester/src")
+add_test(NAME n6-scale-sweep-cardinality
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-scale-sweep-cardinality-test.py)
+set_tests_properties(n6-scale-sweep-cardinality PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/test/tostester/src"
+  LABELS "source-guard")
 add_test(NAME n6-live-finality-overlay
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run-n6-cluster-gate.sh
           ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} live-finality 29400)
