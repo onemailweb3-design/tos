@@ -52,14 +52,21 @@ def main() -> int:
         "uv run python test/integration/test_basic.py" in text,
         "four-validator PQ chain regression is absent",
     )
+    zero_stats = text.find("ccache --zero-stats")
+    native_build = text.find("cmake --build build --parallel 4 --target")
+    show_stats = text.find("ccache --show-stats")
+    require(
+        -1 < zero_stats < native_build < show_stats,
+        "native cache statistics do not bracket the fixture build",
+    )
     require("continue-on-error" not in text, "workflow permits a guarded step to fail")
 
     target_command = re.search(
-        r"cmake --build build --parallel 4 --target\s+(?P<targets>(?:\s*[\w-]+\s*)+)",
+        r"cmake --build build --parallel 4 --target\s+\\?\s*(?P<targets>(?:\s*[\w-]+\s*\\?\s*)+)",
         text,
     )
     require(target_command is not None, "minimal native target command is missing")
-    observed_targets = set(target_command.group("targets").split())
+    observed_targets = set(target_command.group("targets").replace("\\", "").split())
     require(
         REQUIRED_NATIVE_TARGETS <= observed_targets,
         f"native fixture targets are missing: {sorted(REQUIRED_NATIVE_TARGETS - observed_targets)}",

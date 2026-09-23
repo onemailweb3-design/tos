@@ -56,11 +56,13 @@ jobs:
           -DTOS_PRODUCTION_BUILD=ON
 
       - name: Build only the Python and PQ-chain fixture dependencies
-        run: >-
-          cmake --build build --parallel 4 --target
-          gen_fif create-state toslibjson
-          generate-random-id tos-pq-consensus-key
-          dht-server validator-engine-console validator-engine
+        run: |
+          ccache --zero-stats
+          cmake --build build --parallel 4 --target \
+            gen_fif create-state toslibjson \
+            generate-random-id tos-pq-consensus-key \
+            dht-server validator-engine-console validator-engine
+          ccache --show-stats
 
       - name: Prepare generated Python API and dependencies
         run: |
