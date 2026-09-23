@@ -23,14 +23,14 @@ Registered gates:
 - `n6-instrumentation-byte-equivalence`
 
 Branch CI also configures, but does not build, the repository and runs the
-complete `source-guard` label. The inventory checker requires the exact 21
+complete `source-guard` label. The inventory checker requires the exact 22
 guard ids before CTest runs; `--no-tests=error` remains as the independent
 empty-selection check. Labels live beside each test registration. This now
 includes `n6-cluster-runner`, `pq-finality-boundary-source`, and
 `consensus-no-fallback`, which are configure-only checks that previously ran
 only as part of the main-only full CTest workflow. Removing one label makes
 the inventory fail naming the missing guard, rather than allowing the other
-20 to hide its absence.
+21 to hide its absence.
 
 A separate branch workflow builds only the native artifacts required by the
 Python fixtures, runs the complete Python suite, and boots
@@ -114,7 +114,8 @@ surface instead of treating the two base Fift files as orphaned. The inventory
 includes those two files, the `validator-elect-req>B` library word,
 `test-smartcont.cpp`, two validator-proposal Fift tests, the nominator-pool and
 validator-election Python flows, both pool operator scripts, and tosctl's
-election daemon and interactive bid command. These consumers make deleting the
+election daemon, interactive bid command, and config-wallet pool command.
+These consumers make deleting the
 base tools in isolation an invalid retirement.
 
 Pooled staking remains in the launch set through `single-nominator-pool`. Its

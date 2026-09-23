@@ -31,6 +31,7 @@ REQUIRED_SOURCE_GUARDS = frozenset(
         "pq-launch-cap-source",
         "quic-ctest-isolation-source",
         "test-quorum-static-grep",
+        "tosctl-pq-stake-builder-source",
         "validator-session-assembly-source",
     }
 )

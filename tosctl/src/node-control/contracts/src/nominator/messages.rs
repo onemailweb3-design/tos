@@ -6,7 +6,9 @@
  *
  * This software is provided "AS IS", WITHOUT WARRANTY OF ANY KIND.
  */
-use chain_block::{BuilderData, Cell, Coins, IBitstring, MsgAddressInt, Serializable};
+use chain_block::{BuilderData, Cell, Coins, IBitstring, MsgAddressInt, Serializable, pq_bytes};
+
+const MLDSA44_SIGNATURE_BYTES: usize = 2420;
 
 /// Opcodes for single-nominator contract messages
 pub mod opcodes {
@@ -39,7 +41,7 @@ pub struct NewStakeParams<'a> {
     pub max_factor: u32,
     /// ADNL address (256 bits)
     pub adnl_addr: &'a [u8],
-    /// Signature of the stake params (512 bits)
+    /// ML-DSA-44 signature of the stake authorization
     pub signature: &'a [u8],
 }
 
@@ -109,9 +111,15 @@ pub fn upgrade(query_id: u64, new_code: Cell) -> anyhow::Result<Cell> {
 /// Sends stake to the elector for the next validation cycle.
 /// Must be sent from validator address.
 pub fn new_stake(params: &NewStakeParams) -> anyhow::Result<Cell> {
+    if params.signature.len() != MLDSA44_SIGNATURE_BYTES {
+        anyhow::bail!(
+            "a stake authorization is signed with ML-DSA-44, which is {MLDSA44_SIGNATURE_BYTES} \
+             bytes, and this signature is {}",
+            params.signature.len()
+        );
+    }
     // Build the signature cell (stored as reference)
-    let signature_cell =
-        BuilderData::with_raw(params.signature, params.signature.len() * 8)?.into_cell()?;
+    let signature_cell = pq_bytes::pack_pq_bytes(params.signature, MLDSA44_SIGNATURE_BYTES)?;
     let mut builder = BuilderData::new();
     builder
         .append_u32(opcodes::NEW_STAKE)?
@@ -223,6 +231,7 @@ mod tests {
 
     #[test]
     fn test_build_new_stake_message() {
+        let signature = vec![0x33u8; MLDSA44_SIGNATURE_BYTES];
         let params = NewStakeParams {
             query_id: 33333u64,
             stake_amount: 10_000_000_000_000u64,
@@ -230,7 +239,7 @@ mod tests {
             stake_at: 1700000000u32,
             max_factor: 65536u32,
             adnl_addr: &[0x22u8; 32],
-            signature: &[0x33u8; 64],
+            signature: &signature,
         };
 
         let cell = new_stake(&params).unwrap();
@@ -258,9 +267,28 @@ mod tests {
         assert_eq!(adnl, params.adnl_addr.to_vec());
 
         let sig_cell = slice.checked_drain_reference().unwrap();
-        let mut sig_slice = SliceData::load_cell(sig_cell).unwrap();
-        let sig = sig_slice.get_next_bits(512).unwrap();
-        assert_eq!(sig, params.signature.to_vec());
+        assert_eq!(
+            pq_bytes::unpack_pq_bytes(&sig_cell, MLDSA44_SIGNATURE_BYTES).unwrap(),
+            params.signature
+        );
+    }
+
+    #[test]
+    fn test_new_stake_refuses_classical_signature_before_building() {
+        let params = NewStakeParams {
+            query_id: 1,
+            stake_amount: 1,
+            validator_pubkey: &[0x11; 32],
+            stake_at: 1,
+            max_factor: 65536,
+            adnl_addr: &[0x22; 32],
+            signature: &[0x33; 64],
+        };
+
+        let error = new_stake(&params).unwrap_err().to_string();
+        assert!(error.contains("ML-DSA-44"), "wrong refusal: {error}");
+        assert!(error.contains("2420"), "wrong refusal: {error}");
+        assert!(error.contains("64"), "wrong refusal: {error}");
     }
 
     #[test]

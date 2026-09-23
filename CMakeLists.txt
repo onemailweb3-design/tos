@@ -1275,6 +1275,10 @@ set_tests_properties(branch-chain-python-ci-source PROPERTIES LABELS "source-gua
 add_test(NAME n6-diagnostic-observations
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-n6-diagnostic-observations.py)
 set_tests_properties(n6-diagnostic-observations PROPERTIES LABELS "source-guard")
+add_test(NAME tosctl-pq-stake-builder-source
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-tosctl-pq-stake-builder.py
+          ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(tosctl-pq-stake-builder-source PROPERTIES LABELS "source-guard")
 add_test(NAME n6-scale-sweep-cardinality
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-scale-sweep-cardinality-test.py)
 set_tests_properties(n6-scale-sweep-cardinality PROPERTIES
