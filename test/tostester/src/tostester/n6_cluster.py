@@ -330,20 +330,22 @@ def summarize_sustained_observation(
         raise RuntimeError(
             "N6_SUSTAINED_CONSENSUS_FAILURE: fewer than two masterchain intervals were observed"
         )
-    intervals = [
+    observation_intervals = [
         {
             "from_height": previous.height,
             "to_height": current.height,
-            "interval_ms": (current.observed_monotonic_ns - previous.observed_monotonic_ns)
+            "observation_interval_ms": (
+                current.observed_monotonic_ns - previous.observed_monotonic_ns
+            )
             / 1_000_000,
         }
         for previous, current in zip(observed, observed[1:], strict=False)
     ]
-    if any(item["to_height"] != item["from_height"] + 1 for item in intervals):
+    if any(item["to_height"] != item["from_height"] + 1 for item in observation_intervals):
         raise RuntimeError(
             "N6_SUSTAINED_CONSENSUS_FAILURE: sustained observation skipped a masterchain height"
         )
-    values = [item["interval_ms"] for item in intervals]
+    values = [item["observation_interval_ms"] for item in observation_intervals]
     slow_threshold_ms = config.target_block_rate_ms * config.slow_interval_factor
     return {
         "evidence_class": "COLOCATED_DIAGNOSTIC_ONLY",
@@ -352,7 +354,7 @@ def summarize_sustained_observation(
         "configured_seconds": config.seconds,
         "target_block_rate_ms": config.target_block_rate_ms,
         "slow_interval_factor": config.slow_interval_factor,
-        "slow_interval_threshold_ms": slow_threshold_ms,
+        "slow_observation_interval_threshold_ms": slow_threshold_ms,
         "start_height": start_height,
         "final_common_height": observed[-1].height,
         "masterchain_blocks_produced": observed[-1].height - start_height,
@@ -365,15 +367,19 @@ def summarize_sustained_observation(
             },
         },
         "per_node_final_height": per_node_final_height,
-        "intervals": intervals,
-        "interval_distribution_ms": {
+        "observation_intervals": observation_intervals,
+        "observation_interval_distribution_ms": {
             "count": len(values),
             "minimum": min(values),
             "p50": _nearest_rank(values, 0.50),
             "p95": _nearest_rank(values, 0.95),
             "maximum": max(values),
         },
-        "slow_intervals": [item for item in intervals if item["interval_ms"] > slow_threshold_ms],
+        "slow_observation_intervals": [
+            item
+            for item in observation_intervals
+            if item["observation_interval_ms"] > slow_threshold_ms
+        ],
         "scope": (
             "Co-located diagnostic stability only; block intervals are the times at which all "
             "nodes exposed an agreed block, not release-grade persisted-finality latency."

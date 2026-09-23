@@ -378,14 +378,17 @@ zerostate `BlockIdExt` supplied to every node by the common launch
 configuration. For every produced masterchain height from 1 through the final
 common height, the observer asks every node's own lite-server for the full
 block id and fails immediately if root or file hashes differ. The result
-retains the agreed id per height, every node's final height,
-the exact interval for every newly agreed height, min/p50/p95/max of those
-intervals, and every interval individually exceeding the stated threshold.
+retains the agreed id per height, every node's final height, the exact
+observer-detection interval for every newly agreed height, min/p50/p95/max of
+those observation intervals, and every observation interval individually
+exceeding the stated threshold. These are polling observations, not block
+generation timestamps; multiple already-produced heights can therefore yield
+a very short observed interval.
 Thus nodes at equal seqno on different chains cannot satisfy the mode, and a
 node that stops following remains visible in `per_node_final_height`.
 
 This is `COLOCATED_DIAGNOSTIC_ONLY` evidence with
-`release_evidence_eligible=false`. Its intervals measure when all colocated
+`release_evidence_eligible=false`. Its observation intervals measure when all colocated
 nodes expose the agreed block; they are not persisted-finality p99 and do not
 resolve the open Merkle correctness question. The registered
 `n6-cluster-runner` gate supplies both a positive same-block control and a

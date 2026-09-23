@@ -151,7 +151,7 @@ def check_sustained_summary() -> None:
         "agreement range does not reach the final observed height",
     )
     require(
-        summary["interval_distribution_ms"]
+        summary["observation_interval_distribution_ms"]
         == {
             "count": 2,
             "minimum": 400.0,
@@ -159,11 +159,12 @@ def check_sustained_summary() -> None:
             "p95": 1300.0,
             "maximum": 1300.0,
         },
-        "sustained interval distribution changed",
+        "sustained observation interval distribution changed",
     )
     require(
-        summary["slow_intervals"] == [{"from_height": 6, "to_height": 7, "interval_ms": 1300.0}],
-        "slow interval was not retained individually",
+        summary["slow_observation_intervals"]
+        == [{"from_height": 6, "to_height": 7, "observation_interval_ms": 1300.0}],
+        "slow observation interval was not retained individually",
     )
     require(
         summary["release_evidence_eligible"] is False,

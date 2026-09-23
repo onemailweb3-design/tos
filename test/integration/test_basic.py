@@ -16,6 +16,7 @@ from tostester.n6_cluster import (
     observe_sustained_consensus,
 )
 from tostester.network import FullNode, Network
+from tostester.pq_launch_limits import MAX_SHARD_COMMITTEE
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,8 +32,11 @@ def require(condition: bool, message: str) -> None:
 
 
 async def main(args: argparse.Namespace):
-    if not 4 <= args.validators <= 21:
-        raise ValueError("functional validator count must be in the enforced launch range 4..21")
+    if not 4 <= args.validators <= MAX_SHARD_COMMITTEE:
+        raise ValueError(
+            "functional validator count must be in the enforced launch range "
+            f"4..{MAX_SHARD_COMMITTEE}"
+        )
     if args.sustain_blocks < 2:
         raise ValueError("functional sustained observation must cover at least two blocks")
 
@@ -54,6 +58,8 @@ async def main(args: argparse.Namespace):
         dht = network.create_dht_node()
 
         network.config.shard_validators = args.validators
+        consensus = network.config.mc_consensus
+        require(consensus is not None, "functional Genesis does not enable Simplex consensus")
 
         nodes: list[FullNode] = []
         for index in range(args.validators):
@@ -103,8 +109,6 @@ async def main(args: argparse.Namespace):
             wallet_state.seqno == 1, "wallet deployment did not advance the source wallet seqno"
         )
 
-        consensus = network.config.mc_consensus
-        require(consensus is not None, "functional Genesis does not enable Simplex consensus")
         sustained = await observe_sustained_consensus(
             nodes,
             SustainedObservationConfig(
