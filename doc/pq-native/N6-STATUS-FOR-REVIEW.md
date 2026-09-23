@@ -99,6 +99,28 @@ chain in branch CI. Retired scripts must be removed from release claims and
 entry-point inventories. This unit registers that work; it does not perform 16
 independent conversions before ownership and retained scope are decided.
 
+A third open correctness question inventories the classical stake-production
+surface instead of treating the two base Fift files as orphaned. The inventory
+includes those two files, the `validator-elect-req>B` library word,
+`test-smartcont.cpp`, two validator-proposal Fift tests, the nominator-pool and
+validator-election Python flows, both pool operator scripts, and tosctl's
+election daemon and interactive bid command. These consumers make deleting the
+base tools in isolation an invalid retirement.
+
+Pooled staking remains in the launch set through `single-nominator-pool`. Its
+contract already relays stake through the controller and parses the PQ
+authorization shape; its stale operator script must be converted to consume
+`engine.validator.createPqStakeAuthorization`. In contrast,
+`liquid-staking/controller.func` still submits classical `new_stake` directly
+and handles the elector reply itself. The liquid-staking directory is therefore
+not launch-supported and must be absent from release claims and entry-point
+inventories until that contract-level conversion is complete. The converted
+single-nominator contract is the worked example for that future work. The
+registry's closure condition also pins the local tosctl signature-length
+refusal, both tosctl producer conversions, and the rule that common Fift tools
+cannot be removed until every retained caller and `test-smartcont.cpp` move in
+the same change.
+
 ## Open diagnostic observations
 
 `N6-OPEN-DIAGNOSTIC-OBSERVATIONS.json` records operational findings that need

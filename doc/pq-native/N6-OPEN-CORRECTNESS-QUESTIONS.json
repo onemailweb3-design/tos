@@ -2,6 +2,7 @@
   "schema_version": 1,
   "required_question_ids": [
     "classical-e2e-fixtures-incompatible-with-pq-consensus",
+    "classical-stake-producers-incompatible-with-pq-elector",
     "merkle-base-state-mismatch"
   ],
   "questions": {
@@ -10,6 +11,13 @@
       "location": "test/integration/test_simplex2_release.py and 15 scripts under scripts/",
       "observation": "Sixteen E2E scripts contain 17 make_initial_validator() call sites. Production manager admission refuses those classical descriptors on the PQ consensus path, completes synchronization with zero validating groups, and never reaches masterchain seqno 1. The only default wallet/transfer integration used the same dead setup until it was converted to PQ validators. At discovery, no branch CI job booted a chain: build-tos-linux-x86-64-shared.yml declared on.push.branches=[main], while tosctl-service.yml declared jobs.real-chain-explorer.if as github.event_name == 'workflow_dispatch' (observed skipped on run 35748202781). branch-chain-python.yml now runs the complete Python suite and the four-validator PQ wallet/transfer chain on every push and pull request, preventing that execution-coverage cause from recurring; the sixteen retained classical fixtures still require the shared PQ helper and election-specific conversion named by the closure condition.",
       "observed_commit": "0d9452838",
+      "status": "OPEN"
+    },
+    "classical-stake-producers-incompatible-with-pq-elector": {
+      "closure_condition": "The shared tosctl nominator::new_stake builder refuses non-ML-DSA-44 signatures locally; both tosctl election paths obtain PQ stake authorization from engine.validator.createPqStakeAuthorization and emit the PQ stake body; the single-nominator-pool operator path obtains the same node-produced authorization and emits the PQ message shape its already-converted contract parses; and liquid-staking remains excluded from launch claims and entry-point inventories until its controller contract is converted using single-nominator-pool as the worked example. The base validator-elect Fift tools may be removed only in the same change that migrates every retained caller, updates test-smartcont.cpp, and leaves neither pool tooling nor tests with dangling references.",
+      "location": "crypto/smartcont/validator-elect-{req,signed}.fif; crypto/fift/lib/Validator.fif; crypto/smartcont/{single-nominator-pool,liquid-staking}/*elect-signed.fif; crypto/test/test-smartcont.cpp; crypto/test/fift/validator-proposal-{test,legacy-parity}.fif; scripts/{nominator-pool-lifecycle-e2e,validator-election-stage-a}.py; tosctl/src/node-control/{elections/src/runner.rs,commands/src/commands/nodectl/vote_cmd.rs}",
+      "observation": "The PQ elector rejects the classical 0x654C5074 stake authorization, but the two base validator-election Fift tools, Validator.fif's validator-elect-req>B word, the C++ smart-contract test, two Fift proposal tests, two Python election scripts, both pool operator scripts, and two user-facing tosctl paths still produce or consume it. single-nominator-pool's contract is already converted: it relays through its controller and parses algorithm id, public key, signature and optional witness; only its operator script is stale. liquid-staking's controller still sends classical new_stake directly to the elector and handles new_stake_ok/new_stake_error, so liquid-staking is not launch-supported. Pooled staking remains in the launch set through the converted single-nominator path; liquid-staking must not appear in a release claim until its contract-level conversion is complete.",
+      "observed_commit": "5d69c798c",
       "status": "OPEN"
     },
     "merkle-base-state-mismatch": {

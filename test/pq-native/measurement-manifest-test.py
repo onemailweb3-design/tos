@@ -206,6 +206,14 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                         "status": "RESOLVED",
                         "resolved_by": "fixture PQ chain run evidence",
                     },
+                    "classical-stake-producers-incompatible-with-pq-elector": {
+                        "observation": "fixture classical stake producer observation",
+                        "observed_commit": "5d69c798c",
+                        "location": "fixture-stake.py:1",
+                        "closure_condition": "fixture PQ stake producer closure condition",
+                        "status": "RESOLVED",
+                        "resolved_by": "fixture PQ stake conversion evidence",
+                    },
                     "merkle-base-state-mismatch": {
                         "observation": "fixture observation",
                         "observed_commit": "efd22ce46",
@@ -313,6 +321,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
             expected = (
                 "release-grade measurement refuses open correctness questions: "
                 "classical-e2e-fixtures-incompatible-with-pq-consensus, "
+                "classical-stake-producers-incompatible-with-pq-elector, "
                 "merkle-base-state-mismatch"
             )
             if expected not in str(exc):
