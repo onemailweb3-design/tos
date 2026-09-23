@@ -23,14 +23,14 @@ Registered gates:
 - `n6-instrumentation-byte-equivalence`
 
 Branch CI also configures, but does not build, the repository and runs the
-complete `source-guard` label. The inventory checker requires the exact 20
+complete `source-guard` label. The inventory checker requires the exact 21
 guard ids before CTest runs; `--no-tests=error` remains as the independent
 empty-selection check. Labels live beside each test registration. This now
 includes `n6-cluster-runner`, `pq-finality-boundary-source`, and
 `consensus-no-fallback`, which are configure-only checks that previously ran
 only as part of the main-only full CTest workflow. Removing one label makes
 the inventory fail naming the missing guard, rather than allowing the other
-19 to hide its absence.
+20 to hide its absence.
 
 A separate branch workflow builds only the native artifacts required by the
 Python fixtures, runs the complete Python suite, and boots
@@ -42,6 +42,16 @@ until a manual N6 run exposed it. The workflow comment and
 `branch-chain-python-ci-source` guard pin the unrestricted branch triggers,
 generated TL API, full pytest invocation, required native targets, and real
 PQ-chain invocation so that coverage cannot silently return to main-only.
+
+The first cold branch-chain run at `5d69c798c` spent 2,323 seconds in the
+native fixture build and 2,553 seconds overall. The next run at `46b76fde7`
+restored the 32 MiB object cache: step 7 fell to 755 seconds and the total to
+about 950 seconds. Its post-build statistics reported 464/464 cacheable calls,
+464 direct hits and zero misses. The remaining warm-build cost is therefore
+the non-compiler portion of the 1,143-edge graph (generation, archives and
+links), not a production-build cache-key defect. The cache key intentionally
+includes the Git SHA and reuses prior data through its prefix restore, so each
+push adds a new roughly 32 MiB immutable entry to the repository cache budget.
 
 Mutation evidence, run individually and restored before the next mutation:
 
@@ -58,7 +68,7 @@ Release mode also consults
 acceptance-criteria checks.  The registry retains every known question after
 resolution: an open entry carries its observation and closure condition, while
 a resolved entry must add `resolved_by` evidence rather than disappear.  The
-required-id list is cross-checked against the entries, and both currently open
+required-id list is cross-checked against the entries, and all currently open
 questions are also pinned by the manifest code, so deleting an entry or only
 one side of the registry fails closed.
 

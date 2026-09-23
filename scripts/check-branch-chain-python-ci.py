@@ -59,6 +59,13 @@ def main() -> int:
         -1 < zero_stats < native_build < show_stats,
         "native cache statistics do not bracket the fixture build",
     )
+    cache_key = "${{ runner.os }}-${{ runner.arch }}-branch-pq-chain-${{ github.sha }}"
+    restore_prefix = "${{ runner.os }}-${{ runner.arch }}-branch-pq-chain-"
+    require(f"key: {cache_key}" in text, "native cache key is not commit-specific")
+    require(
+        f"restore-keys: {restore_prefix}" in text,
+        "native cache cannot restore the newest prior branch entry",
+    )
     require("continue-on-error" not in text, "workflow permits a guarded step to fail")
 
     target_command = re.search(
