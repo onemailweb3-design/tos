@@ -1,14 +1,33 @@
 # Phase-2 ceremony — open participation
 
-**Status: three contributions are signed and verified, none of them
-independent of the operator; registration remains open. Parameters are not
-finalised and must not be deployed.**
+**Status: four contributions are signed and verified, one of them from a
+party outside the operator; registration remains open until the announced
+close. Parameters are not finalised and must not be deployed.**
 
-Because no contribution yet comes from a party outside the operator's control,
-`verify-attestations.py` refuses this ceremony at its final gate. That refusal
-is the correct answer today, and it stays correct until somebody outside
-contributes. Adding further operator-run contributions will not change it: the
-count is not what the rule asks about.
+`verify-attestations.py` refused this ceremony at its final gate for as long
+as every contribution came from the operator's own side. On 2026-09-23 that
+stopped being true: **BmswapProtocol contributed and the gate passes.** The
+refusal was never about the count -- three operator contributions did not
+move it and a fourth would not have -- it was about whether anybody outside
+could have failed independently.
+
+That gate passing is a statement about a *declaration*. The tool reads
+`independent_of_operator` from the register; it reports what the participant
+declared and what the operator accepted, and no tool can do more than that.
+[The acceptance record](ACCEPTANCE-4.md) sets out what was verified
+independently, what the participant disclosed against their own interest, and
+what still rests on their word.
+
+Registration stays open. A second independent contribution would widen the
+ground the ceremony stands on, and that is worth more than any number of
+further operator-run ones.
+
+[Contribution 4, from BmswapProtocol](CONTRIBUTION-4.md), and the
+[operator's acceptance record](ACCEPTANCE-4.md);
+[download the participant's bundle](https://github.com/BmswapProtocol/tos/releases/tag/shielded-pool-phase2-contribution-4).
+The bundle matched SHA-256 `f3065f74d72f50f7a6e5da3a685fe0804a8fa1a3cbf52d87b331d0851c3ca3e1`,
+its first three contributions were byte-identical to this chain, and the
+mathematics audits four.
 
 [Contribution 3 and verification evidence](CONTRIBUTION-3.md);
 [download the public bundle](https://github.com/tosnetwork/tos/releases/tag/shielded-pool-phase2-contribution-3);

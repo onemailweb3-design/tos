@@ -23,8 +23,14 @@
       "kind": "participant",
       "sha256": "5619a6e1aab154546061a8c65b35f98a973fc69f365b8665d702e0e82e96e468",
       "transcript_after": "d05541b101c7c94a85bdcb3491a66d3448ec7e955b2e080825e75cdfbdfdf21f"
+    },
+    {
+      "index": 4,
+      "kind": "participant",
+      "sha256": "246b9d7406a6b349ba51a092aa69c111a429e8eab528142008b1d7f096f6413e",
+      "transcript_after": "46166e20210e3a2fb753158d480cb556cf7a3fb95376ca65b92bf661a92f3b5a"
     }
   ],
-  "key_sha256": "43bad49013e26a203b411210a4837ba7adb32fb1be187490a99e52e51c696138",
-  "transcript": "d05541b101c7c94a85bdcb3491a66d3448ec7e955b2e080825e75cdfbdfdf21f"
+  "key_sha256": "d44d89c01a2c18581018826d1a21e9bc37ab8641ffe00262bc3d8d7235806dc1",
+  "transcript": "46166e20210e3a2fb753158d480cb556cf7a3fb95376ca65b92bf661a92f3b5a"
 }
