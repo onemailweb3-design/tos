@@ -37,9 +37,9 @@ Release mode also consults
 acceptance-criteria checks.  The registry retains every known question after
 resolution: an open entry carries its observation and closure condition, while
 a resolved entry must add `resolved_by` evidence rather than disappear.  The
-required-id list is cross-checked against the entries, and the initial Merkle
-base-state mismatch is also pinned by the manifest code, so deleting its entry
-or only one side of the registry fails closed.
+required-id list is cross-checked against the entries, and both currently open
+questions are also pinned by the manifest code, so deleting an entry or only
+one side of the registry fails closed.
 
 The seeded open question records the failure observed at `efd22ce46` in
 `validator/consensus/chain-state.cpp:123`: a candidate's state update was
@@ -47,8 +47,33 @@ applied to a base root it was not produced against.  It closes only with
 run-derived evidence identifying whether production consensus or the fixture
 selected the mismatched pair, plus a regression guard for that demonstrated
 ordering.  Source inspection alone is not closure evidence.  While it remains
-open, RELEASE mode refuses by name with
-`release-grade measurement refuses open correctness questions: merkle-base-state-mismatch`.
+open, RELEASE mode refuses it by name.
+
+The second open question records an execution-coverage gap uncovered while
+moving the wallet regression to the PQ path. Sixteen E2E scripts contain 17
+calls to `make_initial_validator()`. A direct two-validator reproduction shows
+the manager refusing their classical descriptors, disabling validation and
+reporting `Validating 0 groups`; the chain never reaches masterchain seqno 1.
+The default native chain workflow runs only on pushes to `main`, and the other
+real-chain workflow is manual-only, so branch CI did not expose this state.
+The affected inventory is:
+
+- `test/integration/test_simplex2_release.py`;
+- `scripts/localnet-jsonrpc.py` (and therefore its TOSCAN consumer);
+- `scripts/agent-wallet-account-e2e.py`, `agent-query-api-e2e.py`,
+  `agent-chain-index-e2e.py`, `agent-task-escrow-e2e.py`,
+  `agent-economy-composed-e2e.py`;
+- `scripts/proof-attestation-e2e.py`, `capability-registry-e2e.py`,
+  `dispute-e2e.py`, `service-actor-e2e.py`, `wc0-token-index-e2e.py`;
+- `scripts/validator-election-stage-a.py`, `dns-e2e.py`, and
+  `nominator-pool-lifecycle-e2e.py`.
+
+Recommended disposition: first classify each entry as retained or retired.
+Then make every retained path consume one shared deterministic PQ
+initial-validator helper and execute each advertised route against a real PQ
+chain in branch CI. Retired scripts must be removed from release claims and
+entry-point inventories. This unit registers that work; it does not perform 16
+independent conversions before ownership and retained scope are decided.
 
 ## N6.1 acceptance criteria scaffolding
 
@@ -183,7 +208,8 @@ Mutation evidence:
 
 All N6.3 output remains `DIAGNOSTIC_SCAFFOLDING_ONLY`, explicitly ineligible
 for release evidence, and makes no consensus-correctness verdict while the
-Merkle sequencing diagnosis and parked N5 gaps remain open.
+Merkle sequencing diagnosis, classical-E2E disposition, and parked N5 gaps
+remain open.
 
 ## N6 performance-regression smoke
 

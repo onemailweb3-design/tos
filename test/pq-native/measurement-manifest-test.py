@@ -196,8 +196,16 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
         json.dumps(
             {
                 "schema_version": 1,
-                "required_question_ids": ["merkle-base-state-mismatch"],
+                "required_question_ids": list(module.REQUIRED_CORRECTNESS_QUESTION_IDS),
                 "questions": {
+                    "classical-e2e-fixtures-incompatible-with-pq-consensus": {
+                        "observation": "fixture classical E2E observation",
+                        "observed_commit": "0d9452838",
+                        "location": "fixture.py:1",
+                        "closure_condition": "fixture PQ E2E closure condition",
+                        "status": "RESOLVED",
+                        "resolved_by": "fixture PQ chain run evidence",
+                    },
                     "merkle-base-state-mismatch": {
                         "observation": "fixture observation",
                         "observed_commit": "efd22ce46",
@@ -205,7 +213,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                         "closure_condition": "fixture closure condition",
                         "status": "RESOLVED",
                         "resolved_by": "fixture run evidence",
-                    }
+                    },
                 },
             }
         ),
@@ -302,9 +310,13 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
             )
             fail("current branch with an open correctness question was release eligible")
         except module.ManifestError as exc:
-            expected = "release-grade measurement refuses open correctness questions: merkle-base-state-mismatch"
+            expected = (
+                "release-grade measurement refuses open correctness questions: "
+                "classical-e2e-fixtures-incompatible-with-pq-consensus, "
+                "merkle-base-state-mismatch"
+            )
             if expected not in str(exc):
-                fail(f"open Merkle question reported the wrong release refusal: {exc}")
+                fail(f"open correctness registry reported the wrong release refusal: {exc}")
 
         # With the correctness question resolved, open measurement work is an
         # independent refusal.

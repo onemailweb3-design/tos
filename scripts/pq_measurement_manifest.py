@@ -21,7 +21,10 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
-REQUIRED_CORRECTNESS_QUESTION_IDS = ("merkle-base-state-mismatch",)
+REQUIRED_CORRECTNESS_QUESTION_IDS = (
+    "classical-e2e-fixtures-incompatible-with-pq-consensus",
+    "merkle-base-state-mismatch",
+)
 REQUIRED_MEASUREMENT_GAP_IDS = (
     "release-scale-matrix-unmeasured",
     "carrier-scale-transport-unmeasured",
@@ -314,7 +317,12 @@ def validate_open_correctness_questions(path: Path, *, release: bool) -> None:
         if question_id not in required:
             raise ManifestError(f"correctness-question registry dropped required entry {question_id}")
     if set(required) != set(questions):
-        raise ManifestError("correctness-question registry required ids and entries differ")
+        missing = sorted(set(required) - set(questions))
+        unrequired = sorted(set(questions) - set(required))
+        raise ManifestError(
+            "correctness-question registry required ids and entries differ: "
+            f"missing_entries={missing} unrequired_entries={unrequired}"
+        )
 
     open_questions: list[str] = []
     for question_id, question in questions.items():
