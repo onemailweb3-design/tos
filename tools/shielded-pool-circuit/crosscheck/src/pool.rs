@@ -227,7 +227,26 @@ impl Pool {
     /// A different key is a different genesis state and therefore a different
     /// address, which is not a side effect to work around -- it is the reason
     /// the ceremony has to finish before an address can be published.
+    /// Deploy with a chosen balance instead of a comfortable one.
+    ///
+    /// Every other deployment here starts with 100 TOS against a 5 TOS floor,
+    /// which is ninety-five TOS of headroom -- enough that no check near the
+    /// floor is ever reached. The one case that distinguishes a backing check
+    /// made before this transaction's fee from one made after it only exists
+    /// close to the floor, so it needs a pool that starts there.
+    pub fn deploy_with_balance(denominations: &[u64], balance: u64) -> Result<Self> {
+        Self::deploy_inner(denominations, None, balance)
+    }
+
     pub fn deploy_with(denominations: &[u64], verifying_key: Option<&[u8]>) -> Result<Self> {
+        Self::deploy_inner(denominations, verifying_key, 100 * TOS)
+    }
+
+    fn deploy_inner(
+        denominations: &[u64],
+        verifying_key: Option<&[u8]>,
+        deploy_value: u64,
+    ) -> Result<Self> {
         let mut bc = Blockchain::with_global_version_and_base_workchain(ACTIVE_VERSION)?;
         bc.set_workchain(0);
         let payer = bc.treasury("relay", 1_000_000 * TOS)?;
@@ -255,7 +274,7 @@ impl Pool {
         let addr = MsgAddressInt::with_params(0, addr_hash)
             .map_err(|error| CrossCheckError::Sandbox(format!("address: {error}")))?;
         bc.send_message(
-            MessageBuilder::internal(payer.address(), &addr, 100 * TOS)
+            MessageBuilder::internal(payer.address(), &addr, deploy_value)
                 .bounce(false)
                 .state_init(si)
                 .body(Cell::default())

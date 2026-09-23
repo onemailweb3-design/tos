@@ -149,9 +149,18 @@ int bounce_gas_ceiling() asm "220000 PUSHINT";
 
   ;; 7. the end state has to be backed. my_balance already includes the inbound
   ;; value, and the liability this deposit adds is exactly its principal.
+  ;;
+  ;; Against the balance this transaction will LEAVE, not the one it can see.
+  ;; The executor takes this transaction's compute fee after the last line of
+  ;; this function has run, so a balance read here is a number that is known
+  ;; to still change -- and checking a quantity at a moment when it is known
+  ;; to still change is not checking it. The funding rule already made the
+  ;; sender pay `get_compute_fee(ceiling)`, so subtracting the same term here
+  ;; is the conservative reading of what will be left.
   [int balance, _] = get_balance();
   int new_liability = native_liability + deposit_amount;
-  throw_unless(204, balance >= new_liability + reserve_floor);
+  throw_unless(204,
+    balance - get_compute_fee(0, deposit_gas_ceiling()) >= new_liability + reserve_floor);
 
   ;; 8. the pre-mutation root is preserved once, before the append.
   (anchors, last_anchor_epoch) =
@@ -289,9 +298,12 @@ int bounce_gas_ceiling() asm "220000 PUSHINT";
 
   ;; A transfer moves no value across the boundary, so its liability is
   ;; unchanged; a withdrawal's has just gone down by what is leaving. Either
-  ;; way the end state has to be backed.
+  ;; way the end state has to be backed -- against the balance this
+  ;; transaction will leave, for the reason the deposit path gives.
   [int balance, _] = get_balance();
-  throw_unless(204, balance >= native_liability + reserve_floor);
+  throw_unless(204,
+    balance - get_compute_fee(0, transact_gas_ceiling()) >= native_liability + reserve_floor);
+
 
   ;; 17. one write, at the end.
   set_data(state_build(commitment_root, leaf_index + 3,
@@ -385,9 +397,12 @@ int bounce_gas_ceiling() asm "220000 PUSHINT";
     frontier_append(frontier, leaf_index, note_commitment(note_body, leaf_index));
 
   ;; 11, 12. The money is back inside the pool, so the pool owes it again.
+  ;; Checked and reserved against what this transaction leaves, for the reason
+  ;; the deposit path gives.
   native_liability = native_liability + recovered_amount;
   [int balance, _] = get_balance();
-  throw_unless(204, balance >= native_liability + reserve_floor);
+  throw_unless(204,
+    balance - get_compute_fee(0, bounce_gas_ceiling()) >= native_liability + reserve_floor);
 
   set_data(state_build(commitment_root, leaf_index + 1,
                        nullifier_root, nullifier_next_index,
