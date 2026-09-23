@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "test/tostester/src"))
 from tostester.n6_cluster import (  # noqa: E402
     ObservedBlock,
     SustainedObservationConfig,
+    _is_lite_transport_error,
     _masterchain_heights,
     analyze_consensus_milestones,
     analyze_live_finality,
@@ -173,14 +174,28 @@ async def check_sustained_agreement() -> None:
 async def check_sustained_transport_retry() -> None:
     flaky = FakeBlockClient(bytes.fromhex("11" * 32), info_transport_failures=1)
     healthy = FakeBlockClient(bytes.fromhex("11" * 32))
+    retry_counts: dict[str, dict[str, int]] = {}
     heights = await _masterchain_heights(
         {"flaky-node": flaky, "healthy-node": healthy},
+        transport_retry_counts=retry_counts,
         transport_retry_budget_seconds=1.0,
         transport_retry_delay_seconds=0,
     )
     require(
         heights == {"flaky-node": 7, "healthy-node": 7} and flaky.info_calls == 2,
         "one transport timeout did not recover inside the retry budget",
+    )
+    require(
+        retry_counts == {"flaky-node": {"get_masterchain_info": 1}},
+        "recovered transport timeout was not counted by node and operation",
+    )
+
+    wrong_code = ToslibError(
+        SimpleNamespace(code=400, message="LITE_SERVER_NETWORKtimeout for adnl query query")
+    )
+    require(
+        not _is_lite_transport_error(wrong_code),
+        "lite transport classifier ignored the production status code",
     )
 
     silent = FakeBlockClient(bytes.fromhex("11" * 32), info_transport_failures=None)
@@ -239,11 +254,26 @@ def check_sustained_summary() -> None:
         per_node_final_height={"node-a": 7, "node-b": 8},
         checked_from_height=0,
         agreed_block_ids={5: "block-5", 6: "block-6", 7: "block-7"},
+        transport_retry_counts={
+            "node-a": {"get_masterchain_info": 1, "lookup_block": 2},
+            "node-b": {"get_masterchain_info": 0, "lookup_block": 0},
+        },
     )
     require(summary["masterchain_blocks_produced"] == 2, "produced block count changed")
     require(
         summary["per_node_final_height"] == {"node-a": 7, "node-b": 8},
         "per-node final heights were not retained",
+    )
+    require(
+        summary["lite_transport_retries"]
+        == {
+            "total": 3,
+            "per_node_operation": {
+                "node-a": {"get_masterchain_info": 1, "lookup_block": 2},
+                "node-b": {"get_masterchain_info": 0, "lookup_block": 0},
+            },
+        },
+        "lite transport retries were not retained by node and operation",
     )
     require(
         summary["agreement"]["same_block_per_height"] is True,

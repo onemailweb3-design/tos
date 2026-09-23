@@ -291,6 +291,8 @@ async def _retry_lite_transport(
     operation_name: str,
     operation: Callable[[], Awaitable[T]],
     *,
+    retry_counts: dict[str, dict[str, int]] | None = None,
+    retry_count_operation: str | None = None,
     retry_budget_seconds: float = SUSTAINED_TRANSPORT_RETRY_SECONDS,
     retry_delay_seconds: float = SUSTAINED_TRANSPORT_RETRY_DELAY_SECONDS,
 ) -> T:
@@ -301,6 +303,10 @@ async def _retry_lite_transport(
         except Exception as error:
             if not _is_lite_transport_error(error):
                 raise
+            if retry_counts is not None:
+                retry_operation = retry_count_operation or operation_name
+                per_operation = retry_counts.setdefault(node_name, {})
+                per_operation[retry_operation] = per_operation.get(retry_operation, 0) + 1
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     "N6_SUSTAINED_TRANSPORT_FAILURE: "
@@ -326,6 +332,7 @@ async def _wait_all_heights(nodes: list[Any], minimum: int, timeout: float) -> l
 async def _masterchain_heights(
     clients: dict[str, Any],
     *,
+    transport_retry_counts: dict[str, dict[str, int]] | None = None,
     transport_retry_budget_seconds: float = SUSTAINED_TRANSPORT_RETRY_SECONDS,
     transport_retry_delay_seconds: float = SUSTAINED_TRANSPORT_RETRY_DELAY_SECONDS,
 ) -> dict[str, int]:
@@ -335,6 +342,8 @@ async def _masterchain_heights(
                 name,
                 "get_masterchain_info",
                 client.get_masterchain_info,
+                retry_counts=transport_retry_counts,
+                retry_count_operation="get_masterchain_info",
                 retry_budget_seconds=transport_retry_budget_seconds,
                 retry_delay_seconds=transport_retry_delay_seconds,
             )
@@ -348,6 +357,7 @@ async def require_agreed_masterchain_block(
     clients: dict[str, Any],
     height: int,
     *,
+    transport_retry_counts: dict[str, dict[str, int]] | None = None,
     transport_retry_budget_seconds: float = SUSTAINED_TRANSPORT_RETRY_SECONDS,
     transport_retry_delay_seconds: float = SUSTAINED_TRANSPORT_RETRY_DELAY_SECONDS,
 ) -> str:
@@ -359,6 +369,8 @@ async def require_agreed_masterchain_block(
                 lambda client=client: client.lookup_block(
                     workchain=-1, shard=-(2**63), seqno=height
                 ),
+                retry_counts=transport_retry_counts,
+                retry_count_operation="lookup_block",
                 retry_budget_seconds=transport_retry_budget_seconds,
                 retry_delay_seconds=transport_retry_delay_seconds,
             )
@@ -389,6 +401,7 @@ def summarize_sustained_observation(
     per_node_final_height: dict[str, int],
     checked_from_height: int,
     agreed_block_ids: dict[int, str] | None = None,
+    transport_retry_counts: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     if len(observed) < 3:
         raise RuntimeError(
@@ -411,6 +424,7 @@ def summarize_sustained_observation(
         )
     values = [item["observation_interval_ms"] for item in observation_intervals]
     slow_threshold_ms = config.target_block_rate_ms * config.slow_interval_factor
+    retry_counts = transport_retry_counts or {}
     return {
         "evidence_class": "COLOCATED_DIAGNOSTIC_ONLY",
         "release_evidence_eligible": False,
@@ -431,6 +445,10 @@ def summarize_sustained_observation(
             },
         },
         "per_node_final_height": per_node_final_height,
+        "lite_transport_retries": {
+            "total": sum(sum(operations.values()) for operations in retry_counts.values()),
+            "per_node_operation": retry_counts,
+        },
         "observation_intervals": observation_intervals,
         "observation_interval_distribution_ms": {
             "count": len(values),
@@ -468,13 +486,18 @@ async def observe_sustained_consensus(
         )
 
     clients = {node.name: await node.toslib_client() for node in nodes}
-    heights = await _masterchain_heights(clients)
+    transport_retry_counts = {
+        name: {"get_masterchain_info": 0, "lookup_block": 0} for name in clients
+    }
+    heights = await _masterchain_heights(clients, transport_retry_counts=transport_retry_counts)
     start_height = min(heights.values())
     if not zerostate_block_id:
         raise ValueError("N6_SUSTAINED_CONSENSUS_FAILURE: zerostate block id is missing")
     block_ids: dict[int, str] = {0: zerostate_block_id}
     for height in range(1, start_height + 1):
-        block_ids[height] = await require_agreed_masterchain_block(clients, height)
+        block_ids[height] = await require_agreed_masterchain_block(
+            clients, height, transport_retry_counts=transport_retry_counts
+        )
 
     observed = [ObservedBlock(start_height, block_ids[start_height], time.monotonic_ns())]
     next_height = start_height + 1
@@ -489,10 +512,14 @@ async def observe_sustained_consensus(
     final_heights = heights
 
     while True:
-        final_heights = await _masterchain_heights(clients)
+        final_heights = await _masterchain_heights(
+            clients, transport_retry_counts=transport_retry_counts
+        )
         common_height = min(final_heights.values())
         while next_height <= common_height:
-            block_id = await require_agreed_masterchain_block(clients, next_height)
+            block_id = await require_agreed_masterchain_block(
+                clients, next_height, transport_retry_counts=transport_retry_counts
+            )
             block_ids[next_height] = block_id
             observed.append(ObservedBlock(next_height, block_id, time.monotonic_ns()))
             next_height += 1
@@ -516,6 +543,7 @@ async def observe_sustained_consensus(
         per_node_final_height=final_heights,
         checked_from_height=0,
         agreed_block_ids=block_ids,
+        transport_retry_counts=transport_retry_counts,
     )
 
 

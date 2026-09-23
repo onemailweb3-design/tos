@@ -426,6 +426,15 @@ immediately and is never retried. The gate covers one transient recovery,
 persistent named transport exhaustion, a non-transport `ValueError` with one
 call, and a disagreement with exactly one lookup per node.
 
+The sustained result records `lite_transport_retries.total` and
+`lite_transport_retries.per_node_operation` for `get_masterchain_info` and
+`lookup_block`, including explicit zeroes for nodes with no retry. This makes a
+passing but degraded observation distinguishable from a clean one. A
+dependency-backed pytest constructs `toslib.toslibjson.ToslibError` from the
+generated `tosapi.toslib_api.Error` type and pins both status code 500 and the
+`LITE_SERVER_NETWORK` prefix; the source-only stand-in remains limited to
+testing retry-loop sequencing.
+
 This is `COLOCATED_DIAGNOSTIC_ONLY` evidence with
 `release_evidence_eligible=false`. Its observation intervals measure when all colocated
 nodes expose the agreed block; they are not persisted-finality p99 and do not
