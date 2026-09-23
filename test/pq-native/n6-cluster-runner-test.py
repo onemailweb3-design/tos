@@ -601,8 +601,9 @@ def check_simplex_skip_run_correlation(directory: Path) -> None:
         "a skip-blind structured channel reported a measured zero",
     )
     require(
-        "consensus.simplex.stats.skipRequested" in unavailable["reason"]
-        and "consensus.simplex.stats.voted(skipVote)" in unavailable["reason"]
+        "consensus.simplex.stats.voted(skipVote)" in unavailable["reason"]
+        and "cannot distinguish zero cast skip votes from absent skip telemetry"
+        in unavailable["reason"]
         and all(
             item["coincides_with_skip_run"] is None for item in unavailable["interval_correlations"]
         ),

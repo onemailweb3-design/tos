@@ -163,13 +163,26 @@ it correlated different chains.
 
 A follow-up at `82f2e8134` produced 746 blocks, two roughly 1.4-second slow
 intervals, unanimous full block ids through height 759, and 576 masterchain
-`SkipVote` text lines. Its structured event stream contained no skip-class
-event and the first analyser incorrectly returned `analysis_available=true`
-with zero runs. Absence from a channel that has not demonstrated the event is
-not evidence of zero. The analyser now reports this state as unavailable and
-names the missing structured event types. The slow-interval/skip-run relation
-remains unattributed and unmeasured; co-location remains a caveat rather than
-a diagnosis.
+`SkipVote` text lines. Its structured event stream contained no
+`consensus.simplex.stats.voted(skipVote)` event. A broader count corrected the
+premise that this event type was absent from the telemetry design: another run
+contained 422 structured skip votes, so the channel demonstrably carries the
+event. The analyser nevertheless cannot establish that capability from a
+single run containing none; it reports the run-local result as unavailable
+instead of presenting an observationally ambiguous zero.
+
+The remaining discrepancy is not attributed. The 576 text lines may describe
+broadcast or relay of peers' votes rather than local votes, or the structured
+path may have dropped events. A 180-second committee-wide run at exact commit
+`85be09801f9b58de75f904e4615ff74f7897f54c` measured 433 blocks from height 12
+through 445, p50 399.0 ms and p95 539.9 ms. It found three structured skip
+runs of lengths 1, 2 and 3, with five to six skip votes per validator, and five
+slow intervals between roughly 1.2 and 2.5 seconds. The sets were disjoint:
+all five slow intervals reported no skip run, while all three skip runs fell
+in ordinary intervals. Thus the earlier skip-causes-tail hypothesis is
+refuted for that run rather than merely unmeasured. The slow intervals and the
+text/structured discrepancy remain unattributed; co-location remains a caveat
+rather than a diagnosis.
 
 This observation is relevant to the release criteria's tail-latency bounds,
 even though the sustained-finality measurement gap was closed separately by
@@ -569,8 +582,9 @@ silently assigns every tail event to skipping.
 If no skip-class event appears anywhere in the validator batches, the result
 sets `analysis_available=false`, `run_count=null`, per-node counts to null and
 every interval's coincidence value to null. It does not report a measured
-zero. This is necessary because a run without skips and a telemetry path that
-drops skips are otherwise observationally identical.
+zero. This does not assert that the structured channel lacks skip votes: it is
+a run-local refusal because a run without cast skip votes and a telemetry path
+that dropped them are observationally identical from those batches alone.
 
 This is `COLOCATED_DIAGNOSTIC_ONLY` evidence with
 `release_evidence_eligible=false`. Its observation intervals measure when all colocated

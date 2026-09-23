@@ -614,9 +614,8 @@ def analyze_simplex_skip_runs(
         return {
             "analysis_available": False,
             "reason": (
-                "structured session logs contain neither "
-                "consensus.simplex.stats.skipRequested nor "
-                "consensus.simplex.stats.voted(skipVote); zero skip runs is unmeasured"
+                "no consensus.simplex.stats.voted(skipVote) event appeared in this run; "
+                "run-local data cannot distinguish zero cast skip votes from absent skip telemetry"
             ),
             "run_count": None,
             "runs": [],

@@ -58,6 +58,30 @@ def main() -> int:
                 fail(f"{observation_id}.{field} must be a non-empty string")
         if entry["status"] == "RESOLVED" and not entry.get("resolved_by"):
             fail(f"resolved observation {observation_id} does not name resolved_by evidence")
+
+    skip_observation = observations["colocated-launch-committee-skip-runs"]
+    observed_at = skip_observation.get("observed_at", {})
+    discrepancy = observed_at.get("text_structured_discrepancy_follow_up", {})
+    if (
+        discrepancy.get("measurement_status") != "AMBIGUOUS_TEXT_VS_STRUCTURED"
+        or discrepancy.get("masterchain_skip_vote_text_lines") != 576
+        or discrepancy.get("structured_skip_vote_events") != 0
+        or len(discrepancy.get("possible_readings", [])) != 2
+    ):
+        fail(
+            "colocated-launch-committee-skip-runs no longer retains the unresolved "
+            "576-text-versus-zero-structured-event discrepancy and both possible readings"
+        )
+    committee_follow_up = observed_at.get("committee_wide_structured_follow_up", {})
+    if (
+        committee_follow_up.get("slow_intervals_coincident_with_skip_run") != 0
+        or committee_follow_up.get("ordinary_intervals_coincident_with_skip_run") != 3
+        or committee_follow_up.get("skip_run_lengths") != [1, 2, 3]
+    ):
+        fail(
+            "colocated-launch-committee-skip-runs no longer records that measured "
+            "skip runs and slow intervals were disjoint"
+        )
     print(
         "N6_DIAGNOSTIC_OBSERVATIONS_OK: "
         f"validated {len(observations)} durable diagnostic observation"
