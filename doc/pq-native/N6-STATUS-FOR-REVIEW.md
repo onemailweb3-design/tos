@@ -142,6 +142,38 @@ after bootstrap. Only `validator-election-stage-a.py` reached the predicted
 stake boundary; `nominator-pool-lifecycle-e2e.py` instead exposed the separate
 validator-wallet funding failure above.
 
+The same entry points were then run from an independently built detached
+`origin/main` worktree at `2004ce5e6`. This control changes the consensus line
+without changing the advertised route, so a failure shared with `main` is
+recorded as pre-existing rather than charged to PQ. A bounded control that
+progressed beyond the branch's failure point is sufficient to attribute that
+point even when a later, unrelated step did not finish inside the control
+budget.
+
+| Entry point | `main` control | Attribution against the PQ result |
+|---|---|---|
+| `test/integration/test_simplex2_release.py` | PASS: heights 13 to 167; 27 observer groups created, 27 started, 24 destroyed, 27 sessions | **PQ regression:** the identical 7-total/4-shard topology makes observer groups on `main`, while the PQ run reports zero |
+| `scripts/localnet-jsonrpc.py` | PASS: resident demo transfer changed the balance | no PQ regression |
+| `scripts/agent-wallet-account-e2e.py` | same ambiguous-broadcast finality failure | pre-existing |
+| `scripts/agent-query-api-e2e.py` | PASS | no PQ regression |
+| `scripts/agent-chain-index-e2e.py` | PASS | no PQ regression |
+| `scripts/agent-task-escrow-e2e.py` | same refusal for fewer than two quorum configurations | pre-existing; shared with the composed economy route below |
+| `scripts/agent-economy-composed-e2e.py` | same refusal for fewer than two quorum configurations | pre-existing; one fixture/configuration item with the task route above |
+| `scripts/proof-attestation-e2e.py` | PASS | no PQ regression |
+| `scripts/capability-registry-e2e.py` | PASS | no PQ regression |
+| `scripts/dispute-e2e.py` | PASS | no PQ regression |
+| `scripts/service-actor-e2e.py` | same sole-endpoint `service_show` chain-RPC failure after HTTP readiness | pre-existing |
+| `scripts/wc0-token-index-e2e.py` | PASS | no PQ regression |
+| `scripts/dns-e2e.py` | PASS, including proposal registration, ConfigParam 4 activation and resolution | **PQ regression:** the PQ governance network stops before the proposal registers or activates |
+| `scripts/nominator-pool-lifecycle-e2e.py` | progressed through positive funding of every validator and pool obligation checks; later hit the 600-second control budget while waiting for the election | **PQ regression at the named step:** only the PQ run leaves validator wallet 0 unfunded |
+| `scripts/validator-election-stage-a.py` | all negative cases passed and four classical candidates were accepted; later hit the 600-second control budget after the first election | **PQ regression at the named step:** only the PQ run cannot place the validator stake; this is the separately registered stake-shape conversion |
+
+Thus the eight PQ-side failures split into four pre-existing fixture/route
+failures (with the two quorum rows owned as one item) and four PQ regressions:
+observer groups, DNS governance activation, nominator validator funding and
+validator stake authorization. The control does not convert a bounded later
+timeout into a PASS; it records only the exact boundary it demonstrated.
+
 A third open correctness question inventories the classical stake-production
 surface instead of treating the two base Fift files as orphaned. The inventory
 includes those two files, the `validator-elect-req>B` library word,
