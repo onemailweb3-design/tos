@@ -450,7 +450,10 @@ initial all-node climb, so recovery before the sustained window is not hidden.
 The observation-interval distribution repeats its own retry total and an
 `includes_catch_up_after_transport_retry` flag. When that flag is true, short
 intervals can be backlog replay after a silent lite-server recovers and must
-not be read as block-production cadence. A production diagnostic run first
+not be read as block-production cadence. The flag counts only retries after
+the interval window starts; retries while establishing the starting height or
+checking historical block ids remain in the overall total but cannot
+mislabel the later distribution. A production diagnostic run first
 made this distinction observable: one node retried once after roughly ten
 seconds, while the chain advanced 26 heights and the observer later replayed
 the backlog at millisecond-scale observation intervals.

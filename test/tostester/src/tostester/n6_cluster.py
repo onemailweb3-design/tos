@@ -410,9 +410,13 @@ def _lite_transport_retry_summary(
     retry_counts: dict[str, dict[str, int]],
 ) -> dict[str, Any]:
     return {
-        "total": sum(sum(operations.values()) for operations in retry_counts.values()),
+        "total": _lite_transport_retry_total(retry_counts),
         "per_node_operation": retry_counts,
     }
+
+
+def _lite_transport_retry_total(retry_counts: dict[str, dict[str, int]]) -> int:
+    return sum(sum(operations.values()) for operations in retry_counts.values())
 
 
 def summarize_sustained_observation(
@@ -424,6 +428,7 @@ def summarize_sustained_observation(
     checked_from_height: int,
     agreed_block_ids: dict[int, str] | None = None,
     transport_retry_counts: dict[str, dict[str, int]] | None = None,
+    interval_retry_baseline: int = 0,
 ) -> dict[str, Any]:
     if len(observed) < 3:
         raise RuntimeError(
@@ -448,6 +453,11 @@ def summarize_sustained_observation(
     slow_threshold_ms = config.target_block_rate_ms * config.slow_interval_factor
     retry_counts = transport_retry_counts or {}
     retry_summary = _lite_transport_retry_summary(retry_counts)
+    interval_retry_total = retry_summary["total"] - interval_retry_baseline
+    if interval_retry_total < 0:
+        raise ValueError(
+            "N6_SUSTAINED_CONSENSUS_FAILURE: interval retry baseline exceeds total retries"
+        )
     return {
         "evidence_class": "COLOCATED_DIAGNOSTIC_ONLY",
         "release_evidence_eligible": False,
@@ -476,8 +486,8 @@ def summarize_sustained_observation(
             "p50": _nearest_rank(values, 0.50),
             "p95": _nearest_rank(values, 0.95),
             "maximum": max(values),
-            "transport_retries_during_observation": retry_summary["total"],
-            "includes_catch_up_after_transport_retry": retry_summary["total"] > 0,
+            "transport_retries_during_observation": interval_retry_total,
+            "includes_catch_up_after_transport_retry": interval_retry_total > 0,
         },
         "slow_observation_intervals": [
             item
@@ -521,6 +531,7 @@ async def observe_sustained_consensus(
             clients, height, transport_retry_counts=transport_retry_counts
         )
 
+    interval_retry_baseline = _lite_transport_retry_total(transport_retry_counts)
     observed = [ObservedBlock(start_height, block_ids[start_height], time.monotonic_ns())]
     next_height = start_height + 1
     started = time.monotonic()
@@ -566,6 +577,7 @@ async def observe_sustained_consensus(
         checked_from_height=0,
         agreed_block_ids=block_ids,
         transport_retry_counts=transport_retry_counts,
+        interval_retry_baseline=interval_retry_baseline,
     )
 
 

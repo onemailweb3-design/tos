@@ -331,6 +331,26 @@ def check_sustained_summary() -> None:
         summary["release_evidence_eligible"] is False,
         "co-located sustained observation became release eligible",
     )
+    pre_window_retry_summary = summarize_sustained_observation(
+        config=config,
+        start_height=5,
+        observed=[
+            ObservedBlock(5, "block-5", 0),
+            ObservedBlock(6, "block-6", 400_000_000),
+            ObservedBlock(7, "block-7", 800_000_000),
+        ],
+        per_node_final_height={"node-a": 7},
+        checked_from_height=0,
+        transport_retry_counts={"node-a": {"get_masterchain_info": 3}},
+        interval_retry_baseline=3,
+    )
+    require(
+        pre_window_retry_summary["lite_transport_retries"]["total"] == 3
+        and not pre_window_retry_summary["observation_interval_distribution_ms"][
+            "includes_catch_up_after_transport_retry"
+        ],
+        "a pre-window retry incorrectly marked the interval distribution as catch-up",
+    )
 
 
 def check_latency_profile_binding() -> None:
