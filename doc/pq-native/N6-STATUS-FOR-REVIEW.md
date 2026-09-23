@@ -445,6 +445,16 @@ generated `tosapi.toslib_api.Error` type and pins both status code 500 and the
 `LITE_SERVER_NETWORK` prefix; the source-only stand-in remains limited to
 testing retry-loop sequencing.
 
+The cluster result separately records `startup_lite_transport_retries` for the
+initial all-node climb, so recovery before the sustained window is not hidden.
+The observation-interval distribution repeats its own retry total and an
+`includes_catch_up_after_transport_retry` flag. When that flag is true, short
+intervals can be backlog replay after a silent lite-server recovers and must
+not be read as block-production cadence. A production diagnostic run first
+made this distinction observable: one node retried once after roughly ten
+seconds, while the chain advanced 26 heights and the observer later replayed
+the backlog at millisecond-scale observation intervals.
+
 This is `COLOCATED_DIAGNOSTIC_ONLY` evidence with
 `release_evidence_eligible=false`. Its observation intervals measure when all colocated
 nodes expose the agreed block; they are not persisted-finality p99 and do not

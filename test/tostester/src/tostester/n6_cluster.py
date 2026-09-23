@@ -316,12 +316,25 @@ async def _retry_lite_transport(
             await asyncio.sleep(retry_delay_seconds)
 
 
-async def _wait_all_heights(nodes: list[Any], minimum: int, timeout: float) -> list[int]:
+async def _wait_all_heights(
+    nodes: list[Any],
+    minimum: int,
+    timeout: float,
+    *,
+    transport_retry_counts: dict[str, dict[str, int]] | None = None,
+    transport_retry_budget_seconds: float = SUSTAINED_TRANSPORT_RETRY_SECONDS,
+    transport_retry_delay_seconds: float = SUSTAINED_TRANSPORT_RETRY_DELAY_SECONDS,
+) -> list[int]:
     deadline = time.monotonic() + timeout
     last: list[int] = []
     clients = {node.name: await node.toslib_client() for node in nodes}
     while time.monotonic() < deadline:
-        values = await _masterchain_heights(clients)
+        values = await _masterchain_heights(
+            clients,
+            transport_retry_counts=transport_retry_counts,
+            transport_retry_budget_seconds=transport_retry_budget_seconds,
+            transport_retry_delay_seconds=transport_retry_delay_seconds,
+        )
         last = list(values.values())
         if min(last) >= minimum:
             return last
@@ -393,6 +406,15 @@ def _nearest_rank(values: list[float], percentile: float) -> float:
     return ordered[max(0, math.ceil(percentile * len(ordered)) - 1)]
 
 
+def _lite_transport_retry_summary(
+    retry_counts: dict[str, dict[str, int]],
+) -> dict[str, Any]:
+    return {
+        "total": sum(sum(operations.values()) for operations in retry_counts.values()),
+        "per_node_operation": retry_counts,
+    }
+
+
 def summarize_sustained_observation(
     *,
     config: SustainedObservationConfig,
@@ -425,6 +447,7 @@ def summarize_sustained_observation(
     values = [item["observation_interval_ms"] for item in observation_intervals]
     slow_threshold_ms = config.target_block_rate_ms * config.slow_interval_factor
     retry_counts = transport_retry_counts or {}
+    retry_summary = _lite_transport_retry_summary(retry_counts)
     return {
         "evidence_class": "COLOCATED_DIAGNOSTIC_ONLY",
         "release_evidence_eligible": False,
@@ -445,10 +468,7 @@ def summarize_sustained_observation(
             },
         },
         "per_node_final_height": per_node_final_height,
-        "lite_transport_retries": {
-            "total": sum(sum(operations.values()) for operations in retry_counts.values()),
-            "per_node_operation": retry_counts,
-        },
+        "lite_transport_retries": retry_summary,
         "observation_intervals": observation_intervals,
         "observation_interval_distribution_ms": {
             "count": len(values),
@@ -456,6 +476,8 @@ def summarize_sustained_observation(
             "p50": _nearest_rank(values, 0.50),
             "p95": _nearest_rank(values, 0.95),
             "maximum": max(values),
+            "transport_retries_during_observation": retry_summary["total"],
+            "includes_catch_up_after_transport_retry": retry_summary["total"] > 0,
         },
         "slow_observation_intervals": [
             item
@@ -654,7 +676,15 @@ async def run_cluster(
                     asyncio.create_task(_resource_monitor(node, resource_path, monitor_stop))
                 )
 
-        await _wait_all_heights(all_nodes, 3, 120.0)
+        startup_transport_retry_counts = {
+            node.name: {"get_masterchain_info": 0} for node in all_nodes
+        }
+        await _wait_all_heights(
+            all_nodes,
+            3,
+            120.0,
+            transport_retry_counts=startup_transport_retry_counts,
+        )
         sustained_result = (
             await observe_sustained_consensus(
                 all_nodes, sustained, block_id_text(network.zerostate.as_block())
@@ -737,6 +767,9 @@ async def run_cluster(
             "nodes": node_results,
             "live_finality": asdict(evidence),
             "consensus_milestones": asdict(milestones),
+            "startup_lite_transport_retries": _lite_transport_retry_summary(
+                startup_transport_retry_counts
+            ),
             "sustained_observation": sustained_result,
             "lite": lite,
             "consensus_correctness_verdict": "NOT_MADE_MERKLE_DIAGNOSIS_OPEN",

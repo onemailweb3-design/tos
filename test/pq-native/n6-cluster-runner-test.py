@@ -19,6 +19,7 @@ from tostester.n6_cluster import (  # noqa: E402
     SustainedObservationConfig,
     _is_lite_transport_error,
     _masterchain_heights,
+    _wait_all_heights,
     analyze_consensus_milestones,
     analyze_live_finality,
     load_latency_profile,
@@ -236,6 +237,31 @@ async def check_sustained_transport_retry() -> None:
         raise AssertionError("non-transport lite error was accepted")
 
 
+async def check_startup_transport_retry() -> None:
+    client = FakeBlockClient(bytes.fromhex("11" * 32), info_transport_failures=1)
+
+    class FakeNode:
+        name = "startup-node"
+
+        async def toslib_client(self):
+            return client
+
+    retry_counts = {"startup-node": {"get_masterchain_info": 0}}
+    heights = await _wait_all_heights(
+        [FakeNode()],
+        minimum=7,
+        timeout=1.0,
+        transport_retry_counts=retry_counts,
+        transport_retry_budget_seconds=1.0,
+        transport_retry_delay_seconds=0,
+    )
+    require(heights == [7], "startup height wait did not recover from a transport timeout")
+    require(
+        retry_counts == {"startup-node": {"get_masterchain_info": 1}},
+        "startup height wait did not expose its transport retry",
+    )
+
+
 def check_sustained_summary() -> None:
     config = SustainedObservationConfig(
         blocks=2,
@@ -291,6 +317,8 @@ def check_sustained_summary() -> None:
             "p50": 400.0,
             "p95": 1300.0,
             "maximum": 1300.0,
+            "transport_retries_during_observation": 3,
+            "includes_catch_up_after_transport_retry": True,
         },
         "sustained observation interval distribution changed",
     )
@@ -398,6 +426,7 @@ def main() -> int:
         asyncio.run(check_backends(root))
         asyncio.run(check_sustained_agreement())
         asyncio.run(check_sustained_transport_retry())
+        asyncio.run(check_startup_transport_retry())
         check_sustained_summary()
         check_latency_profile_binding()
         no_latency = load_latency_profile(
