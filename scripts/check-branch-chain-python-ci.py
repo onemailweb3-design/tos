@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Pin branch CI coverage for the Python suite and a real PQ chain boot."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+REQUIRED_NATIVE_TARGETS = {
+    "gen_fif",
+    "create-state",
+    "toslibjson",
+    "generate-random-id",
+    "tos-pq-consensus-key",
+    "dht-server",
+    "validator-engine-console",
+    "validator-engine",
+}
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(f"BRANCH_CHAIN_PYTHON_CI_FAILURE: {message}")
+
+
+def main() -> int:
+    root = Path(__file__).resolve().parents[1]
+    workflow = root / ".github/workflows/branch-chain-python.yml"
+    text = workflow.read_text(encoding="utf-8")
+    require(re.search(r"(?m)^on:\s*$", text) is not None, "workflow has no trigger map")
+    require(re.search(r"(?m)^  push:\s*$", text) is not None, "workflow does not run on pushes")
+    require(
+        re.search(r"(?m)^  pull_request:\s*$", text) is not None,
+        "workflow does not run on pull requests",
+    )
+    require(
+        "branches:" not in text.split("permissions:", 1)[0],
+        "workflow restricts branch triggers",
+    )
+    require("uv sync --no-dev" in text, "workflow does not install repository Python dependencies")
+    require(
+        "test/tostester/generate_tl.py" in text,
+        "workflow does not generate the ignored Python TL API",
+    )
+    require(re.search(r"(?m)^\s*run: uv run pytest\s*$", text) is not None, "full pytest is absent")
+    require(
+        "uv run python test/integration/test_basic.py" in text,
+        "four-validator PQ chain regression is absent",
+    )
+    require("continue-on-error" not in text, "workflow permits a guarded step to fail")
+
+    target_command = re.search(
+        r"cmake --build build --parallel 4 --target\s+(?P<targets>(?:\s*[\w-]+\s*)+)",
+        text,
+    )
+    require(target_command is not None, "minimal native target command is missing")
+    observed_targets = set(target_command.group("targets").split())
+    require(
+        REQUIRED_NATIVE_TARGETS <= observed_targets,
+        f"native fixture targets are missing: {sorted(REQUIRED_NATIVE_TARGETS - observed_targets)}",
+    )
+    print(
+        "BRANCH_CHAIN_PYTHON_CI_OK: every push and pull request runs full pytest "
+        "and boots the four-validator PQ chain"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError) as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1) from error

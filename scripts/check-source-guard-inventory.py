@@ -12,6 +12,7 @@ from pathlib import Path
 REQUIRED_SOURCE_GUARDS = frozenset(
     {
         "benchmark-exclusion-source",
+        "branch-chain-python-ci-source",
         "consensus-no-fallback",
         "finality-evidence-admission-marker-mutations",
         "finality-evidence-admission-source",

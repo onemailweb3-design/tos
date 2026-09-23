@@ -1269,6 +1269,9 @@ add_test(NAME n6-cluster-runner
 set_tests_properties(n6-cluster-runner PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/test/tostester/src"
   LABELS "source-guard")
+add_test(NAME branch-chain-python-ci-source
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-branch-chain-python-ci.py)
+set_tests_properties(branch-chain-python-ci-source PROPERTIES LABELS "source-guard")
 add_test(NAME n6-scale-sweep-cardinality
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-scale-sweep-cardinality-test.py)
 set_tests_properties(n6-scale-sweep-cardinality PROPERTIES

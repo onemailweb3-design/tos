@@ -23,14 +23,25 @@ Registered gates:
 - `n6-instrumentation-byte-equivalence`
 
 Branch CI also configures, but does not build, the repository and runs the
-complete `source-guard` label. The inventory checker requires the exact 19
+complete `source-guard` label. The inventory checker requires the exact 20
 guard ids before CTest runs; `--no-tests=error` remains as the independent
 empty-selection check. Labels live beside each test registration. This now
 includes `n6-cluster-runner`, `pq-finality-boundary-source`, and
 `consensus-no-fallback`, which are configure-only checks that previously ran
 only as part of the main-only full CTest workflow. Removing one label makes
 the inventory fail naming the missing guard, rather than allowing the other
-18 to hide its absence.
+19 to hide its absence.
+
+A separate branch workflow builds only the native artifacts required by the
+Python fixtures, runs the complete Python suite, and boots
+`test/integration/test_basic.py` with four PQ validators on every push and pull
+request. This is intentionally independent of the main-only full native build:
+the classical-descriptor refusal introduced on 2026-09-20 made every existing
+chain fixture unable to form a validator group, and branch CI reported nothing
+until a manual N6 run exposed it. The workflow comment and
+`branch-chain-python-ci-source` guard pin the unrestricted branch triggers,
+generated TL API, full pytest invocation, required native targets, and real
+PQ-chain invocation so that coverage cannot silently return to main-only.
 
 Mutation evidence, run individually and restored before the next mutation:
 

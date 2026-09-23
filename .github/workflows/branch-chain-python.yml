@@ -1,0 +1,74 @@
+name: Branch PQ chain and Python tests
+
+# This job exists because compile/unit evidence cannot detect a chain fixture
+# that no longer forms a validator group. Keep one real PQ chain boot and the
+# complete Python suite on every branch push and pull request; do not move it
+# back behind main-only or workflow_dispatch-only triggers.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  CCACHE_DIR: /root/.ccache
+
+jobs:
+  python-and-pq-chain:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/${{ github.repository }}-builder:ubuntu-24.04
+      credentials:
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up repository Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Restore native object cache
+        uses: actions/cache@v6
+        with:
+          path: /root/.ccache
+          key: ${{ runner.os }}-${{ runner.arch }}-branch-pq-chain-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-branch-pq-chain-
+
+      - name: Configure the minimal native fixture build
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_C_COMPILER=clang-21
+          -DCMAKE_CXX_COMPILER=clang++-21
+          -DCMAKE_BUILD_TYPE=Release
+          -DTOS_ARCH=x86-64
+          -DTOS_USE_JEMALLOC=ON
+          -DTOS_PRODUCTION_BUILD=ON
+
+      - name: Build only the Python and PQ-chain fixture dependencies
+        run: >-
+          cmake --build build --parallel 4 --target
+          gen_fif create-state toslibjson
+          generate-random-id tos-pq-consensus-key
+          dht-server validator-engine-console validator-engine
+
+      - name: Prepare generated Python API and dependencies
+        run: |
+          uv sync --no-dev
+          uv run test/tostester/generate_tl.py
+
+      - name: Run the complete Python suite
+        run: uv run pytest
+
+      - name: Boot a four-validator PQ chain and exercise a transfer
+        run: uv run python test/integration/test_basic.py
