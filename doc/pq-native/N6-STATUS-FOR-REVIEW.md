@@ -164,7 +164,7 @@ budget.
 | `scripts/dispute-e2e.py` | PASS | no PQ regression |
 | `scripts/service-actor-e2e.py` | same sole-endpoint `service_show` chain-RPC failure after HTTP readiness | pre-existing |
 | `scripts/wc0-token-index-e2e.py` | PASS | no PQ regression |
-| `scripts/dns-e2e.py` | PASS, including proposal registration, ConfigParam 4 activation and resolution | **PQ regression before contract execution:** a governance-only rerun at `cb108a840` recorded the faucet's 10 TOS outgoing message to the config address, but the config transaction dump contained neither that inbound message nor any response tag; proposal registration logic was never entered |
+| `scripts/dns-e2e.py` | PASS, including proposal registration, ConfigParam 4 activation and resolution | **PQ regression at proposal registration:** a governance-only rerun saw the faucet's 10 TOS outgoing message and a corresponding 10 TOS config-account balance increase; `get_proposal` still failed to find the proposal |
 | `scripts/nominator-pool-lifecycle-e2e.py` | progressed through positive funding of every validator and pool obligation checks; later hit the 600-second control budget while waiting for the election | **PQ regression at the named step:** only the PQ run leaves validator wallet 0 unfunded |
 | `scripts/validator-election-stage-a.py` | all negative cases passed and four classical candidates were accepted; later hit the 600-second control budget after the first election | **PQ regression at the named step:** only the PQ run cannot place the validator stake; this is the separately registered stake-shape conversion |
 
@@ -174,16 +174,24 @@ observer groups, DNS governance activation, nominator validator funding and
 validator stake authorization. The control does not convert a bounded later
 timeout into a PASS; it records only the exact boundary it demonstrated.
 
-The DNS rerun distinguishes this boundary without attributing a cause. An
-`0xee565052` answer would have meant successful registration and a later
-activation failure; another answer tag would have identified the negated
-required price. Neither appeared. The config account had six transactions in
-the queried window, but none carried the proposal inbound message or any
-response, while the faucet transaction did carry the correctly valued outgoing
-message. This places the failure in masterchain message inclusion/exposure
-before ConfigParam 11 or `register_voting_proposal`. It has the same observed
-shape as the nominator route's very slow masterchain, but this run does not
-establish that they share a cause.
+The first DNS rerun was incorrectly localized to delivery: it showed the
+faucet's correctly valued outgoing message but inspected only the config
+account's six most recent transactions, where no inbound message or response
+appeared. That bounded window could miss an earlier transaction. A follow-up
+governance-only run measured the config balance before the proposal at
+10,000,000,000 nanotos and after the 90-second registration poll at
+20,000,000,000 nanotos. The 10 TOS increase matches the emitted message, so
+the earlier claim that delivery never happened is withdrawn. ConfigParam 0 was
+read from the live chain to select the destination. `get_proposal` still failed
+to find the proposal; the remaining question is how the delivered message was
+processed and why registration did not persist.
+
+The same poll sampled masterchain height every two seconds: height 24 at its
+start and 244 at 88.259 seconds, with every sample advancing by five blocks.
+That is approximately one block per 401 ms, consistent with the configured
+400 ms target. The DNS governance chain therefore did not show the
+nominator-pool route's observed height 5 after 60 seconds. Their symptoms
+cannot be attributed to one masterchain-wide stall on this evidence.
 
 The observer regression was then localised and fixed. Before the fix, a PQ
 rerun recorded `enable_block_sync=false`,

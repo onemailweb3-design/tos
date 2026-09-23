@@ -323,6 +323,7 @@ async def run_governance_checks(faucet, artifacts: dict, global_config: Path,
 
     config_addr = config_contract_address()
     print(f"  config contract: {config_addr}")
+    config_balance_before_proposal = balance(config_addr)
     p11 = rpc_call("getConfigParam", config_id=11).get("result") or {}
     check("ConfigParam 11 (voting setup) present at genesis",
           bool(p11.get("config", {}).get("bytes")))
@@ -355,7 +356,23 @@ async def run_governance_checks(faucet, artifacts: dict, global_config: Path,
             [stack_num(int.from_bytes(phash_bytes, "big"))])
         return any(k not in ("null",) for k, _ in entries)
 
-    registered = await async_poll(proposal_registered, timeout=90)
+    height_samples: list[tuple[float, int]] = []
+    poll_started = time.monotonic()
+
+    def proposal_registered_with_height() -> bool:
+        height = int(rpc_call("getMasterchainInfo")["result"]["last"]["seqno"])
+        height_samples.append((round(time.monotonic() - poll_started, 3), height))
+        return proposal_registered()
+
+    registered = await async_poll(proposal_registered_with_height, timeout=90)
+    config_balance_after_proposal = balance(config_addr)
+    print(
+        "  proposal delivery: "
+        f"config_balance_before={config_balance_before_proposal} "
+        f"config_balance_after={config_balance_after_proposal} "
+        f"delta={config_balance_after_proposal - config_balance_before_proposal}"
+    )
+    print(f"  proposal poll masterchain heights: {height_samples}")
     if not registered:
         try:
             entries = run_get_method(
