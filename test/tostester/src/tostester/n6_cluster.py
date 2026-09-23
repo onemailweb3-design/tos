@@ -18,6 +18,7 @@ EVIDENCE_CLASS = "DIAGNOSTIC_SCAFFOLDING_ONLY"
 PROOF_BYTES = re.compile(r"got block proof .* \((?P<bytes>[0-9]+) bytes\)")
 SUSTAINED_TRANSPORT_RETRY_SECONDS = 30.0
 SUSTAINED_TRANSPORT_RETRY_DELAY_SECONDS = 0.1
+SUSTAINED_SESSION_LOG_FLUSH_SECONDS = 5.1
 T = TypeVar("T")
 
 
@@ -419,22 +420,8 @@ def _lite_transport_retry_total(retry_counts: dict[str, dict[str, int]]) -> int:
     return sum(sum(operations.values()) for operations in retry_counts.values())
 
 
-def summarize_sustained_observation(
-    *,
-    config: SustainedObservationConfig,
-    start_height: int,
-    observed: list[ObservedBlock],
-    per_node_final_height: dict[str, int],
-    checked_from_height: int,
-    agreed_block_ids: dict[int, str] | None = None,
-    transport_retry_counts: dict[str, dict[str, int]] | None = None,
-    interval_retry_baseline: int = 0,
-) -> dict[str, Any]:
-    if len(observed) < 3:
-        raise RuntimeError(
-            "N6_SUSTAINED_CONSENSUS_FAILURE: fewer than two masterchain intervals were observed"
-        )
-    observation_intervals = [
+def _observation_intervals(observed: list[ObservedBlock]) -> list[dict[str, Any]]:
+    return [
         {
             "from_height": previous.height,
             "to_height": current.height,
@@ -445,6 +432,261 @@ def summarize_sustained_observation(
         }
         for previous, current in zip(observed, observed[1:], strict=False)
     ]
+
+
+def analyze_simplex_skip_runs(
+    session_logs: dict[str, Path],
+    observation_intervals: list[dict[str, Any]],
+    validator_names: list[str],
+) -> dict[str, Any]:
+    """Correlate structured Simplex skip votes with accepted masterchain blocks."""
+    session_events: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for node_name, path in session_logs.items():
+        if not path.is_file():
+            raise RuntimeError(
+                "N6_SUSTAINED_CONSENSUS_FAILURE: "
+                f"structured consensus session log is missing for {node_name}: {path}"
+            )
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not line:
+                continue
+            try:
+                batch = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise RuntimeError(
+                    "N6_SUSTAINED_CONSENSUS_FAILURE: malformed structured consensus log "
+                    f"for {node_name} at {path}:{line_number}"
+                ) from error
+            if batch.get("@type") != "consensus.stats.events":
+                continue
+            session_id = batch.get("id")
+            events = batch.get("events")
+            if not isinstance(session_id, str) or not isinstance(events, list):
+                raise RuntimeError(
+                    "N6_SUSTAINED_CONSENSUS_FAILURE: invalid consensus event batch "
+                    f"for {node_name} at {path}:{line_number}"
+                )
+            session_events.setdefault(session_id, {}).setdefault(node_name, []).extend(events)
+
+    validator_set = set(validator_names)
+    per_node_slots = {node_name: set() for node_name in session_logs}
+    candidate_heights: dict[tuple[str, int, str], int] = {}
+    accepted_candidates: set[tuple[str, int, str]] = set()
+    session_metadata: dict[str, tuple[int, int]] = {}
+    validator_by_session_index: dict[tuple[str, int], str] = {}
+
+    def candidate_key(session_id: str, value: Any) -> tuple[str, int, str] | None:
+        if not isinstance(value, dict):
+            return None
+        slot = value.get("slot")
+        candidate_hash = value.get("hash")
+        if not isinstance(slot, int) or not isinstance(candidate_hash, str):
+            return None
+        return session_id, slot, candidate_hash
+
+    for session_id, per_node_events in session_events.items():
+        for node_name, timestamped_events in per_node_events.items():
+            for timestamped in timestamped_events:
+                event = timestamped.get("event") if isinstance(timestamped, dict) else None
+                if not isinstance(event, dict):
+                    continue
+                event_type = event.get("@type")
+                if event_type == "consensus.stats.id" and event.get("workchain") == -1:
+                    total_validators = event.get("total_validators")
+                    slots_per_window = event.get("slots_per_leader_window")
+                    validator_index = event.get("idx")
+                    if (
+                        not isinstance(total_validators, int)
+                        or total_validators <= 0
+                        or not isinstance(slots_per_window, int)
+                        or slots_per_window <= 0
+                        or not isinstance(validator_index, int)
+                    ):
+                        raise RuntimeError(
+                            "N6_SUSTAINED_CONSENSUS_FAILURE: invalid masterchain session metadata "
+                            f"for {node_name} session {session_id}"
+                        )
+                    metadata = (total_validators, slots_per_window)
+                    previous = session_metadata.setdefault(session_id, metadata)
+                    if previous != metadata:
+                        raise RuntimeError(
+                            "N6_SUSTAINED_CONSENSUS_FAILURE: nodes disagree on Simplex session "
+                            f"metadata for {session_id}: {previous} != {metadata}"
+                        )
+                    if node_name in validator_set and validator_index >= 0:
+                        index_key = (session_id, validator_index)
+                        previous_name = validator_by_session_index.setdefault(index_key, node_name)
+                        if previous_name != node_name:
+                            raise RuntimeError(
+                                "N6_SUSTAINED_CONSENSUS_FAILURE: validator index disagreement "
+                                f"for session {session_id} index {validator_index}: "
+                                f"{previous_name} != {node_name}"
+                            )
+                elif event_type == "consensus.stats.candidateReceived":
+                    key = candidate_key(session_id, event.get("id"))
+                    block = event.get("block")
+                    block_id = block.get("id", {}) if isinstance(block, dict) else {}
+                    height = block_id.get("seqno") if block_id.get("workchain") == -1 else None
+                    if key is not None and isinstance(height, int):
+                        previous_height = candidate_heights.setdefault(key, height)
+                        if previous_height != height:
+                            raise RuntimeError(
+                                "N6_SUSTAINED_CONSENSUS_FAILURE: candidate maps to conflicting "
+                                f"masterchain heights: {key} -> {previous_height}, {height}"
+                            )
+                elif event_type == "consensus.stats.blockAccepted":
+                    key = candidate_key(session_id, event.get("id"))
+                    if key is not None:
+                        accepted_candidates.add(key)
+                elif event_type == "consensus.simplex.stats.voted":
+                    vote = event.get("vote")
+                    if isinstance(vote, dict) and vote.get("@type") == "consensus.simplex.skipVote":
+                        slot = vote.get("slot")
+                        if isinstance(slot, int):
+                            per_node_slots[node_name].add((session_id, slot))
+
+    accepted_height_slots: dict[int, tuple[str, int]] = {}
+    for key in accepted_candidates:
+        height = candidate_heights.get(key)
+        if height is None:
+            continue
+        height_slot = (key[0], key[1])
+        previous = accepted_height_slots.setdefault(height, height_slot)
+        if previous != height_slot:
+            raise RuntimeError(
+                "N6_SUSTAINED_CONSENSUS_FAILURE: accepted masterchain height maps to "
+                f"conflicting Simplex slots: height={height} {previous} != {height_slot}"
+            )
+
+    # A node logs shard and masterchain sessions into the same file. Only the
+    # sessions whose structured id event says workchain -1 describe the block
+    # intervals observed above.
+    per_node_slots = {
+        node_name: {item for item in slots if item[0] in session_metadata}
+        for node_name, slots in per_node_slots.items()
+    }
+    all_skip_slots = sorted({slot for slots in per_node_slots.values() for slot in slots})
+    grouped: list[list[tuple[str, int]]] = []
+    for session_slot in all_skip_slots:
+        if (
+            not grouped
+            or grouped[-1][-1][0] != session_slot[0]
+            or grouped[-1][-1][1] + 1 != session_slot[1]
+        ):
+            grouped.append([session_slot])
+        else:
+            grouped[-1].append(session_slot)
+
+    runs: list[dict[str, Any]] = []
+    for run_index, slots in enumerate(grouped):
+        session_id = slots[0][0]
+        metadata = session_metadata.get(session_id)
+        if metadata is None:
+            raise RuntimeError(
+                "N6_SUSTAINED_CONSENSUS_FAILURE: skip vote has no masterchain session "
+                f"metadata: session={session_id} slot={slots[0][1]}"
+            )
+        validator_count, slots_per_window = metadata
+        slot_numbers = [slot for _, slot in slots]
+        leaders = []
+        for slot in slot_numbers:
+            leader_index = slot // slots_per_window % validator_count
+            leader_node = validator_by_session_index.get((session_id, leader_index))
+            if leader_node is None:
+                raise RuntimeError(
+                    "N6_SUSTAINED_CONSENSUS_FAILURE: cannot identify scheduled leader "
+                    f"for session {session_id} slot {slot} index {leader_index}"
+                )
+            leaders.append(
+                {
+                    "slot": slot,
+                    "leader_index": leader_index,
+                    "leader_node": leader_node,
+                }
+            )
+        runs.append(
+            {
+                "run_index": run_index,
+                "session_id": session_id,
+                "first_slot": slot_numbers[0],
+                "last_slot": slot_numbers[-1],
+                "length": len(slot_numbers),
+                "slots": slot_numbers,
+                "leaders": leaders,
+                "votes_per_node": {
+                    node_name: sum((session_id, slot) in node_slots for slot in slot_numbers)
+                    for node_name, node_slots in per_node_slots.items()
+                },
+            }
+        )
+
+    interval_correlations = []
+    for interval in observation_intervals:
+        from_height = interval["from_height"]
+        to_height = interval["to_height"]
+        previous_slot = accepted_height_slots.get(from_height)
+        current_slot = accepted_height_slots.get(to_height)
+        correlation_available = (
+            previous_slot is not None
+            and current_slot is not None
+            and previous_slot[0] == current_slot[0]
+        )
+        matching_runs: list[int] = []
+        if correlation_available:
+            assert previous_slot is not None and current_slot is not None
+            matching_runs = [
+                run["run_index"]
+                for run in runs
+                if run["session_id"] == previous_slot[0]
+                and run["last_slot"] > previous_slot[1]
+                and run["first_slot"] < current_slot[1]
+            ]
+        interval_correlations.append(
+            {
+                "from_height": from_height,
+                "to_height": to_height,
+                "correlation_available": correlation_available,
+                "coincides_with_skip_run": bool(matching_runs) if correlation_available else None,
+                "skip_run_indices": matching_runs,
+                "from_candidate_slot": previous_slot[1] if previous_slot is not None else None,
+                "to_candidate_slot": current_slot[1] if current_slot is not None else None,
+            }
+        )
+
+    return {
+        "analysis_available": True,
+        "run_count": len(runs),
+        "runs": runs,
+        "skip_votes_per_node": {
+            node_name: len(slots) for node_name, slots in per_node_slots.items()
+        },
+        "skip_slots_per_node": {
+            node_name: [
+                {"session_id": session_id, "slot": slot} for session_id, slot in sorted(slots)
+            ]
+            for node_name, slots in per_node_slots.items()
+        },
+        "interval_correlations": interval_correlations,
+    }
+
+
+def summarize_sustained_observation(
+    *,
+    config: SustainedObservationConfig,
+    start_height: int,
+    observed: list[ObservedBlock],
+    per_node_final_height: dict[str, int],
+    checked_from_height: int,
+    agreed_block_ids: dict[int, str] | None = None,
+    transport_retry_counts: dict[str, dict[str, int]] | None = None,
+    interval_retry_baseline: int = 0,
+    simplex_skip_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if len(observed) < 3:
+        raise RuntimeError(
+            "N6_SUSTAINED_CONSENSUS_FAILURE: fewer than two masterchain intervals were observed"
+        )
+    observation_intervals = _observation_intervals(observed)
     if any(item["to_height"] != item["from_height"] + 1 for item in observation_intervals):
         raise RuntimeError(
             "N6_SUSTAINED_CONSENSUS_FAILURE: sustained observation skipped a masterchain height"
@@ -458,6 +700,29 @@ def summarize_sustained_observation(
         raise ValueError(
             "N6_SUSTAINED_CONSENSUS_FAILURE: interval retry baseline exceeds total retries"
         )
+    skip_evidence = simplex_skip_evidence or {
+        "analysis_available": False,
+        "reason": "structured Simplex session logs were not requested by this caller",
+        "run_count": 0,
+        "runs": [],
+        "skip_votes_per_node": {},
+        "skip_slots_per_node": {},
+        "interval_correlations": [],
+    }
+    correlations = {
+        (item["from_height"], item["to_height"]): item
+        for item in skip_evidence["interval_correlations"]
+    }
+    for interval in observation_intervals:
+        correlation = correlations.get((interval["from_height"], interval["to_height"]))
+        if correlation is not None:
+            interval.update(
+                {
+                    "skip_correlation_available": correlation["correlation_available"],
+                    "coincides_with_skip_run": correlation["coincides_with_skip_run"],
+                    "skip_run_indices": correlation["skip_run_indices"],
+                }
+            )
     return {
         "evidence_class": "COLOCATED_DIAGNOSTIC_ONLY",
         "release_evidence_eligible": False,
@@ -479,6 +744,7 @@ def summarize_sustained_observation(
         },
         "per_node_final_height": per_node_final_height,
         "lite_transport_retries": retry_summary,
+        "simplex_skip_runs": skip_evidence,
         "observation_intervals": observation_intervals,
         "observation_interval_distribution_ms": {
             "count": len(values),
@@ -502,7 +768,11 @@ def summarize_sustained_observation(
 
 
 async def observe_sustained_consensus(
-    nodes: list[Any], config: SustainedObservationConfig, zerostate_block_id: str
+    nodes: list[Any],
+    config: SustainedObservationConfig,
+    zerostate_block_id: str,
+    *,
+    simplex_validator_names: list[str] | None = None,
 ) -> dict[str, Any]:
     if (config.blocks is None) == (config.seconds is None):
         raise ValueError(
@@ -569,6 +839,17 @@ async def observe_sustained_consensus(
             )
         await asyncio.sleep(0.05)
 
+    skip_evidence = None
+    if simplex_validator_names is not None:
+        # TraceCollector flushes structured events every five seconds. Waiting
+        # once at the end avoids treating its final buffered batch as no skips.
+        await asyncio.sleep(SUSTAINED_SESSION_LOG_FLUSH_SECONDS)
+        skip_evidence = analyze_simplex_skip_runs(
+            {node.name: Path(node.session_log_path) for node in nodes},
+            _observation_intervals(observed),
+            simplex_validator_names,
+        )
+
     return summarize_sustained_observation(
         config=config,
         start_height=start_height,
@@ -578,6 +859,7 @@ async def observe_sustained_consensus(
         agreed_block_ids=block_ids,
         transport_retry_counts=transport_retry_counts,
         interval_retry_baseline=interval_retry_baseline,
+        simplex_skip_evidence=skip_evidence,
     )
 
 
@@ -699,7 +981,10 @@ async def run_cluster(
         )
         sustained_result = (
             await observe_sustained_consensus(
-                all_nodes, sustained, block_id_text(network.zerostate.as_block())
+                all_nodes,
+                sustained,
+                block_id_text(network.zerostate.as_block()),
+                simplex_validator_names=[node.name for node in validator_nodes],
             )
             if sustained is not None
             else None

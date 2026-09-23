@@ -7,7 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-REQUIRED_OBSERVATION_IDS = frozenset({"colocated-lite-query-timeouts"})
+REQUIRED_OBSERVATION_IDS = frozenset(
+    {"colocated-lite-query-timeouts", "colocated-launch-committee-skip-runs"}
+)
 REQUIRED_FIELDS = {
     "status",
     "observation",

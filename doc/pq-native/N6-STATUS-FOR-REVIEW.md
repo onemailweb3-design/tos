@@ -150,6 +150,26 @@ server receipt, response send and client completion, followed by a regression
 gate for the demonstrated cause. A longer timeout or a successful retry does
 not close it.
 
+The second entry records the first five-minute steady-state PQ Simplex
+observation at the enforced 21-validator launch committee size. On one
+co-located host it produced 733 blocks in 314 seconds, all 22 queried nodes
+agreed full block ids through height 746, cadence p50 was 399.1 ms against the
+400 ms target, p95 was 500.2 ms, and no lite query retried. Safety held, but
+seven observation intervals lasted 1.3--2.3 seconds. Validator logs contained
+45--65 `SkipVote` events each, while the DHT and non-validating verifier had
+none. Node2's 53 votes appeared in four 11--14-slot bursts; only three of the
+seven slow intervals were within one to two seconds of those bursts, four slow
+intervals had no node2 burst, and one burst had no flagged slow interval.
+Those facts are recorded as an unattributed liveness observation, not as a
+claim that skip runs caused every slow interval or that co-location caused the
+skip runs.
+
+This observation is relevant to the release criteria's tail-latency bounds,
+even though the sustained-finality measurement gap was closed separately by
+the inherited-Simplex evidence. It remains diagnostic: one co-located run is
+not release-grade persisted-finality p99, and upstream inheritance does not
+explain behavior of the new N5 carrier or admission machinery.
+
 ## N6.1 acceptance criteria scaffolding
 
 Implementation commit:
@@ -526,6 +546,18 @@ mislabel the later distribution. A production diagnostic run first
 made this distinction observable: one node retried once after roughly ten
 seconds, while the chain advanced 26 heights and the observer later replayed
 the backlog at millisecond-scale observation intervals.
+
+After the observation window, the harness waits for the production
+`TraceCollector`'s five-second structured-log flush and reads every node's
+`consensus.stats.events`. It retains per-node skip-vote counts rather than an
+average, groups the union of session-local skipped slots into consecutive
+runs, and records every slot and its scheduled leader. Candidate-received plus
+block-accepted events map each masterchain height to the Simplex slot that
+actually advanced it; every observation interval can therefore state whether
+the intervening slots contain a skip run. The source-only gate includes a slow
+interval with a run, a slow interval without one, and a run during a non-slow
+interval, preventing either an always-true correlation or an explanation that
+silently assigns every tail event to skipping.
 
 This is `COLOCATED_DIAGNOSTIC_ONLY` evidence with
 `release_evidence_eligible=false`. Its observation intervals measure when all colocated

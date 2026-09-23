@@ -22,6 +22,7 @@ from tostester.n6_cluster import (  # noqa: E402
     _wait_all_heights,
     analyze_consensus_milestones,
     analyze_live_finality,
+    analyze_simplex_skip_runs,
     load_latency_profile,
     observe_sustained_consensus,
     require_agreed_masterchain_block,
@@ -408,6 +409,139 @@ def check_sustained_summary() -> None:
     )
 
 
+def check_simplex_skip_run_correlation(directory: Path) -> None:
+    session_id = "simplex-masterchain-session"
+    candidates = ((10, 100), (11, 113), (12, 114), (13, 120))
+    validator_names = ["node-a", "node-b", "node-c", "node-d"]
+    node_skip_slots = {
+        "node-a": list(range(101, 113)) + list(range(115, 120)),
+        "node-b": list(range(101, 111)) + list(range(115, 119)),
+        "node-c": list(range(103, 111)) + list(range(116, 119)),
+        "node-d": list(range(105, 111)) + [117],
+        "observer": [],
+    }
+
+    def candidate_id(slot: int) -> dict[str, object]:
+        return {"@type": "consensus.candidateId", "slot": slot, "hash": f"hash-{slot}"}
+
+    def timestamped(event_value: dict[str, object]) -> dict[str, object]:
+        return {"@type": "consensus.stats.timestampedEvent", "ts": 1.0, "event": event_value}
+
+    logs: dict[str, Path] = {}
+    for index, node_name in enumerate([*validator_names, "observer"]):
+        events = [
+            timestamped(
+                {
+                    "@type": "consensus.stats.id",
+                    "workchain": -1,
+                    "idx": index if node_name != "observer" else -1,
+                    "total_validators": 4,
+                    "slots_per_leader_window": 4,
+                }
+            )
+        ]
+        for height, slot in candidates:
+            events.extend(
+                (
+                    timestamped(
+                        {
+                            "@type": "consensus.stats.candidateReceived",
+                            "id": candidate_id(slot),
+                            "block": {
+                                "@type": "consensus.stats.block",
+                                "id": {"workchain": -1, "seqno": height},
+                            },
+                        }
+                    ),
+                    timestamped(
+                        {"@type": "consensus.stats.blockAccepted", "id": candidate_id(slot)}
+                    ),
+                )
+            )
+        events.extend(
+            timestamped(
+                {
+                    "@type": "consensus.simplex.stats.voted",
+                    "vote": {"@type": "consensus.simplex.skipVote", "slot": slot},
+                }
+            )
+            for slot in node_skip_slots[node_name]
+        )
+        path = directory / f"{node_name}-session.jsonl"
+        path.write_text(
+            json.dumps({"@type": "consensus.stats.events", "id": session_id, "events": events})
+            + "\n",
+            encoding="utf-8",
+        )
+        logs[node_name] = path
+
+    observed = [
+        ObservedBlock(10, "block-10", 0),
+        ObservedBlock(11, "block-11", 1_300_000_000),
+        ObservedBlock(12, "block-12", 2_600_000_000),
+        ObservedBlock(13, "block-13", 3_000_000_000),
+    ]
+    intervals = [
+        {
+            "from_height": previous.height,
+            "to_height": current.height,
+            "observation_interval_ms": (
+                current.observed_monotonic_ns - previous.observed_monotonic_ns
+            )
+            / 1_000_000,
+        }
+        for previous, current in zip(observed, observed[1:], strict=False)
+    ]
+    evidence = analyze_simplex_skip_runs(logs, intervals, validator_names)
+    require(evidence["run_count"] == 2, "structured skip votes were not grouped into two runs")
+    require(
+        [run["length"] for run in evidence["runs"]] == [12, 5],
+        "skip-run lengths did not retain every distinct skipped slot",
+    )
+    require(
+        evidence["skip_votes_per_node"]
+        == {"node-a": 17, "node-b": 14, "node-c": 11, "node-d": 7, "observer": 0},
+        "per-node skip-vote spread was averaged or lost",
+    )
+    require(
+        [item["slot"] for item in evidence["skip_slots_per_node"]["node-b"]]
+        == [*range(101, 111), *range(115, 119)]
+        and evidence["skip_slots_per_node"]["observer"] == [],
+        "per-node skipped slots were replaced by a committee aggregate",
+    )
+    require(
+        evidence["runs"][0]["leaders"][0]
+        == {"slot": 101, "leader_index": 1, "leader_node": "node-b"}
+        and evidence["runs"][0]["leaders"][-1]
+        == {"slot": 112, "leader_index": 0, "leader_node": "node-a"},
+        "skip slots were not attributed to the production leader schedule",
+    )
+    summary = summarize_sustained_observation(
+        config=SustainedObservationConfig(
+            blocks=3,
+            seconds=None,
+            target_block_rate_ms=400,
+            slow_interval_factor=3.0,
+        ),
+        start_height=10,
+        observed=observed,
+        per_node_final_height={name: 13 for name in logs},
+        checked_from_height=0,
+        simplex_skip_evidence=evidence,
+    )
+    slow = summary["slow_observation_intervals"]
+    require(
+        [(item["from_height"], item["coincides_with_skip_run"]) for item in slow]
+        == [(10, True), (11, False)],
+        "slow intervals were not independently correlated with committee-wide skip runs",
+    )
+    require(
+        summary["observation_intervals"][2]["coincides_with_skip_run"] is True
+        and summary["observation_intervals"][2]["observation_interval_ms"] == 400.0,
+        "a skip run without a flagged slow interval was not retained",
+    )
+
+
 def check_latency_profile_binding() -> None:
     launch = load_latency_profile(ROOT / "test/pq-native/n6-scale-profiles/launch-default.json")
     for manifest in (
@@ -504,6 +638,7 @@ def main() -> int:
         asyncio.run(check_startup_transport_retry())
         asyncio.run(check_observer_retry_window_composition())
         check_sustained_summary()
+        check_simplex_skip_run_correlation(root)
         check_latency_profile_binding()
         no_latency = load_latency_profile(
             ROOT / "test/pq-native/n6-scale-profiles/no-simulated-latency.json"

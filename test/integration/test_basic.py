@@ -118,6 +118,7 @@ async def main(args: argparse.Namespace):
                 slow_interval_factor=3.0,
             ),
             block_id_text(network.zerostate.as_block()),
+            simplex_validator_names=[node.name for node in nodes],
         )
         require(
             sustained["masterchain_blocks_produced"] >= args.sustain_blocks,
