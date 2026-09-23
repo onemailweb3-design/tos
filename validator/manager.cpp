@@ -3397,13 +3397,32 @@ void ValidatorManagerImpl::update_shards() {
         continue;
       }
       auto config = selected_config.value().config;
-      if (!config.enable_block_sync() && !config.observers_in_private_overlay()) {
+      const auto enable_block_sync = config.enable_block_sync();
+      const auto observers_in_private_overlay = config.observers_in_private_overlay();
+      auto record_observer_diagnostics = [&](std::optional<std::size_t> candidate_count) {
+        auto state = std::make_tuple(enable_block_sync, observers_in_private_overlay, candidate_count);
+        auto it = observer_group_diagnostic_states_.find(shard);
+        if (it != observer_group_diagnostic_states_.end() && it->second == state) {
+          return;
+        }
+        observer_group_diagnostic_states_.insert_or_assign(shard, state);
+        LOG(INFO) << "Observer group policy for " << shard.to_str() << ": enable_block_sync=" << enable_block_sync
+                  << ", observers_in_private_overlay=" << observers_in_private_overlay;
+        if (candidate_count) {
+          LOG(INFO) << "Observer group candidates for " << shard.to_str()
+                    << ": get_observer_adnl_ids size=" << *candidate_count;
+        }
+      };
+      if (!enable_block_sync && !observers_in_private_overlay) {
+        record_observer_diagnostics(std::nullopt);
         continue;
       }
       auto val_set = last_masterchain_state_->get_validator_set(shard);
       if (val_set.is_null()) {
         continue;
       }
+      auto observer_adnl_ids = get_observer_adnl_ids(val_set);
+      record_observer_diagnostics(observer_adnl_ids.size());
       // An observer verifies peers with the same post-quantum keys a validator does, so a
       // set it could not verify must not get an observer group either. Decided here, before
       // any actor is created, for the same reason as the validator path.
@@ -3424,7 +3443,7 @@ void ValidatorManagerImpl::update_shards() {
                                                        .new_catchain_ids = opts.new_catchain_ids,
                                                    })
               .session_id;
-      for (auto local_adnl_id : get_observer_adnl_ids(val_set)) {
+      for (auto local_adnl_id : observer_adnl_ids) {
         ObserverGroupId observer_id{session_id, local_adnl_id};
         ValidatorGroupEntry entry;
         if (auto it = observer_groups_.find(observer_id); it != observer_groups_.end()) {
@@ -3733,20 +3752,19 @@ td::actor::ActorOwn<IValidatorGroup> ValidatorManagerImpl::create_observer_group
 std::set<adnl::AdnlNodeIdShort> ValidatorManagerImpl::get_observer_adnl_ids(
     td::Ref<block::ValidatorSet> validator_set) const {
   std::set<adnl::AdnlNodeIdShort> result;
-  for (const auto &key : temp_keys_) {
-    if (validator_set->is_validator(tos::ValidatorId{key.bits256_value()})) {
+  for (int offset = -1; offset <= 1; ++offset) {
+    auto total_set = last_masterchain_state_->get_total_validator_set(offset);
+    if (total_set.is_null()) {
       continue;
     }
-    for (int offset = -1; offset <= 1; ++offset) {
-      auto total_set = last_masterchain_state_->get_total_validator_set(offset);
-      if (total_set.is_null()) {
+    for (const auto &descr : total_set->export_vector()) {
+      if (validator_set->is_validator(descr.validator_id)) {
         continue;
       }
-      auto descr = total_set->get_validator(tos::ValidatorId{key.bits256_value()});
-      if (!descr) {
+      if (!local_consensus_descriptor(descr, temp_keys_, permanent_keys_, pq_custody_)) {
         continue;
       }
-      result.emplace(block::validator_adnl_identity(*descr));
+      result.emplace(block::validator_adnl_identity(descr));
     }
   }
   return result;

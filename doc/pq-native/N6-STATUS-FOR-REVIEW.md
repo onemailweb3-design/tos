@@ -174,6 +174,30 @@ observer groups, DNS governance activation, nominator validator funding and
 validator stake authorization. The control does not convert a bounded later
 timeout into a PASS; it records only the exact boundary it demonstrated.
 
+The observer regression was then localised and fixed. Before the fix, a PQ
+rerun recorded `enable_block_sync=false`,
+`observers_in_private_overlay=true`, no admission refusals, and
+`get_observer_adnl_ids size=0` on every node. The old function constructed a
+`ValidatorId` from each Ed25519 transport-key hash. That happens to identify a
+classical validator, but a PQ validator has a separate identity whose local
+membership is established by consensus-key custody. The function now shares
+the same `local_consensus_descriptor` decision as all other manager membership
+checks. On the same 7-total/4-shard topology after the fix, all nodes reached
+height 165 or 166 and the 60-second test passed with 27 groups created, 27
+started, 24 destroyed and 27 distinct sessions, exactly matching `main`'s
+27/27/24/27. The policy flag
+samples, per-node observer-id-set sizes and any refusal reasons are retained in
+the JSON artifact, so a future zero identifies its branch rather than merely
+reporting an absent group.
+
+`validator-id-key-hash-source` makes the identity boundary durable. It rejects
+constructing a `ValidatorId` from a key-hash variable anywhere under
+`validator/` or `crypto/`; reintroducing the former
+`ValidatorId{key.bits256_value()}` shape failed by file and line, while the
+corrected tree passed. This complements rather than duplicates the earlier
+`classical_key()` inventory: the escaped defect did not call
+`classical_key()` at all.
+
 A third open correctness question inventories the classical stake-production
 surface instead of treating the two base Fift files as orphaned. The inventory
 includes those two files, the `validator-elect-req>B` library word,

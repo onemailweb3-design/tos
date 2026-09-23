@@ -36,6 +36,16 @@ OBSERVER_STARTED = re.compile(
 OBSERVER_DESTROYED = re.compile(
     r"Destroying observer group (?P<shard>\S+)\.(?P<cc_seqno>\d+) at (?P<adnl>\S+)"
 )
+OBSERVER_POLICY = re.compile(
+    r"Observer group policy for (?P<shard>\S+): "
+    r"enable_block_sync=(?P<block_sync>0|1|false|true), "
+    r"observers_in_private_overlay=(?P<private_overlay>0|1|false|true)"
+)
+OBSERVER_CANDIDATES = re.compile(
+    r"Observer group candidates for (?P<shard>\S+): "
+    r"get_observer_adnl_ids size=(?P<count>\d+)"
+)
+OBSERVER_REFUSED = re.compile(r"refusing to create observer groups for (?P<reason>.+)")
 FATAL_LOG = re.compile(
     r"\b(FATAL|PANIC|CHECK failed|LOG_CHECK failed|AddressSanitizer|"
     r"UndefinedBehaviorSanitizer)\b",
@@ -52,6 +62,9 @@ class NodeEvidence:
     observer_started: int
     observer_destroyed: int
     observer_sessions: list[str]
+    observer_policies: list[dict[str, object]]
+    observer_candidate_counts: list[dict[str, object]]
+    observer_refusals: list[str]
     fatal_lines: list[str]
 
 
@@ -107,6 +120,17 @@ async def _wait_all_heights(
 
 def _matches(text: str, pattern: re.Pattern[str]) -> list[re.Match[str]]:
     return list(pattern.finditer(text))
+
+
+def _unique_records(records: list[dict[str, object]]) -> list[dict[str, object]]:
+    unique: list[dict[str, object]] = []
+    seen: set[tuple[tuple[str, object], ...]] = set()
+    for record in records:
+        key = tuple(sorted(record.items()))
+        if key not in seen:
+            seen.add(key)
+            unique.append(record)
+    return unique
 
 
 def _fresh_artifact_dir(repo_root: Path, requested: Path | None) -> Path:
@@ -218,6 +242,25 @@ async def _observer_churn(args: argparse.Namespace) -> int:
             created = _matches(text, OBSERVER_CREATED)
             started = _matches(text, OBSERVER_STARTED)
             destroyed = _matches(text, OBSERVER_DESTROYED)
+            policies = _unique_records([
+                {
+                    "shard": match.group("shard"),
+                    "enable_block_sync": match.group("block_sync") in {"1", "true"},
+                    "observers_in_private_overlay": match.group("private_overlay")
+                    in {"1", "true"},
+                }
+                for match in _matches(text, OBSERVER_POLICY)
+            ])
+            candidate_counts = _unique_records([
+                {
+                    "shard": match.group("shard"),
+                    "get_observer_adnl_ids_size": int(match.group("count")),
+                }
+                for match in _matches(text, OBSERVER_CANDIDATES)
+            ])
+            refusals = sorted(
+                {match.group(0)[:1000] for match in _matches(text, OBSERVER_REFUSED)}
+            )
             fatal_lines = [
                 line[:1000] for line in text.splitlines() if FATAL_LOG.search(line)
             ]
@@ -237,6 +280,9 @@ async def _observer_churn(args: argparse.Namespace) -> int:
                     observer_started=len(started),
                     observer_destroyed=len(destroyed),
                     observer_sessions=sessions,
+                    observer_policies=policies,
+                    observer_candidate_counts=candidate_counts,
+                    observer_refusals=refusals,
                     fatal_lines=fatal_lines,
                 )
             )
@@ -252,6 +298,22 @@ async def _observer_churn(args: argparse.Namespace) -> int:
             session for item in evidence for session in item.observer_sessions
         }
         fatal_total = sum(len(item.fatal_lines) for item in evidence)
+        refusal_total = sum(len(item.observer_refusals) for item in evidence)
+        policy_samples = [
+            {"node": item.node, **policy}
+            for item in evidence
+            for policy in item.observer_policies
+        ]
+        candidate_samples = [
+            {"node": item.node, **sample}
+            for item in evidence
+            for sample in item.observer_candidate_counts
+        ]
+        refusal_samples = [
+            {"node": item.node, "reason": refusal}
+            for item in evidence
+            for refusal in item.observer_refusals
+        ]
 
         failures: list[str] = []
         if min(end_heights) <= min(start_heights):
@@ -259,7 +321,33 @@ async def _observer_churn(args: argparse.Namespace) -> int:
         if max(end_heights) - min(end_heights) > 12:
             failures.append(f"final masterchain spread is too large: {end_heights}")
         if created_total == 0 or started_total == 0:
-            failures.append("no real observer group was created and started")
+            if refusal_total:
+                failures.append(
+                    "no real observer group was created and started; manager refused "
+                    f"observer admission {refusal_total} times"
+                )
+            elif policy_samples and all(
+                not sample["enable_block_sync"]
+                and not sample["observers_in_private_overlay"]
+                for sample in policy_samples
+            ):
+                failures.append(
+                    "no real observer group was created and started; both observer "
+                    "policy flags were disabled"
+                )
+            elif candidate_samples and all(
+                sample["get_observer_adnl_ids_size"] == 0
+                for sample in candidate_samples
+            ):
+                failures.append(
+                    "no real observer group was created and started; "
+                    "get_observer_adnl_ids was empty"
+                )
+            else:
+                failures.append(
+                    "no real observer group was created and started; policy allowed "
+                    "observers and no refusal or empty observer-id set explained the zero"
+                )
         if destroyed_total == 0:
             failures.append("no observer group was destroyed during membership rotation")
         if len(distinct_sessions) < 2:
@@ -275,6 +363,10 @@ async def _observer_churn(args: argparse.Namespace) -> int:
                 "observer_started": started_total,
                 "observer_destroyed": destroyed_total,
                 "distinct_observer_sessions": len(distinct_sessions),
+                "observer_policy_samples": policy_samples,
+                "observer_candidate_samples": candidate_samples,
+                "observer_refusal_count": refusal_total,
+                "observer_refusal_samples": refusal_samples,
                 "failures": failures,
             }
         )
@@ -292,6 +384,10 @@ async def _observer_churn(args: argparse.Namespace) -> int:
                     "observer_started": started_total,
                     "observer_destroyed": destroyed_total,
                     "distinct_observer_sessions": len(distinct_sessions),
+                    "observer_policy_samples": policy_samples,
+                    "observer_candidate_samples": candidate_samples,
+                    "observer_refusal_count": refusal_total,
+                    "observer_refusal_samples": refusal_samples,
                     "failures": failures,
                 },
                 indent=2,

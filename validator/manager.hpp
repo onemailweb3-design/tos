@@ -21,8 +21,10 @@
 
 #include <list>
 #include <map>
+#include <optional>
 #include <queue>
 #include <set>
+#include <tuple>
 
 #include "collator-node/collator-node.hpp"
 #include "common/refcnt.hpp"
@@ -263,6 +265,7 @@ class ValidatorManagerImpl : public ValidatorManager {
   std::map<ValidatorSessionId, ValidatorGroupEntry> next_validator_groups_;
   using ObserverGroupId = std::pair<ValidatorSessionId, adnl::AdnlNodeIdShort>;
   std::map<ObserverGroupId, ValidatorGroupEntry> observer_groups_;
+  std::map<ShardIdFull, std::tuple<bool, bool, std::optional<std::size_t>>> observer_group_diagnostic_states_;
   std::map<adnl::AdnlNodeIdShort, td::actor::ActorOwn<CollationManager>> collation_managers_;
   std::set<ValidatorSessionId> destroyed_validator_sessions_;
   // Exact directory names of retired consensus groups whose per-group RocksDB
