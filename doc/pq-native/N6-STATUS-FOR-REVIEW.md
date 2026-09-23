@@ -190,11 +190,18 @@ samples, per-node observer-id-set sizes and any refusal reasons are retained in
 the JSON artifact, so a future zero identifies its branch rather than merely
 reporting an absent group.
 
-`validator-id-key-hash-source` makes the identity boundary durable. It rejects
-constructing a `ValidatorId` from a key-hash variable anywhere under
-`validator/` or `crypto/`; reintroducing the former
-`ValidatorId{key.bits256_value()}` shape failed by file and line, while the
-corrected tree passed. This complements rather than duplicates the earlier
+The identity boundary is now closed at both the type and source levels.
+`ValidatorId(const PublicKeyHash&)` is deleted beside the existing deleted
+`Ed25519_PublicKey` conversion, so a key hash cannot implicitly become an
+identity. The one protocol-defined classical Ed25519-key-to-identity conversion
+is named `classical_validator_id` and inventoried as a single approved site.
+`validator-id-key-hash-source` states its narrower source-level guarantee
+explicitly: no unapproved `.bits256_value()` or `->bits256_value()` expression,
+nor a named local assigned from one, may enter a `ValidatorId` construction
+under `validator/` or `crypto/`. Three independent mutations were rejected by
+file and line: `temp_keys_.begin()->bits256_value()`,
+`some_fn().bits256_value()`, and a `bits256_value()` result first stored in a
+local variable. This complements rather than duplicates the earlier
 `classical_key()` inventory: the escaped defect did not call
 `classical_key()` at all.
 

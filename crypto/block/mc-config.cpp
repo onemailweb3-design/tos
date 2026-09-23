@@ -798,9 +798,8 @@ td::Result<std::shared_ptr<TotalValidatorSet>> Config::unpack_validator_set(Ref<
       // A classical validator's membership identity and key identity are both the one
       // derived from its Ed25519 key. Settling that here means every consumer of a
       // decoded set sees populated identities, including the ones that hash them.
-      auto classical_id = tos::PublicKey{tos::pubkeys::Ed25519{pubkey}}.compute_short_id().bits256_value();
-      validator_id = tos::ValidatorId{classical_id};
-      key_id = tos::ConsensusKeyId{classical_id};
+      validator_id = classical_validator_id(pubkey);
+      key_id = tos::ConsensusKeyId{validator_id.value};
       adnl_addr = descr.adnl_addr;
       weight = descr.weight;
     }

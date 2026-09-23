@@ -9,15 +9,25 @@ import sys
 from pathlib import Path
 
 
-FORBIDDEN = re.compile(
-    r"\bValidatorId\s*[({][^;]{0,300}?\b[A-Za-z_][A-Za-z0-9_]*\.bits256_value\s*\(",
+DIRECT_BITS_EXPRESSION = re.compile(
+    r"\bValidatorId\s*[({][^;]{0,500}?bits256_value\s*\(", re.MULTILINE
+)
+BITS_ASSIGNMENT = re.compile(
+    r"\b(?:auto|(?:td::)?Bits256)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"[^;]{0,500}?bits256_value\s*\([^;]*;",
     re.MULTILINE,
 )
 SOURCE_SUFFIXES = frozenset({".cpp", ".cc", ".cxx", ".h", ".hh", ".hpp"})
 
+# A classical validator descriptor is born from an Ed25519 key hash. This one
+# conversion is the protocol definition, not a membership lookup. Keep it exact
+# so a second site cannot hide behind the exception.
+CLASSICAL_DESCRIPTOR_SITE = Path("crypto/block/validator-set.cpp")
+
 
 def violations(root: Path) -> list[str]:
     found: list[str] = []
+    approved_classical_conversions = 0
     for source_root in (root / "validator", root / "crypto"):
         if not source_root.is_dir():
             raise RuntimeError(
@@ -27,10 +37,37 @@ def violations(root: Path) -> list[str]:
             if path.suffix not in SOURCE_SUFFIXES or not path.is_file():
                 continue
             text = path.read_text(errors="replace")
-            for match in FORBIDDEN.finditer(text):
+            for match in DIRECT_BITS_EXPRESSION.finditer(text):
+                relative = path.relative_to(root)
+                if (
+                    relative == CLASSICAL_DESCRIPTOR_SITE
+                    and "classical_validator_id(" in text[max(0, match.start() - 200) : match.start()]
+                    and "compute_short_id()" in match.group(0)
+                ):
+                    approved_classical_conversions += 1
+                    continue
                 line = text.count("\n", 0, match.start()) + 1
                 excerpt = " ".join(match.group(0).split())
-                found.append(f"{path.relative_to(root)}:{line}: {excerpt}")
+                found.append(f"{relative}:{line}: direct expression: {excerpt}")
+            for assignment in BITS_ASSIGNMENT.finditer(text):
+                name = assignment.group("name")
+                construction = re.compile(
+                    r"\bValidatorId\s*[({]\s*"
+                    + re.escape(name)
+                    + r"\s*[)}]"
+                ).search(text, assignment.end())
+                if construction is None:
+                    continue
+                line = text.count("\n", 0, construction.start()) + 1
+                found.append(
+                    f"{path.relative_to(root)}:{line}: named bits256_value result "
+                    f"'{name}' enters ValidatorId"
+                )
+    if approved_classical_conversions != 1:
+        found.append(
+            "classical validator-id conversion inventory changed: "
+            f"expected=1 actual={approved_classical_conversions}"
+        )
     return found
 
 
@@ -46,7 +83,11 @@ def main() -> int:
             "membership:\n  "
             + "\n  ".join(found)
         )
-    print("validator-id key-hash check passed: no transport key hash is used as ValidatorId")
+    print(
+        "validator-id key-hash check passed: no unapproved .bits256_value() or "
+        "->bits256_value() expression, nor a named local assigned from one, enters a "
+        "ValidatorId construction"
+    )
     return 0
 
 
