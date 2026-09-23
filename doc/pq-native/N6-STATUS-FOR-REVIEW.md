@@ -171,15 +171,22 @@ the enforced N5 pending-finality resource bounds. It does not populate the
 live criteria and does not use an N6 measurement as the source of a threshold.
 The owner has accepted the nine headroom fractions recorded in the proposal;
 their formulas resolve to the proposed timing, utilization and backpressure
-limits there. The target release hardware profile remains outstanding.
-The hardware profile must name the CPU governor and whether turbo/boost is
-enabled, in addition to CPU model, memory, storage and network link. A
-throttling governor changes sustained latency and tail variance, so a release
-timing claim without that frequency policy cannot be attributed to the code.
-The live criteria intentionally retain `OWNER_REVIEW_REQUIRED` and zero
-thresholds until that profile is supplied. Accepted fractions alone are not a
-complete acceptance contract, so they are not copied piecemeal into the live
-file.
+limits there. The hardware item is now a provisioning requirement rather than
+an unspecified owner choice: 21 bare-metal hosts, one validator per host, each
+with at least 8 physical cores, 16 GiB RAM, a 1 Gbps link and NVMe storage,
+using the `performance` governor with turbo/boost disabled. The actual CPU
+model is recorded when the hosts exist.
+
+The released 6-core, 11.68 GiB KVM server with a 100 Mbps symmetric link is not
+a release-measurement candidate. A guest cannot truthfully observe the host's
+governor or turbo/boost state, so its timings cannot satisfy the attribution
+contract regardless of its other resources. The owner therefore has three
+explicit paths: provision the 21 bare-metal hosts demanded by the current
+criteria; deliberately change the scale criterion with written,
+machine-enforced extrapolation; or use VMs only for diagnostic evidence. Calling
+VM measurements release evidence is not an available path. The live criteria
+intentionally retain `OWNER_REVIEW_REQUIRED` and zero thresholds until real
+hosts exist and all six profile fields are recorded together.
 
 Proposal mutation evidence:
 

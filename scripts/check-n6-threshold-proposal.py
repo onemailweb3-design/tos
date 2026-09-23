@@ -31,9 +31,7 @@ if proposal.get("status") != "REVIEW_PROPOSAL_NOT_ACCEPTANCE_CRITERIA":
 if set(proposal.get("owner_decisions", {})) != {"release_hardware_profile", "headroom_fractions"}:
     fail("proposal must leave exactly hardware profile and headroom fractions to the owner")
 hardware = proposal["owner_decisions"]["release_hardware_profile"]
-if hardware.get("status") != "OWNER_DECISION_REQUIRED" or set(
-    hardware.get("required_fields", [])
-) != {
+if hardware.get("status") != "PROVISIONING_REQUIRED" or set(hardware.get("required_fields", [])) != {
     "cpu_model",
     "cpu_governor",
     "turbo_or_boost_enabled",
@@ -42,16 +40,46 @@ if hardware.get("status") != "OWNER_DECISION_REQUIRED" or set(
     "network_link",
 }:
     fail("release hardware proposal does not pin CPU governor and turbo/boost policy")
-if "throttling governor" not in hardware.get("rationale", ""):
+requirements = hardware.get("provisioning_requirements", {})
+expected_requirements = {
+    "cpu_model": "record the actual model for every provisioned host",
+    "physical_cores_min": 8,
+    "cpu_governor": "performance",
+    "turbo_or_boost_enabled": False,
+    "memory_gib_min": 16,
+    "storage": "NVMe SSD",
+    "network_link_gbps_min": 1,
+    "virtualization_allowed": False,
+}
+if hardware.get("required_host_count") != 21 or hardware.get("topology") != (
+    "one validator per bare-metal host"
+):
+    fail("release hardware proposal does not require 21 one-validator bare-metal hosts")
+if requirements != expected_requirements:
+    fail("release hardware provisioning minimums changed or became virtualized")
+if "throttling" not in hardware.get("rationale", "") or "thermals" not in hardware.get(
+    "rationale", ""
+):
     fail("release hardware proposal does not explain why frequency policy affects timing evidence")
-provided = hardware.get("provided_fields", {})
-if provided.get("network_link") != (
+observed_host = hardware.get("observed_nonqualifying_host", {})
+if observed_host.get("network_link") != (
     "100 Mbps symmetric (In 100.0 Mbps / Out 100.0 Mbps), "
     "MAC fa:16:3e:7c:0e:03, /23 subnet"
 ):
     fail("release hardware proposal does not retain the owner-supplied network link")
-if hardware.get("status") != "OWNER_DECISION_REQUIRED":
-    fail("partial network information was mistaken for a complete release hardware profile")
+if (
+    observed_host.get("platform") != "KVM guest"
+    or observed_host.get("cpu_governor") != "unobservable from guest"
+    or observed_host.get("turbo_or_boost_enabled") != "unobservable from guest"
+):
+    fail("nonqualifying KVM host no longer records its unobservable frequency policy")
+expected_paths = [
+    "provision 21 bare-metal hosts meeting this specification",
+    "change required_scales explicitly with written and machine-enforced extrapolation",
+    "virtual machines cannot produce release evidence because their host frequency policy is unobservable",
+]
+if hardware.get("available_paths") != expected_paths:
+    fail("release hardware proposal no longer states all three explicit cost choices")
 
 headroom = proposal["owner_decisions"]["headroom_fractions"]
 expected_headroom = {

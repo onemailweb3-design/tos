@@ -4,9 +4,18 @@
   "source_commit_policy": "Resolve every source fact from the release candidate commit; never derive a threshold from the N6 run it judges.",
   "owner_decisions": {
     "release_hardware_profile": {
-      "status": "OWNER_DECISION_REQUIRED",
-      "provided_fields": {
-        "network_link": "100 Mbps symmetric (In 100.0 Mbps / Out 100.0 Mbps), MAC fa:16:3e:7c:0e:03, /23 subnet"
+      "status": "PROVISIONING_REQUIRED",
+      "required_host_count": 21,
+      "topology": "one validator per bare-metal host",
+      "provisioning_requirements": {
+        "cpu_model": "record the actual model for every provisioned host",
+        "physical_cores_min": 8,
+        "cpu_governor": "performance",
+        "turbo_or_boost_enabled": false,
+        "memory_gib_min": 16,
+        "storage": "NVMe SSD",
+        "network_link_gbps_min": 1,
+        "virtualization_allowed": false
       },
       "required_fields": [
         "cpu_model",
@@ -16,7 +25,21 @@
         "storage",
         "network_link"
       ],
-      "rationale": "Release timing is attributable only when the CPU frequency policy is pinned. A throttling governor changes latency and tail variance, while turbo or boost changes the available peak; omitting either makes a later timing change indistinguishable from a platform-policy change. The owner-supplied 100 Mbps symmetric deployment link is recorded, but the CPU, memory and storage portions remain outstanding, so the hardware profile is not accepted yet."
+      "observed_nonqualifying_host": {
+        "platform": "KVM guest",
+        "physical_cores": 6,
+        "memory_gib": 11.68,
+        "swap_gib": 2,
+        "network_link": "100 Mbps symmetric (In 100.0 Mbps / Out 100.0 Mbps), MAC fa:16:3e:7c:0e:03, /23 subnet",
+        "cpu_governor": "unobservable from guest",
+        "turbo_or_boost_enabled": "unobservable from guest"
+      },
+      "available_paths": [
+        "provision 21 bare-metal hosts meeting this specification",
+        "change required_scales explicitly with written and machine-enforced extrapolation",
+        "virtual machines cannot produce release evidence because their host frequency policy is unobservable"
+      ],
+      "rationale": "The machine-enforced required scale and section 0.5 require 21 real hosts. Each host needs at least 16 GiB because the 390.48 MiB pending-finality budget is only one component of node RSS and 12 GiB was already marginal; at least 1 Gbps because a 984260-byte maximum carrier consumes 78.7 ms at 100 Mbps before fan-out and 157.5 ms after accepted network headroom; NVMe SSD for state-database write amplification; and at least 8 physical cores. Release timing is attributable only with governor performance and boost/turbo disabled, because throttling changes latency and tail variance while boost makes peak frequency depend on thermals. A virtual guest cannot truthfully report host governor or boost state, so it cannot satisfy this profile. The actual CPU model is recorded only after the 21 hosts exist; the live criteria sentinel remains until then."
     },
     "headroom_fractions": {
       "status": "OWNER_ACCEPTED",
