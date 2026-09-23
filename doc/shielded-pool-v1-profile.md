@@ -1,6 +1,11 @@
 # TOS Shielded Pool — V1 Implementation Profile
 
-**Date:** 2026-09-20  
+**Frozen for coding:** 2026-09-20  
+**Bytes:** normative changes since that freeze move this document's bytes, and its bytes are the
+`profile_hash` of §13.1 -- which is in the config store, which is in the genesis state, which is half the
+deployment address. That coupling is deliberate: the document cannot drift away from the deployment
+quietly. What the bytes currently hash to is in `doc/shielded-pool/genesis-manifest.json`, which is
+generated. The date above is when the profile was frozen, not when it was last changed.  
 **Status:** **FROZEN FOR CODING**. This profile is the normative implementation target for Claude Code.  
 **Activation status:** **NOT APPROVED FOR MAINNET/TESTNET ACTIVATION** until **all acceptance gates in §19 pass**.
 
@@ -1559,21 +1564,53 @@ The contract MUST run shape/length checks before ML-DSA, Groth16, IMT hashing or
 
 Normal `deposit`, `transact` and `reserve_topup` paths **MUST NOT call ACCEPT**.
 
-Development gas/fee constants:
+Gas/fee constants:
 
 ```text
-DEPOSIT_GAS_CEILING    = 500_000
-TRANSACT_GAS_CEILING   = 2_000_000
-BOUNCE_GAS_CEILING     = 500_000
-TOPUP_GAS_CEILING      = 50_000
+DEPOSIT_GAS_CEILING    = 230_000
+TRANSACT_GAS_CEILING   = 1_510_000
+BOUNCE_GAS_CEILING     = 240_000
+TOPUP_GAS_CEILING      = 10_000
 RECOVERY_FEE_MARGIN    = 0
 ```
+
+Each ceiling is set by one rule, so that nobody picks a margin:
+
+```text
+B = an upper bound on the gas of the worst legal successful path for that
+    operation, under the Poseidon2 tariff and denomination list this profile
+    freezes
+C = max(10_000, round_up_10_000(ceil(B * 5 / 4)))
+```
+
+**`B` is a bound and not a measurement.** A transact ranges over a leaf index with 2^32 values, two anchor-ring
+occupancies, three anchor kinds, every configured denomination and two nullifier insertion orders; nothing built by
+hand visits enough of that product to establish a maximum over it, and a maximum over a sample is a sample. The
+bound is derived instead, from the structure of the handlers: each is a straight line whose variable calls read only
+their own arguments, so its cost is a constant plus one term per call, and
+
+```text
+cost(any legal path) <= cost(one measured transaction)
+                        + sum over calls of (that call's worst - its best)
+```
+
+where each span is one function over one domain small enough to walk end to end -- every configured denomination,
+all three anchor kinds, every slot of both rings at every occupancy either passes through, every base-seven digit at
+every tree level, both nullifier orders, and both ends of the `Coins` range the state cell stores. The corner that
+sum describes need not be reachable; an upper bound is not required to be attained.
+
+These four values were derived that way on 2026-09-23, against bounds of 176,694 / 1,205,003 / 186,991 / 2,480 for
+deposit / transact / bounce / top-up. An implementation MUST re-derive them, not re-measure them, whenever the
+Poseidon2 tariff, the denomination list, the handler code or the basechain gas schedule moves. The rule is stated as
+an equality and MUST be read as one: below it a legal path can be cut off inside a contract whose code hash is its
+address, and above it every sender on that path is charged `get_compute_fee(ceiling)` for compute nobody spends.
 
 `RECOVERY_FEE_MARGIN=0` is the frozen **coding-profile** value. Safety margin for a deployment is primarily
 provided by choosing `config.withdrawal_fee` above the measured minimum. If activation measurements require a
 non-zero protocol margin constant, change this profile/deployment before activation; Claude Code must not invent one.
 
-These are fail-closed coding/test ceilings, not production tariff claims.
+These ceilings are fail-closed: they bound what a bug can burn, and they are the sender's cost cap. They are stated
+for the tariff and configuration this profile freezes, and they are not a claim about any other.
 
 The critical rule is **message-local funding**. Global pool surplus may not substitute for required inbound
 funding.
@@ -1773,7 +1810,11 @@ Only after these cheap checks may the bounce handler call `ACCEPT`, immediately 
 set_gas_limit(BOUNCE_GAS_CEILING)
 ```
 
-This bounded accepted gas is paid from the withdrawal fee that the user already converted to reserve.
+This bounded accepted gas is charged to the value being recovered, at the prices live when the bounce arrives:
+section 15.4's `recovery_charge`. It is **not** pre-paid out of `config.withdrawal_fee`, and section 14.2's floor
+does not carry a term for it. It did until 2026-09-22, and that term was the dangerous one: an immutable fee had to
+stay ahead of a compute price the chain can govern upwards, so a large enough rise would have bricked every
+withdrawal permanently while deposits and transfers carried on.
 
 Tests MUST use a **real outbound -> failure -> protocol-generated bounce round trip**.
 A sandbox helper that merely fabricates `bounced=true` is not sufficient evidence.
@@ -2060,7 +2101,11 @@ Mainnet/testnet activation is blocked until all are true:
     note-specific owner-NF/ML-DSA keys and every unspent note.
 19. **Wire exactness:** malformed extra refs, trailing bits, wrong byte-chain lengths, non-canonical fields,
     bad anchor kind/id and wrong IMT path length/order all fail closed.
-20. **Gas ceilings:** measured maximum valid deposit/transact/bounce workloads fit §14 ceilings with margin.
+20. **Gas ceilings:** each §14.1 ceiling is exactly what the rule there gives for a **derived** bound, and the
+    derivation walks every variable call's whole domain -- every configured denomination, all three anchor kinds,
+    every slot of both rings at every occupancy, every base-seven digit at every tree level, both nullifier orders.
+    A sampled maximum does not close this gate; neither does a bound whose per-level composition is not itself held
+    against real multi-digit appends. Moving a ceiling in either direction must be killed.
 21. **Groth16 exactness:** proof/VK canonical encodings, 18-element input ordering and IC[19] are cross-checked
     against the selected prover library; one-field/public-input mutations fail.
 22. **State manifest:** zerostate initial roots, four state refs, dual anchor dictionaries, fee/denomination config,

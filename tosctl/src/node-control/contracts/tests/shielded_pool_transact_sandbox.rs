@@ -48,14 +48,16 @@ const EPOCH_NONE: u32 = 0xffff_ffff;
 const OP_TRANSACT: u32 = 0x5348_5002;
 const RESERVE_FLOOR: u64 = 5 * TOS;
 /// Section 14.1, frozen by the production rule
-/// C = max(10,000, round_up_10,000(ceil(M * 5 / 4))). A sender funds the
+/// C = max(10,000, round_up_10,000(ceil(B * 5 / 4))). A sender funds the
 /// ceiling, not what the path will use.
 ///
-/// The maximum is measured on the deployed configuration, at the dearest
-/// state a pool can be in: full anchor rings on the youngest tree that can
-/// have them. Full rings make a transact dearer and a higher leaf index makes
-/// it slightly cheaper, so the maximum is at neither end of a pool's life --
-/// 1,175,034 there, against 1,171,462 in a pool with nothing in it.
+/// `B` is a derived upper bound, not a measured maximum. The dearest state a
+/// pool can *reach* is full anchor rings on the youngest tree that can have
+/// them -- full rings make a transact dearer and a higher leaf index makes it
+/// slightly cheaper, so it is at neither end of a pool's life -- but the
+/// dearest state a transact can be *in* is not reachable at all, and that is
+/// what the ceiling has to cover. `gas_ceiling_bound.rs` derives it by walking
+/// each variable call's whole domain and adding the spans.
 ///
 /// Read out of the contract, never written down here. A ceiling copied into a
 /// test is a number this file can check against itself while the deployed

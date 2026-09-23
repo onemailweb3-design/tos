@@ -886,7 +886,17 @@ decision.** The genesis state hash moved with the profile
 the same safety standard the previous derivation settled on, applied to the
 only term the floor still has. It clears the forwarding price this chain
 charged until `3c7f4036d` by 3.76x, where 50,000,000 cleared the gas price it
-had just left by 3.35x. The genesis state hash moved again, to `28c9f65b...`.
+had just left by 3.35x. The genesis state hash moved again.
+
+It has moved since, most recently on 2026-09-23 when section 14.1's gas
+ceilings stopped being sampled maxima and became derived bounds: the profile's
+bytes are the `profile_hash`, the hash is in the config store, the store is in
+the state, and the state is half the address. That is the intended coupling and
+not a surprise. **The current value is in
+`doc/shielded-pool/genesis-manifest.json`**, which the generator writes; a hash
+quoted in prose is a copy, and a copy of a hash is exactly the thing that goes
+stale without anything failing. This page named one for two generations after
+it stopped being true.
 
 **Nothing is outstanding on this page that a ceremony has to wait for.**
 

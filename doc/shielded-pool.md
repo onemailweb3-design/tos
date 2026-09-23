@@ -525,8 +525,10 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   That charge is the bounce ceiling priced at the chain's live rate, so
   re-deriving the ceiling moved it: at the old 220,000 it was 1,466,669. The
   smallest bounce worth minting a note for rose with it, which is the cost of
-  erring high on a ceiling and is paid only by bounces that are already
-  close to worthless.
+  erring high on a ceiling and is paid only by bounces that are already close
+  to worthless. On a real chain a bounce of a whole denomination returns
+  999,094,425 and mints **997,494,423** — the difference is that charge, to
+  the nanoton.
 
   That moves two things, and the second is the reason for it.
 
@@ -631,19 +633,25 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   | ordinary payment | 0.000356 | 0.000202 |
 
   Both middle figures are a withdrawal, which is the transact the harness
-  runs; its charge includes the payout message's forward fee, so it is 295,368
-  nanotos above what its 1,171,374 gas costs on its own. A transact that pays
-  nobody out is cheaper — 1,144,235 gas, 0.007628 in compute — but it attaches
-  the same 0.010067, because the ceiling is one number for both branches. A
-  ceiling of its own would save a transfer about 2.5%; it was offered and not
-  taken.
+  runs; its charge includes the payout message's forward fee, so it is about
+  295,000 nanotos above what its 1,171,516 gas costs on its own. A transact
+  that pays nobody out is cheaper — 1,144,476 gas, 0.007630 in compute — but it
+  attaches the same 0.010067, because the ceiling is one number for both
+  branches. A ceiling of its own would save a transfer about 2.5%; it was
+  offered and not taken.
 
   The cut lands almost entirely on computation, which is the point: an
   ordinary payment is about half forwarding, so it falls 43% where a private
-  transfer falls 90%. Nothing about the pool moved — prices live in the
-  chain's zerostate, so `profile_hash`, the genesis state hash `fd9303eb…` and
-  the deployment address are where they were, and every gas figure above is a
-  count of work and unchanged.
+  transfer falls 90%. Nothing about the pool moved *for this reason* — prices
+  live in the chain's zerostate, so `profile_hash`, the genesis state hash and
+  the deployment address were untouched by the cut, and every gas figure above
+  is a count of work and unchanged.
+
+  This paragraph used to name the state hash. It named `fd9303eb…`, which by
+  then had been superseded twice for unrelated reasons, and would have gone on
+  naming it. The current value is in `doc/shielded-pool/genesis-manifest.json`,
+  which is generated; prose that repeats a generated hash is a copy that
+  cannot fail.
 
 **On a real chain, not only in the executor**
 
@@ -653,27 +661,53 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   a chain: it has no block production, no message queue, no forward fees and
   no account storage.
 
-  Four paths have been through it: a deposit, a withdrawal whose payout is
-  taken, a payout the recipient refuses, and the recovery note that refusal
-  mints. **The figures in this section predate the re-derived ceilings**: the
-  gas counts are counts of work and do not move, but what a sender attaches,
-  what a recovery is charged and the deployment address all follow the
-  ceilings, and the run is repeated against the final artifacts when the
-  profile and the address are reconciled to them. **The chain charged the same gas as the sandbox on every message.**
-  The harness attaches section 14.1's minimum to the nanoton rather than a
-  padded value, because a run that carries more than the funding rule demands
-  is not testing the funding rule.
+  Five money paths have been through it: a deposit, a withdrawal whose payout
+  is taken, a payout the recipient refuses, the recovery note that refusal
+  mints, and a private transfer that pays nobody. **The chain charged the same
+  gas as the sandbox on every message.** The harness attaches section 14.1's
+  minimum to the nanoton rather than a padded value, because a run that
+  carries more than the funding rule demands is not testing the funding rule.
 
-  `--validators N` builds a set rather than a single node, and both scenarios
-  have been run on three. It is worth keeping separate from the rest: with one
-  validator there is no catchain round and no block anyone has to accept from
-  somebody else, so "the executor runs a transact" and "a validator set agrees
-  on a block containing one" are different claims, and a transact is by a
-  wide margin the heaviest transaction this chain has. On three validators the
-  figures are the same to the gas — a deposit at 155,694 and 157,584, a taken
-  withdrawal at 1,171,374, a refused one at 1,171,462 and its recovery at
-  167,058, each equal to the sandbox and each inside its ceiling — and the
-  withdrawal cost 0.008104 TOS.
+  Re-run on 2026-09-23 against the final artifacts — the derived ceilings, the
+  profile that states them, the `profile_hash` those bytes give, the genesis
+  state the manifest names, and the address it puts the pool at:
+
+  | | gas | ceiling | what the sender attached |
+  |---|---:|---:|---:|
+  | deposit, first | 155,679 | 230,000 | 1.001533335 |
+  | deposit, second | 157,569 | 230,000 | 1.001533335 |
+  | withdrawal, payout taken | 1,171,516 | 1,510,000 | 0.010066675 |
+  | withdrawal, payout refused | 1,171,516 | 1,510,000 | 0.010066675 |
+  | recovery the refusal mints | 167,272 | 240,000 | — (the bounce carries it) |
+  | private transfer | 1,144,476 | 1,510,000 | 0.010066675 |
+
+  The transfer sent **zero** outbound messages, which is the whole of what a
+  transfer must do and the only money path that had never run on a chain.
+
+  `--validators N` builds a set rather than a single node, and the heaviest
+  path — withdrawal, refusal, bounce and recovery — has been run on three
+  against these same artifacts. It is worth keeping separate from the rest:
+  with one validator there is no catchain round and no block anyone has to
+  accept from somebody else, so "the executor runs a transact" and "a validator
+  set agrees on a block containing one" are different claims, and a transact is
+  by a wide margin the heaviest transaction this chain has. On three validators
+  every figure above is identical to the gas.
+
+  **One thing here is measured and not explained.** Across six fixture builds
+  the withdrawal has come out at two values 158 apart — 1,171,358 and
+  1,171,516 — and the sandbox moved with the chain each time, so whatever it
+  is lives in the fixture rather than in block production. Every build against
+  the final profile gave the higher figure; three earlier builds gave the lower
+  one twice.
+
+  Measured in isolation, the nullifier order accounts for **83** of the gap:
+  which of the two nullifiers is smaller decides whether the second insert's
+  predecessor is the head sentinel or the leaf the first insert just added, and
+  the pair costs 329,302 one way and 329,385 the other. The remaining **75 gas
+  is unattributed**, and it is recorded here rather than tidied away. It is six
+  thousandths of one percent of the path, the derived bound covers it many
+  times over, and within every run the chain and the sandbox agreed exactly —
+  which is the claim this harness exists to make.
 
   Two things were found here that no sandbox could have found. `POSEIDON2_PATH7`
   in the C++ VM lost its domain after the first level, so a withdrawal was
