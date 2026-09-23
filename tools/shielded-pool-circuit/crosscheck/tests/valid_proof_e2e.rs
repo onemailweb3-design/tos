@@ -311,8 +311,23 @@ fn a_private_transfer_with_a_proof_that_verifies() {
     }
 
     let liability_before = pool.get("native_liability").expect("liability");
-    let (exit, used) = pool.run(COMPUTE_FEE * 4, build(Tamper::default())).expect("transact");
+    let (exit, used, sent) =
+        pool.run_counting_sends(COMPUTE_FEE * 4, build(Tamper::default())).expect("transact");
     assert_eq!(exit, 0, "the transfer was refused with exit {exit}");
+
+    // The property that makes this a transfer and not a withdrawal.
+    //
+    // Everything below -- the roots, the indices, the unchanged liability --
+    // a withdrawal would move the same way or nearly so, and none of it
+    // excludes a payment. A message the pool sends is public: it names an
+    // amount and a destination, and that is exactly the pair this pool exists
+    // to hide. So the count is asserted directly rather than inferred from a
+    // balance somewhere, which can only ever say "that particular account did
+    // not visibly gain", not "nobody was paid".
+    assert_eq!(
+        sent, 0,
+        "a private transfer sent {sent} message(s). A transfer pays nobody, and anything it          sends is public."
+    );
 
     // Section 14.1. The contract sets this on itself, and a sender prepays
     // `get_compute_fee(ceiling)` rather than what the path costs, so the

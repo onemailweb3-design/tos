@@ -302,6 +302,38 @@ impl Pool {
         Ok(self.bc.send_message(msg)?)
     }
 
+    /// The exit code, the gas, and how many messages the pool sent.
+    ///
+    /// The count is the half that distinguishes a transfer from a withdrawal.
+    /// Both move every root the same way -- the same two nullifier insertions
+    /// and the same three commitment appends run before the withdrawal branch
+    /// is even reached -- so no root can tell them apart. What a transfer must
+    /// do is send nothing, and a message the pool sends is public: it says a
+    /// transfer happened and who it went to, which is the whole of what this
+    /// pool exists to hide.
+    pub fn run_counting_sends(&mut self, value: u64, body: Cell) -> Result<(i32, i64, usize)> {
+        let result = self.send(value, body)?;
+        let sent = result
+            .first_transaction()
+            .ok_or_else(|| CrossCheckError::Vm("the pool did not run at all".into()))?
+            .out_msgs
+            .len()
+            .map_err(|error| CrossCheckError::Vm(format!("counting outbound messages: {error}")))?;
+        match result.read_primary_description().compute_ph {
+            chain_block::TrComputePhase::Vm(vm) => Ok((
+                vm.exit_code,
+                vm.gas_used
+                    .to_string()
+                    .parse()
+                    .map_err(|error| CrossCheckError::Vm(format!("gas used: {error}")))?,
+                sent,
+            )),
+            chain_block::TrComputePhase::Skipped(s) => {
+                Err(CrossCheckError::Vm(format!("compute skipped: {:?}", s.reason)))
+            }
+        }
+    }
+
     /// The exit code and the gas it took to get there.
     pub fn run(&mut self, value: u64, body: Cell) -> Result<(i32, i64)> {
         let result = self.send(value, body)?;

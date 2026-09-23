@@ -105,6 +105,12 @@ pub struct Outcome {
     pub bounced_from: Option<String>,
     pub destination: String,
     pub transactions: usize,
+    /// How many messages the pool's own transaction sent.
+    ///
+    /// The positive control for the assertion a private transfer carries: a
+    /// transfer must send nothing, and a claim that something counts zero is
+    /// worth nothing until the same counter has been seen to count one.
+    pub sent_by_the_pool: usize,
     /// What the transact itself cost, payout included.
     /// The transact's own exit code.
     pub exit: i32,
@@ -432,6 +438,12 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         result.transaction_count()
     );
     let transactions = result.transaction_count();
+    let sent_by_the_pool = result
+        .first_transaction()
+        .expect("the pool ran")
+        .out_msgs
+        .len()
+        .expect("counting what the pool sent");
     let mut refused_at = None;
     let mut bounced_from = None;
     let mut recovery_gas = 0i64;
@@ -466,6 +478,7 @@ pub fn run(withdrawal: &Withdrawal) -> Outcome {
         pool.get("native_liability").expect("liability").parse().expect("a number");
     let balance = pool.bc.get_account(&pool.addr).expect("the pool account");
     Outcome {
+        sent_by_the_pool,
         pool_liability_before: liability_before,
         pool_liability_after: liability_after,
         commitment_next_index: pool.get("commitment_next_index").expect("next index"),

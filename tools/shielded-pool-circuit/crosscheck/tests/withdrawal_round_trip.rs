@@ -55,6 +55,16 @@ fn a_withdrawal_that_is_refused_comes_back_as_a_note() {
         outcome.transactions, 3,
         "a round trip is the message in, the payout out, and the bounce back"
     );
+    // The positive control for the transfer's "it sent nothing".
+    //
+    // `valid_proof_e2e` requires a private transfer's pool transaction to send
+    // zero messages. A counter that has only ever been seen to read zero is
+    // not evidence that anything is being counted, so the withdrawal -- which
+    // must send exactly the payout -- pins the other end of the same counter.
+    assert_eq!(
+        outcome.sent_by_the_pool, 1,
+        "a withdrawal sends its payout and nothing else; this counter is what a transfer's          zero is measured against"
+    );
     assert_eq!(outcome.nullifier_next_index, "3", "two nullifiers should have been spent");
     // Two deposits, three outputs from the transact, one recovery note.
     assert_eq!(outcome.commitment_next_index, "6", "the recovery did not mint a note");

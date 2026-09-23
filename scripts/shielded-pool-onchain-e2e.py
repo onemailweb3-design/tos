@@ -745,6 +745,29 @@ async def run(args) -> int:
                     f"{balance} nanotos, more than the {deployed} it was deployed with: "
                     f"something paid it"
                 )
+
+            # And the claim itself, rather than a consequence of it.
+            #
+            # A balance can only say "that particular account did not visibly
+            # gain". It cannot say nobody was paid: a small receipt hides under
+            # the deployment and storage costs, and a payment to some other
+            # address is not looked at by it at all. What a transfer must do is
+            # send nothing, and what the pool sends is public -- an amount and
+            # a destination, which is the pair this pool exists to hide. So the
+            # outbound set is read off the chain and required to be empty.
+            if paid == 0:
+                final = describe_transaction(rpc_address, address_text)
+                outbound = len((final or {}).get("out_msgs", []))
+                log(f"  {'messages the pool sent':<34} {outbound}")
+                if final is None:
+                    failures.append(
+                        "no transaction was found on the pool, so what it sent is unknown"
+                    )
+                elif outbound != 0:
+                    failures.append(
+                        f"a private transfer sent {outbound} message(s). A transfer pays "
+                        f"nobody, and anything it sends is public."
+                    )
         finally:
             for task in tasks:
                 task.cancel()
