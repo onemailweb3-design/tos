@@ -253,7 +253,21 @@ async def _resource_monitor(node: Any, output: Path, stop: asyncio.Event) -> Non
                             status[key] = value.strip()
                 stat = Path(f"/proc/{pid}/stat").read_text().split()
                 io = Path(f"/proc/{pid}/io").read_text()
-            except FileNotFoundError:
+            except (FileNotFoundError, PermissionError) as error:
+                stream.write(
+                    json.dumps(
+                        {
+                            "kind": "resource_monitor_stopped",
+                            "monotonic_ns": time.monotonic_ns(),
+                            "wall_unix_ns": time.time_ns(),
+                            "reason": type(error).__name__,
+                            "detail": str(error),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+                stream.flush()
                 break
             stream.write(
                 json.dumps(
@@ -432,6 +446,21 @@ def _observation_intervals(observed: list[ObservedBlock]) -> list[dict[str, Any]
         }
         for previous, current in zip(observed, observed[1:], strict=False)
     ]
+
+
+def _simplex_session_log_paths(nodes: list[Any], validator_names: list[str]) -> dict[str, Path]:
+    nodes_by_name = {node.name: node for node in nodes}
+    if len(nodes_by_name) != len(nodes):
+        raise RuntimeError("N6_SUSTAINED_CONSENSUS_FAILURE: observed node names are not unique")
+    missing = sorted(set(validator_names) - set(nodes_by_name))
+    if missing:
+        raise RuntimeError(
+            "N6_SUSTAINED_CONSENSUS_FAILURE: Simplex validators are absent from the observed "
+            f"node set: {missing}"
+        )
+    return {
+        node_name: Path(nodes_by_name[node_name].session_log_path) for node_name in validator_names
+    }
 
 
 def analyze_simplex_skip_runs(
@@ -845,7 +874,7 @@ async def observe_sustained_consensus(
         # once at the end avoids treating its final buffered batch as no skips.
         await asyncio.sleep(SUSTAINED_SESSION_LOG_FLUSH_SECONDS)
         skip_evidence = analyze_simplex_skip_runs(
-            {node.name: Path(node.session_log_path) for node in nodes},
+            _simplex_session_log_paths(nodes, simplex_validator_names),
             _observation_intervals(observed),
             simplex_validator_names,
         )

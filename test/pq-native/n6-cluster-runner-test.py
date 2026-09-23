@@ -10,6 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "test/tostester/src"))
@@ -19,6 +20,8 @@ from tostester.n6_cluster import (  # noqa: E402
     SustainedObservationConfig,
     _is_lite_transport_error,
     _masterchain_heights,
+    _resource_monitor,
+    _simplex_session_log_paths,
     _wait_all_heights,
     analyze_consensus_milestones,
     analyze_live_finality,
@@ -279,6 +282,26 @@ async def check_startup_transport_retry() -> None:
     )
 
 
+async def check_resource_monitor_terminal_record(directory: Path) -> None:
+    output = directory / "resource-monitor.jsonl"
+    node = SimpleNamespace(name="node-a", process_id=12345)
+    with patch.object(Path, "read_text", side_effect=PermissionError("proc io denied")):
+        await _resource_monitor(node, output, asyncio.Event())
+    records = [json.loads(line) for line in output.read_text().splitlines()]
+    require(
+        len(records) == 1,
+        "resource monitor did not write exactly one terminal record",
+    )
+    require(
+        records[0]["kind"] == "resource_monitor_stopped"
+        and records[0]["reason"] == "PermissionError"
+        and records[0]["detail"] == "proc io denied"
+        and isinstance(records[0]["monotonic_ns"], int)
+        and isinstance(records[0]["wall_unix_ns"], int),
+        "resource monitor did not record why proc sampling stopped",
+    )
+
+
 async def check_observer_retry_window_composition() -> None:
     config = SustainedObservationConfig(
         blocks=2,
@@ -413,6 +436,20 @@ def check_simplex_skip_run_correlation(directory: Path) -> None:
     session_id = "simplex-masterchain-session"
     candidates = ((10, 100), (11, 113), (12, 114), (13, 120))
     validator_names = ["node-a", "node-b", "node-c", "node-d"]
+    selected_logs = _simplex_session_log_paths(
+        [
+            *[
+                SimpleNamespace(name=name, session_log_path=directory / f"{name}-session.jsonl")
+                for name in validator_names
+            ],
+            SimpleNamespace(name="observer", session_log_path=directory / "missing-observer-log"),
+        ],
+        validator_names,
+    )
+    require(
+        set(selected_logs) == set(validator_names) and "observer" not in selected_logs,
+        "non-validating verifier was incorrectly required to have a Simplex session log",
+    )
     node_skip_slots = {
         "node-a": list(range(101, 113)) + list(range(115, 120)),
         "node-b": list(range(101, 111)) + list(range(115, 119)),
@@ -636,6 +673,7 @@ def main() -> int:
         asyncio.run(check_sustained_agreement())
         asyncio.run(check_sustained_transport_retry())
         asyncio.run(check_startup_transport_retry())
+        asyncio.run(check_resource_monitor_terminal_record(root))
         asyncio.run(check_observer_retry_window_composition())
         check_sustained_summary()
         check_simplex_skip_run_correlation(root)
