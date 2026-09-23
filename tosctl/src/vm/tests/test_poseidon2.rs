@@ -348,6 +348,42 @@ fn the_vector_the_cpp_vm_is_pinned_to() {
 const CPP_VM_VECTOR: &str = "12d4dd5748fd48cd8a53067a28ca130a52134c5877c81426b8328cdacfa0ee35";
 
 #[test]
+/// An index that does not fit its depth is decided before any level is paid
+/// for.
+///
+/// Pinned by starving it rather than by reading a gas figure: given a budget
+/// that covers the base charge and no level, the refusal must still be a range
+/// check. A VM that walked the twelve levels first would run out of gas before
+/// it ever looked at the leftover digit, and would answer `OutOfGas` here.
+///
+/// This is the half that was missing. The malformed corpus below asserts the
+/// exception and says nothing about the price, and the two VMs disagreed about
+/// the price by twelve levels -- the C++ one charged more to refuse an
+/// oversized index than to walk a real path. An exception that is right at any
+/// price is not the same instruction.
+#[test]
+fn an_index_past_the_depth_is_refused_before_a_level_is_charged() {
+    let siblings = sample(DEPTH);
+    // 7^12: the smallest index needing a thirteenth base-seven digit.
+    const PAST_THE_DEPTH: u64 = 13_841_287_201;
+    // The base, and not one level. Enough slack for the surrounding
+    // continuation, nowhere near the 3,000 a level costs.
+    const ONLY_THE_BASE: i64 = 500 + 100;
+
+    test_case("POSEIDON2_PATH7")
+        .with_block_version(PATH7_VERSION)
+        .with_stack(path_stack(
+            small(1),
+            small(2),
+            path_cells(&siblings, None, false),
+            PAST_THE_DEPTH,
+            DEPTH as u64,
+        ))
+        .with_gas_limit(ONLY_THE_BASE)
+        .expect_failure(ExceptionCode::RangeCheckError);
+}
+
+#[test]
 fn a_path_costs_its_base_plus_a_level() {
     let siblings = sample(DEPTH);
     test_case("POSEIDON2_PATH7")

@@ -181,6 +181,26 @@ CASES = [
                            'pub(super) const PATH7_LEVEL_GAS_PRICE: i64 = 2999;'))],
          expect_red={'vm': ['a_path_costs_its_base_plus_a_level']},
          expect_green=['cpp']),
+    # The ordering that decides an oversized index. Both VMs must refuse it
+    # before charging a level; until 2026-09-23 the C++ one refused after
+    # twelve of them, and charged more to refuse than to succeed. Two
+    # implementations of one public instruction that price the same operand
+    # differently are two instructions.
+    Case('cpp/path7-index-decided-late', 'the oversized index is decided after the loop, C++',
+         [(CPP_OPS, replace('  if (remaining->sgn() != 0) {\n'
+                            '    throw VmError{Excno::range_chk, "Poseidon2 path index is past the depth given"};\n'
+                            '  }\n\n  Ref<Cell> node = std::move(path);',
+                            '  Ref<Cell> node = std::move(path);'))],
+         expect_red={'cpp': ['refusing an oversized index cost']},
+         expect_green=['block', 'vm']),
+    Case('rust/path7-index-not-refused', 'the leftover digit is not refused, Rust',
+         [(RS_OPS, replace('    if value.iter().any(|byte| *byte != 0) {\n'
+                           '        fail!(ExceptionCode::RangeCheckError, "Poseidon2 path index is past the depth given");\n'
+                           '    }',
+                           '    // mutated'))],
+         expect_red={'vm': ['an_index_past_the_depth_is_refused_before_a_level_is_charged']},
+         expect_green=['cpp']),
+
     Case('rust/path7-base-price', 'the PATH7 base costs nothing, Rust',
          [(RS_OPS, replace('pub(super) const PATH7_BASE_GAS_PRICE: i64 = 500;',
                            'pub(super) const PATH7_BASE_GAS_PRICE: i64 = 0;'))],

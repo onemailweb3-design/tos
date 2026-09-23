@@ -534,6 +534,87 @@ long long path7_gas(int depth) {
   return state.gas_consumed();
 }
 
+// The same run, with the index as a parameter and the refusal kept rather
+// than asserted away. A malformed operand has a price as well as an
+// exception, and the price is the half nobody was checking.
+struct Path7Run {
+  int exit;
+  long long gas;
+};
+
+Path7Run path7_run(int depth, td::RefInt256 index) {
+  std::vector<std::array<unsigned char, 6 * 32>> levels;
+  for (int level = 0; level < depth; ++level) {
+    std::array<unsigned char, 6 * 32> packed{};
+    for (int position = 0; position < 6; ++position) {
+      const auto value = sibling(level, position);
+      std::memcpy(packed.data() + position * 32, value.data(), 32);
+    }
+    levels.push_back(packed);
+  }
+  unsigned char leaf[32] = {};
+  leaf[31] = 0x11;
+  unsigned char domain[32] = {};
+  domain[31] = 0x2b;
+  td::Ref<vm::Stack> stack{true};
+  stack.write().push_int(int_of(leaf));
+  stack.write().push_int(int_of(domain));
+  stack.write().push_cell(build_path(levels));
+  stack.write().push_int(std::move(index));
+  stack.write().push_int(td::make_refint(depth));
+  vm::VmState state{vm::load_cell_slice_ref(opcode_cell(vm::poseidon2_path7_opcode)), 18, std::move(stack),
+                    vm::GasLimits{10000000, 10000000}};
+  const int exit = ~state.run();
+  return Path7Run{exit, state.gas_consumed()};
+}
+
+// An index that does not fit its depth costs the base and nothing else.
+//
+// This is the assertion that was missing, and its absence let the two VMs
+// charge differently for one public instruction. The Rust VM decides the
+// index from `(index, depth)` before touching a cell; this one used to run
+// every level first and refuse afterwards, so the same operand cost 500 gas
+// there and 500 plus twelve levels here.
+//
+// Both halves matter. Asserting only the exception -- which the Rust
+// malformed corpus did -- leaves the price free to diverge, and the price is
+// what a node charges.
+void check_path7_index_refusal_is_cheap() {
+  constexpr int kDepth = 12;
+  // 7^12, the smallest index that needs a thirteenth base-seven digit.
+  td::RefInt256 past = td::make_refint(1);
+  for (int i = 0; i < kDepth; ++i) {
+    past = past * td::make_refint(7);
+  }
+
+  const Path7Run refused = path7_run(kDepth, past);
+  require(refused.exit == static_cast<int>(vm::Excno::range_chk),
+          "an index past the depth exited " + std::to_string(refused.exit) +
+              ", not a range check");
+
+  // What a refusal at depth 1 costs, which is the base plus this harness's
+  // own fixed cost and no level at all. A refusal at depth 12 must cost the
+  // same: the index is decided before any level is charged, so depth cannot
+  // enter the price of refusing it.
+  const Path7Run shallow = path7_run(1, td::make_refint(7));
+  require(shallow.exit == static_cast<int>(vm::Excno::range_chk),
+          "an index past a depth of one was not refused");
+  require(refused.gas == shallow.gas,
+          "refusing an oversized index cost " + std::to_string(refused.gas) +
+              " gas at depth 12 and " + std::to_string(shallow.gas) +
+              " at depth 1. The index must be decided before any level is "
+              "charged, or the price of a malformed operand grows with a depth "
+              "whose levels are never walked.");
+
+  // And it is cheaper than doing the work, by about the levels it skips.
+  const long long honest = path7_gas(kDepth);
+  require(refused.gas * 4 < honest,
+          "refusing an oversized index cost " + std::to_string(refused.gas) +
+              " against " + std::to_string(honest) +
+              " for walking the path, which is not the early refusal this "
+              "claims to be.");
+}
+
 void check_path7_gas() {
   // A level is the tariff plus the two cells it reads. `cell_load_gas_price`
   // is 100, and both cells are new to this transaction.
@@ -580,6 +661,7 @@ int main() {
       {"opcode registration", check_opcode_registration},
       {"path7", check_path7},
       {"path7 gas", check_path7_gas},
+      {"path7 index refusal is cheap", check_path7_index_refusal_is_cheap},
   };
   // The VM narrates every instruction at info level; only failures matter here.
   SET_VERBOSITY_LEVEL(VERBOSITY_NAME(ERROR));
