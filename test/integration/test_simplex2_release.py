@@ -24,6 +24,7 @@ from pathlib import Path
 
 from tostester.install import Install
 from tostester.network import FullNode, Network, StartOptions
+from tostester.pq_initial_validator import make_deterministic_pq_initial_validator
 
 
 OBSERVER_CREATED = re.compile(
@@ -174,9 +175,9 @@ async def _observer_churn(args: argparse.Namespace) -> int:
 
         dht = network.create_dht_node()
         nodes: list[FullNode] = []
-        for _ in range(args.validators):
+        for validator_index in range(args.validators):
             node = network.create_full_node()
-            node.make_initial_validator()
+            make_deterministic_pq_initial_validator(node, validator_index)
             node.announce_to(dht)
             nodes.append(node)
         for key_file in network_dir.glob("node*/keyring/*"):

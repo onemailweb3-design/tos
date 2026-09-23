@@ -25,6 +25,7 @@ from tostester.install import Install
 from tostester.key import Key
 from tostester.network import NetworkConfig
 from tostester.zerostate import (
+    PqInitialValidator,
     SimplexConsensusConfig,
     _launch_validator_counts,
     create_zerostate,
@@ -189,6 +190,17 @@ def test_validator_economics_profile_requires_exactly_four_keys(tmp_path):
     duplicate = Key()
     with pytest.raises(ValueError, match="unique genesis validator keys"):
         create_zerostate(install, tmp_path, config, [duplicate] * 4)
+
+    pq_validator = PqInitialValidator(
+        validator_id=b"v" * 32,
+        key_id=b"k" * 32,
+        public_key=b"p" * 1312,
+        adnl_id=b"a" * 32,
+    )
+    with pytest.raises(ValueError, match="exactly four genesis validators"):
+        create_zerostate(install, tmp_path, config, [], [pq_validator] * 3)
+    with pytest.raises(ValueError, match="unique genesis validator keys"):
+        create_zerostate(install, tmp_path, config, [], [pq_validator] * 4)
 
 
 def test_validator_election_stage_a_profile_is_isolated_and_accelerated(tmp_path):

@@ -31,6 +31,7 @@ import nacl.signing
 
 from tostester.install import Install
 from tostester.network import FullNode, Network, StartOptions
+from tostester.pq_initial_validator import make_deterministic_pq_initial_validator
 from contract import WalletV1, WalletV1Blueprint, tos
 from pytosiq_core import (
     Address, Builder, Cell, InternalMsgInfo, MessageAny, WalletMessage,
@@ -352,9 +353,9 @@ async def main(
             )
         dht = network.create_dht_node()
         nodes: list[FullNode] = []
-        for _ in range(num_validators):
+        for validator_index in range(num_validators):
             node = network.create_full_node()
-            node.make_initial_validator()
+            make_deterministic_pq_initial_validator(node, validator_index)
             node.announce_to(dht)
             nodes.append(node)
 

@@ -23,14 +23,14 @@ Registered gates:
 - `n6-instrumentation-byte-equivalence`
 
 Branch CI also configures, but does not build, the repository and runs the
-complete `source-guard` label. The inventory checker requires the exact 22
+complete `source-guard` label. The inventory checker requires the exact 23
 guard ids before CTest runs; `--no-tests=error` remains as the independent
 empty-selection check. Labels live beside each test registration. This now
 includes `n6-cluster-runner`, `pq-finality-boundary-source`, and
 `consensus-no-fallback`, which are configure-only checks that previously ran
 only as part of the main-only full CTest workflow. Removing one label makes
 the inventory fail naming the missing guard, rather than allowing the other
-21 to hide its absence.
+22 to hide its absence.
 
 A separate branch workflow builds only the native artifacts required by the
 Python fixtures, runs the complete Python suite, and boots
@@ -44,10 +44,13 @@ generated TL API, full pytest invocation, required native targets, and real
 PQ-chain invocation so that coverage cannot silently return to main-only.
 
 The first cold branch-chain run at `5d69c798c` spent 2,323 seconds in the
-native fixture build and 2,553 seconds overall. The next run at `46b76fde7`
-restored the 32 MiB object cache: step 7 fell to 755 seconds and the total to
-about 950 seconds. Its post-build statistics reported 464/464 cacheable calls,
-464 direct hits and zero misses. The remaining warm-build cost is therefore
+native fixture build and 2,553 seconds overall. Two independent warm runs then
+spent 755 and 753 seconds in that build; their Python suites took 13 and 11
+seconds, and their four-validator PQ chain regressions took 16 and 22 seconds.
+The measured per-push steady state is therefore about 16 minutes, not the
+earlier six-to-eight-minute estimate. The run at `46b76fde7` reported 464/464
+cacheable calls, 464 direct hits and zero misses after restoring the 32 MiB
+object cache. The remaining warm-build cost is therefore
 the non-compiler portion of the 1,143-edge graph (generation, archives and
 links), not a production-build cache-key defect. The cache key intentionally
 includes the Git SHA and reuses prior data through its prefix restore, so each
@@ -81,16 +84,20 @@ ordering.  Source inspection alone is not closure evidence.  While it remains
 open, RELEASE mode refuses it by name.
 
 The second open question records an execution-coverage gap uncovered while
-moving the wallet regression to the PQ path. Sixteen E2E scripts contain 17
-calls to `make_initial_validator()`. A direct two-validator reproduction shows
-the manager refusing their classical descriptors, disabling validation and
-reporting `Validating 0 groups`; the chain never reaches masterchain seqno 1.
-No branch CI job boots a chain: `build-tos-linux-x86-64-shared.yml` declares
-`on.push.branches: [main]`, while `tosctl-service.yml` declares
-`jobs.real-chain-explorer.if: github.event_name == 'workflow_dispatch'`
-(observed skipped on run `35748202781`). Thus branch CI did not expose this
-state.
-The affected inventory is:
+moving the wallet regression to the PQ path. The retained inventory is 15
+entry-point files containing 16 initial-validator call sites (DNS owns two
+independent networks). A direct two-validator reproduction showed the manager
+refusing their former classical descriptors, disabling validation and
+reporting `Validating 0 groups`; the chain never reached masterchain seqno 1.
+At discovery, `build-tos-linux-x86-64-shared.yml` ran only on pushes to main
+and `tosctl-service.yml` made its real-chain explorer manual-only (observed
+skipped on run `35748202781`). Thus branch CI did not expose this state.
+
+All retained paths now call `make_deterministic_pq_initial_validator`. The
+source guard derives the inventory from an exact table: a direct classical or
+low-level PQ call or a missing shared-helper call fails by file name, and a
+change to the retained entry-point set requires an explicit table update. The
+affected inventory is:
 
 - `test/integration/test_simplex2_release.py`;
 - `scripts/localnet-jsonrpc.py` (and therefore its TOSCAN consumer);
@@ -102,12 +109,38 @@ The affected inventory is:
 - `scripts/validator-election-stage-a.py`, `dns-e2e.py`, and
   `nominator-pool-lifecycle-e2e.py`.
 
-Recommended disposition: first classify each entry as retained or retired.
-Then make every retained path consume one shared deterministic PQ
-initial-validator helper and execute each advertised route against a real PQ
-chain in branch CI. Retired scripts must be removed from release claims and
-entry-point inventories. This unit registers that work; it does not perform 16
-independent conversions before ownership and retained scope are decided.
+The first execution pass on the converted tree produced this route-level
+inventory. `localnet-jsonrpc.py` is a resident service, so its PASS means its
+demo transfer completed and it handled an external bounded-run interrupt; the
+other PASS rows exited zero themselves.
+
+| Entry point | Result | Furthest demonstrated step or named failure |
+|---|---|---|
+| `test/integration/test_simplex2_release.py` | FAIL after chain progress | seven validators reached height 168; observer group create/start/destroy and multi-session coverage remained zero |
+| `scripts/localnet-jsonrpc.py` | PASS | JSON-RPC ready; demo wallet balance changed from zero to 4.999999000 TOS |
+| `scripts/agent-wallet-account-e2e.py` | FAIL after deployment | wallet and Agent Account deployed; bodyless native Gift stopped at ambiguous-broadcast finality resolution |
+| `scripts/agent-query-api-e2e.py` | PASS | all advertised query routes passed |
+| `scripts/agent-chain-index-e2e.py` | PASS | all advertised indexing routes passed |
+| `scripts/agent-task-escrow-e2e.py` | FAIL after direct happy path | controller accept refused because fewer than two quorum configs were supplied |
+| `scripts/agent-economy-composed-e2e.py` | FAIL after task assignment and attestation | controller accept refused because fewer than two quorum configs were supplied |
+| `scripts/proof-attestation-e2e.py` | PASS | all proof-attestation routes passed |
+| `scripts/capability-registry-e2e.py` | PASS | all registry lifecycle routes passed |
+| `scripts/dispute-e2e.py` | PASS | all dispute routes passed |
+| `scripts/service-actor-e2e.py` | FAIL after HTTP readiness | service deployed and HTTP checks passed; `service_show` then failed through the sole chain-RPC endpoint |
+| `scripts/wc0-token-index-e2e.py` | PASS | all workchain-zero token-index routes passed |
+| `scripts/dns-e2e.py` | FAIL in governance network | genesis-pinned DNS network passed; validator proposal did not register or activate ConfigParam 4 |
+| `scripts/nominator-pool-lifecycle-e2e.py` | FAIL after chain bootstrap | chain reached height 5, but validator wallet 0 remained unfunded for the 60-second budget; stake was not reached |
+| `scripts/validator-election-stage-a.py` | FAIL at stake | chain reached height 1182 and negative election cases passed; validator 1's classical stake stayed unaccepted |
+
+The economics profile now counts the combined bootstrap validator set and
+checks uniqueness for either classical or PQ public keys; mixed descriptor
+sets remain refused. This was necessary for the two election fixtures to reach
+their advertised stake step and is covered in both descriptor modes. The
+execution list is intentionally not reported as “15 scripts converted and
+passing”: seven advertised routes pass, while eight failures are localised
+after bootstrap. Only `validator-election-stage-a.py` reached the predicted
+stake boundary; `nominator-pool-lifecycle-e2e.py` instead exposed the separate
+validator-wallet funding failure above.
 
 A third open correctness question inventories the classical stake-production
 surface instead of treating the two base Fift files as orphaned. The inventory

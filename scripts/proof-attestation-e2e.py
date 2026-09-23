@@ -37,6 +37,7 @@ from pathlib import Path
 
 from tostester.install import Install
 from tostester.network import Network, StartOptions
+from tostester.pq_initial_validator import make_deterministic_pq_initial_validator
 from pytosiq_core import Address, Cell, InternalMsgInfo, MessageAny, WalletMessage
 
 REPO = Path(__file__).resolve().parents[1]
@@ -311,7 +312,7 @@ async def main() -> int:
     async with Network(install, WORKDIR / "net", base_port=23700) as network:
         dht = network.create_dht_node()
         node = network.create_full_node()
-        node.make_initial_validator()
+        make_deterministic_pq_initial_validator(node, 0)
         node.announce_to(dht)
 
         dht_task = asyncio.create_task(dht.run())

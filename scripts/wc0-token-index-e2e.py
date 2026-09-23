@@ -33,6 +33,7 @@ from pathlib import Path
 
 from tostester.install import Install
 from tostester.network import Network, StartOptions
+from tostester.pq_initial_validator import make_deterministic_pq_initial_validator
 from contract import tos
 from pytosiq_core import (
     Address, Cell, InternalMsgInfo, MessageAny, StateInit, WalletMessage, begin_cell,
@@ -165,7 +166,7 @@ async def main() -> int:
     async with Network(install, workdir) as network:
         dht = network.create_dht_node()
         node = network.create_full_node()
-        node.make_initial_validator()
+        make_deterministic_pq_initial_validator(node, 0)
         node.announce_to(dht)
 
         dht_task = asyncio.create_task(dht.run())

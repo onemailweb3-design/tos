@@ -26,6 +26,7 @@ REQUIRED_SOURCE_GUARDS = frozenset(
         "n6-scale-sweep-cardinality",
         "n6-threshold-proposal",
         "pending-finality-retry-policy-source",
+        "pq-e2e-initial-validators-source",
         "pq-finality-boundary-source",
         "pq-launch-cap-mutations",
         "pq-launch-cap-source",

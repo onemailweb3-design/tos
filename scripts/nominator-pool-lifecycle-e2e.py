@@ -72,6 +72,9 @@ from pytosiq_core.tlb.tlb import TlbError  # noqa: E402
 from tostester.install import Install  # noqa: E402
 from tostester.key import PUB_ED25519_PREFIX, Key  # noqa: E402
 from tostester.network import FullNode, Network, StartOptions  # noqa: E402
+from tostester.pq_initial_validator import (  # noqa: E402
+    make_deterministic_pq_initial_validator,
+)
 
 T = TypeVar("T")
 
@@ -2288,9 +2291,9 @@ class PoolLifecycle:
         network.config.validator_election_stage_a_profile = True
 
         dht = network.create_dht_node()
-        for _ in range(4):
+        for validator_index in range(4):
             node = network.create_full_node()
-            node.make_initial_validator()
+            make_deterministic_pq_initial_validator(node, validator_index)
             node.announce_to(dht)
             self.nodes.append(node)
 

@@ -520,11 +520,14 @@ def create_zerostate(
             raise ValueError(
                 "validator election experiment faucet balance must be positive integer nanotos"
             )
-    if config.validator_economics_profile and len(validator_keys) != 4:
+    if config.validator_economics_profile and validator_count != 4:
         raise ValueError("validator economics profile requires exactly four genesis validators")
-    if config.validator_economics_profile and len(
-        {key.public_key.key for key in validator_keys}
-    ) != len(validator_keys):
+    profile_public_keys = (
+        [key.public_key.key for key in validator_keys]
+        if validator_keys
+        else [validator.public_key for validator in pq_validators]
+    )
+    if config.validator_economics_profile and len(set(profile_public_keys)) != validator_count:
         raise ValueError("validator economics profile requires unique genesis validator keys")
 
     validator_counts = _launch_validator_counts(
