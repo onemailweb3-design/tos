@@ -38,6 +38,10 @@ def main() -> int:
         "branches:" not in text.split("permissions:", 1)[0],
         "workflow restricts branch triggers",
     )
+    # This workflow's only purpose is to run on every push and pull request.
+    # Refuse conditions anywhere in the file: a job- or step-level `if:` is
+    # how the existing real-chain job became a green-looking skipped check.
+    require("if:" not in text, "workflow makes a job or step conditional")
     require("uv sync --no-dev" in text, "workflow does not install repository Python dependencies")
     require(
         "test/tostester/generate_tl.py" in text,
