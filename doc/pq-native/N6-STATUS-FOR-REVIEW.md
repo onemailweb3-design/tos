@@ -242,13 +242,20 @@ not close it.
 The second entry records the first five-minute steady-state PQ Simplex
 observation at the enforced 21-validator launch committee size. On one
 co-located host it produced 733 blocks in 314 seconds, all 22 queried nodes
-agreed full block ids through height 746, cadence p50 was 399.1 ms against the
-400 ms target, p95 was 500.2 ms, and no lite query retried. Safety held, but
-seven observation intervals lasted 1.3--2.3 seconds. Validator logs contained
+agreed full block ids through height 746, and no lite query retried. This was
+originally described here as “cadence p50 was 399.1 ms against the 400 ms
+target, p95 was 500.2 ms.” That interpretation is withdrawn. The recorded
+399.1/500.2 ms values are all-node agreed-block exposure intervals: each ends
+only when the slowest queried node has locally applied the block, exposed it
+through its lite-server and answered the observer. They therefore combine
+consensus finalization, local application, lite-server exposure, query latency
+and an all-node barrier; they are not consensus cadence. Safety held, but seven
+such observation intervals lasted 1.3--2.3 seconds. Validator logs contained
 `SkipVote` text, but the earlier claim that three of seven intervals were near
 node2 skip bursts is withdrawn. That count mixed 951 basechain lines with 187
-masterchain lines while the sustained observer measures masterchain cadence;
-it correlated different chains.
+masterchain lines while the sustained observer measures masterchain
+agreed-block exposure; it correlated different chains. The former phrase
+“measures masterchain cadence” is withdrawn for the same scope error.
 
 A follow-up at `82f2e8134` produced 746 blocks, two roughly 1.4-second slow
 intervals, unanimous full block ids through height 759, and 576 masterchain
@@ -278,6 +285,12 @@ even though the sustained-finality measurement gap was closed separately by
 the inherited-Simplex evidence. It remains diagnostic: one co-located run is
 not release-grade persisted-finality p99, and upstream inheritance does not
 explain behavior of the new N5 carrier or admission machinery.
+
+Standing constraint: these exposure tails are not evidence for tuning the
+Simplex target rate, `first_block_timeout`, committee size or PQ signing path.
+No run in this section distinguishes consensus delay from post-finalization
+application/exposure/query delay. That distinction requires the per-height,
+per-node timestamp split registered as the next instrumentation unit.
 
 ## N6.1 acceptance criteria scaffolding
 
