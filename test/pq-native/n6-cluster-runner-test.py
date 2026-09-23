@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "test/tostester/src"))
 from tostester.n6_cluster import (  # noqa: E402
     ObservedBlock,
     SustainedObservationConfig,
+    _masterchain_heights,
     analyze_consensus_milestones,
     analyze_live_finality,
     load_latency_profile,
@@ -27,6 +28,21 @@ from tostester.n6_cluster import (  # noqa: E402
     validate_node_isolation,
 )
 from tostester.process_backend import LocalProcessBackend, RemoteCommandBackend  # noqa: E402
+
+
+class ToslibError(Exception):
+    __module__ = "toslib.toslibjson"
+
+    def __init__(self, result):
+        super().__init__()
+        self.result = result
+
+    @property
+    def code(self):
+        return self.result.code
+
+    def __str__(self):
+        return self.result.message
 
 
 def require(condition: bool, message: str) -> None:
@@ -83,10 +99,38 @@ async def check_backends(directory: Path) -> None:
 
 
 class FakeBlockClient:
-    def __init__(self, root_hash: bytes):
+    def __init__(
+        self,
+        root_hash: bytes,
+        *,
+        height: int = 7,
+        info_transport_failures: int | None = 0,
+    ):
         self.root_hash = root_hash
+        self.height = height
+        self.info_transport_failures = info_transport_failures
+        self.info_calls = 0
+        self.lookup_calls = 0
+
+    def _transport_failure(self):
+        return ToslibError(
+            SimpleNamespace(
+                code=500,
+                message="LITE_SERVER_NETWORKtimeout for adnl query query",
+            )
+        )
+
+    async def get_masterchain_info(self):
+        self.info_calls += 1
+        if self.info_transport_failures is None:
+            raise self._transport_failure()
+        if self.info_transport_failures > 0:
+            self.info_transport_failures -= 1
+            raise self._transport_failure()
+        return SimpleNamespace(last=SimpleNamespace(seqno=self.height))
 
     async def lookup_block(self, *, workchain: int, shard: int, seqno: int):
+        self.lookup_calls += 1
         return SimpleNamespace(
             workchain=workchain,
             shard=shard,
@@ -103,6 +147,7 @@ async def check_sustained_agreement() -> None:
     require(",7):" in block_id, "agreed block id does not identify the requested height")
 
     clients["node-c"] = FakeBlockClient(bytes.fromhex("22" * 32))
+    calls_before_disagreement = {name: client.lookup_calls for name, client in clients.items()}
     try:
         await require_agreed_masterchain_block(clients, 7)
     except RuntimeError as error:
@@ -116,6 +161,64 @@ async def check_sustained_agreement() -> None:
         )
     else:
         raise AssertionError("nodes on different masterchain blocks were reported as agreeing")
+    require(
+        all(
+            client.lookup_calls == calls_before_disagreement[name] + 1
+            for name, client in clients.items()
+        ),
+        "block-id disagreement was retried instead of failing immediately",
+    )
+
+
+async def check_sustained_transport_retry() -> None:
+    flaky = FakeBlockClient(bytes.fromhex("11" * 32), info_transport_failures=1)
+    healthy = FakeBlockClient(bytes.fromhex("11" * 32))
+    heights = await _masterchain_heights(
+        {"flaky-node": flaky, "healthy-node": healthy},
+        transport_retry_budget_seconds=1.0,
+        transport_retry_delay_seconds=0,
+    )
+    require(
+        heights == {"flaky-node": 7, "healthy-node": 7} and flaky.info_calls == 2,
+        "one transport timeout did not recover inside the retry budget",
+    )
+
+    silent = FakeBlockClient(bytes.fromhex("11" * 32), info_transport_failures=None)
+    try:
+        await _masterchain_heights(
+            {"silent-node": silent},
+            transport_retry_budget_seconds=0,
+            transport_retry_delay_seconds=0,
+        )
+    except TimeoutError as error:
+        require("silent-node" in str(error), "transport exhaustion did not name the silent node")
+        require(
+            "transport retry budget" in str(error),
+            "transport exhaustion was not classified as a transport failure",
+        )
+    else:
+        raise AssertionError("persistent lite transport failure was accepted")
+
+    class InvalidReplyClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def get_masterchain_info(self):
+            self.calls += 1
+            raise ValueError("invalid lite reply")
+
+    invalid = InvalidReplyClient()
+    try:
+        await _masterchain_heights(
+            {"invalid-node": invalid},
+            transport_retry_budget_seconds=1.0,
+            transport_retry_delay_seconds=0,
+        )
+    except ValueError as error:
+        require(str(error) == "invalid lite reply", "non-transport error identity changed")
+        require(invalid.calls == 1, "non-transport error was retried")
+    else:
+        raise AssertionError("non-transport lite error was accepted")
 
 
 def check_sustained_summary() -> None:
@@ -264,6 +367,7 @@ def main() -> int:
         validate_lite_transport_source(ROOT)
         asyncio.run(check_backends(root))
         asyncio.run(check_sustained_agreement())
+        asyncio.run(check_sustained_transport_retry())
         check_sustained_summary()
         check_latency_profile_binding()
         no_latency = load_latency_profile(

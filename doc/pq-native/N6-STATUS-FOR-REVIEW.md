@@ -54,8 +54,11 @@ moving the wallet regression to the PQ path. Sixteen E2E scripts contain 17
 calls to `make_initial_validator()`. A direct two-validator reproduction shows
 the manager refusing their classical descriptors, disabling validation and
 reporting `Validating 0 groups`; the chain never reaches masterchain seqno 1.
-The default native chain workflow runs only on pushes to `main`, and the other
-real-chain workflow is manual-only, so branch CI did not expose this state.
+No branch CI job boots a chain: `build-tos-linux-x86-64-shared.yml` declares
+`on.push.branches: [main]`, while `tosctl-service.yml` declares
+`jobs.real-chain-explorer.if: github.event_name == 'workflow_dispatch'`
+(observed skipped on run `35748202781`). Thus branch CI did not expose this
+state.
 The affected inventory is:
 
 - `test/integration/test_simplex2_release.py`;
@@ -412,6 +415,16 @@ generation timestamps; multiple already-produced heights can therefore yield
 a very short observed interval.
 Thus nodes at equal seqno on different chains cannot satisfy the mode, and a
 node that stops following remains visible in `per_node_final_height`.
+
+Each node's lite query has a 30-second transport retry budget. Only the exact
+`toslib.toslibjson.ToslibError` shape with code 500 and a
+`LITE_SERVER_NETWORK...` message is retried. Exhaustion fails as
+`N6_SUSTAINED_TRANSPORT_FAILURE`, naming the silent node and operation;
+non-transport exceptions propagate immediately. The retry is below the block
+comparison, so a completed query that exposes different full block ids fails
+immediately and is never retried. The gate covers one transient recovery,
+persistent named transport exhaustion, a non-transport `ValueError` with one
+call, and a disagreement with exactly one lookup per node.
 
 This is `COLOCATED_DIAGNOSTIC_ONLY` evidence with
 `release_evidence_eligible=false`. Its observation intervals measure when all colocated

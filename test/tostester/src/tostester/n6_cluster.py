@@ -12,10 +12,13 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
 EVIDENCE_CLASS = "DIAGNOSTIC_SCAFFOLDING_ONLY"
 PROOF_BYTES = re.compile(r"got block proof .* \((?P<bytes>[0-9]+) bytes\)")
+SUSTAINED_TRANSPORT_RETRY_SECONDS = 30.0
+SUSTAINED_TRANSPORT_RETRY_DELAY_SECONDS = 0.1
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -271,34 +274,95 @@ async def _resource_monitor(node: Any, output: Path, stop: asyncio.Event) -> Non
                 pass
 
 
+def _is_lite_transport_error(error: BaseException) -> bool:
+    # Keep this source-only gate importable without loading toslib's optional
+    # runtime dependencies, while still matching the exact production error
+    # type rather than treating arbitrary exceptions as transport failures.
+    return (
+        type(error).__module__ == "toslib.toslibjson"
+        and type(error).__qualname__ == "ToslibError"
+        and getattr(error, "code", None) == 500
+        and str(error).startswith("LITE_SERVER_NETWORK")
+    )
+
+
+async def _retry_lite_transport(
+    node_name: str,
+    operation_name: str,
+    operation: Callable[[], Awaitable[T]],
+    *,
+    retry_budget_seconds: float = SUSTAINED_TRANSPORT_RETRY_SECONDS,
+    retry_delay_seconds: float = SUSTAINED_TRANSPORT_RETRY_DELAY_SECONDS,
+) -> T:
+    deadline = time.monotonic() + retry_budget_seconds
+    while True:
+        try:
+            return await operation()
+        except Exception as error:
+            if not _is_lite_transport_error(error):
+                raise
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "N6_SUSTAINED_TRANSPORT_FAILURE: "
+                    f"node {node_name} stopped answering {operation_name} within the "
+                    f"{retry_budget_seconds:g}s transport retry budget; last_error={error}"
+                ) from error
+            await asyncio.sleep(retry_delay_seconds)
+
+
 async def _wait_all_heights(nodes: list[Any], minimum: int, timeout: float) -> list[int]:
     deadline = time.monotonic() + timeout
     last: list[int] = []
+    clients = {node.name: await node.toslib_client() for node in nodes}
     while time.monotonic() < deadline:
-        try:
-            values = []
-            for node in nodes:
-                info = await (await node.toslib_client()).get_masterchain_info()
-                values.append(info.last.seqno)
-            last = values
-            if min(values) >= minimum:
-                return values
-        except Exception:
-            pass
+        values = await _masterchain_heights(clients)
+        last = list(values.values())
+        if min(last) >= minimum:
+            return last
         await asyncio.sleep(0.25)
     raise TimeoutError(f"nodes did not reach masterchain height {minimum}; last={last}")
 
 
-async def _masterchain_heights(clients: dict[str, Any]) -> dict[str, int]:
-    infos = await asyncio.gather(*(client.get_masterchain_info() for client in clients.values()))
+async def _masterchain_heights(
+    clients: dict[str, Any],
+    *,
+    transport_retry_budget_seconds: float = SUSTAINED_TRANSPORT_RETRY_SECONDS,
+    transport_retry_delay_seconds: float = SUSTAINED_TRANSPORT_RETRY_DELAY_SECONDS,
+) -> dict[str, int]:
+    infos = await asyncio.gather(
+        *(
+            _retry_lite_transport(
+                name,
+                "get_masterchain_info",
+                client.get_masterchain_info,
+                retry_budget_seconds=transport_retry_budget_seconds,
+                retry_delay_seconds=transport_retry_delay_seconds,
+            )
+            for name, client in clients.items()
+        )
+    )
     return {name: info.last.seqno for name, info in zip(clients, infos, strict=True)}
 
 
-async def require_agreed_masterchain_block(clients: dict[str, Any], height: int) -> str:
+async def require_agreed_masterchain_block(
+    clients: dict[str, Any],
+    height: int,
+    *,
+    transport_retry_budget_seconds: float = SUSTAINED_TRANSPORT_RETRY_SECONDS,
+    transport_retry_delay_seconds: float = SUSTAINED_TRANSPORT_RETRY_DELAY_SECONDS,
+) -> str:
     blocks = await asyncio.gather(
         *(
-            client.lookup_block(workchain=-1, shard=-(2**63), seqno=height)
-            for client in clients.values()
+            _retry_lite_transport(
+                name,
+                f"lookup_block(height={height})",
+                lambda client=client: client.lookup_block(
+                    workchain=-1, shard=-(2**63), seqno=height
+                ),
+                retry_budget_seconds=transport_retry_budget_seconds,
+                retry_delay_seconds=transport_retry_delay_seconds,
+            )
+            for name, client in clients.items()
         )
     )
     by_node = {name: block_id_text(block) for name, block in zip(clients, blocks, strict=True)}

@@ -8,7 +8,7 @@
     "classical-e2e-fixtures-incompatible-with-pq-consensus": {
       "closure_condition": "Inventory the 16 affected E2E scripts as retained or retired. Every retained path must obtain deterministic PQ initial validators from one shared helper, boot a real PQ chain in branch CI, and exercise its advertised route; this includes localnet-jsonrpc.py and its TOSCAN consumer. Retired paths must be removed from release claims and entry-point inventories rather than left executable but dead.",
       "location": "test/integration/test_simplex2_release.py and 15 scripts under scripts/",
-      "observation": "Sixteen E2E scripts contain 17 make_initial_validator() call sites. Production manager admission refuses those classical descriptors on the PQ consensus path, completes synchronization with zero validating groups, and never reaches masterchain seqno 1. The only default wallet/transfer integration used the same dead setup until it was converted to PQ validators, while the full chain workflow runs only on main and the other real-chain workflow is manual-only.",
+      "observation": "Sixteen E2E scripts contain 17 make_initial_validator() call sites. Production manager admission refuses those classical descriptors on the PQ consensus path, completes synchronization with zero validating groups, and never reaches masterchain seqno 1. The only default wallet/transfer integration used the same dead setup until it was converted to PQ validators. No branch CI job boots a chain: build-tos-linux-x86-64-shared.yml declares on.push.branches=[main], while tosctl-service.yml declares jobs.real-chain-explorer.if as github.event_name == 'workflow_dispatch' (observed skipped on run 35748202781).",
       "observed_commit": "0d9452838",
       "status": "OPEN"
     },
