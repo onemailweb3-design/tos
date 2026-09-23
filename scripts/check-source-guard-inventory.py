@@ -20,6 +20,7 @@ REQUIRED_SOURCE_GUARDS = frozenset(
         "jsonrpc-route-gating",
         "n6-acceptance-criteria",
         "n6-cluster-runner",
+        "n6-diagnostic-observations",
         "n6-manifest-completeness",
         "n6-microbench-results",
         "n6-scale-sweep-cardinality",

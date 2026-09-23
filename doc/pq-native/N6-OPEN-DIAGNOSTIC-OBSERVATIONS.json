@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "required_observation_ids": [
+    "colocated-lite-query-timeouts"
+  ],
+  "observations": {
+    "colocated-lite-query-timeouts": {
+      "status": "OPEN",
+      "observation": "Repeated four-validator PQ functional runs on one host (four validator processes plus one DHT process) contain unanswered lite-server queries. ExtClient.cpp:69 gives each query a 10.0-second deadline. Three consecutive runs each exposed an observation interval within about one percent of ten seconds. One run recorded node-1 get_masterchain_info=1. A later run recorded total=3 on node-2: get_masterchain_info=2 and lookup_block=1, with one retry inside the interval window. The retry permits a green functional result, so the counters are the only durable indication of the degraded run.",
+      "observed_at": {
+        "first_exact_commit": "a39fb65265dcb5a79a71398e028a7556874d6f36",
+        "client_timeout_source": "toslib/toslib/ExtClient.cpp:69",
+        "client_timeout_seconds": 10.0,
+        "cluster_shape": "four co-located PQ validators plus one DHT process",
+        "slow_observation_interval_ms": [
+          10215.9,
+          10113.8
+        ],
+        "query_types": [
+          "get_masterchain_info",
+          "lookup_block"
+        ],
+        "affected_nodes_observed": [
+          "node-1",
+          "node-2"
+        ]
+      },
+      "diagnostic_question": "For each timed-out query, did the request reach the selected lite-server? Receipt without a client response localizes the loss to server processing or the response path; no receipt localizes it to ingress or request transport.",
+      "closure_condition": "Capture the same query identity at the client send point, lite-server receipt point, response send point and client completion point in a reproducing run; identify the first missing transition and add a regression gate for the demonstrated cause. Changing the timeout or relying on retry success is not closure."
+    }
+  }
+}

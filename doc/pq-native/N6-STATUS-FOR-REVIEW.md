@@ -99,6 +99,24 @@ chain in branch CI. Retired scripts must be removed from release claims and
 entry-point inventories. This unit registers that work; it does not perform 16
 independent conversions before ownership and retained scope are decided.
 
+## Open diagnostic observations
+
+`N6-OPEN-DIAGNOSTIC-OBSERVATIONS.json` records operational findings that need
+causal diagnosis but are not, by themselves, release correctness refusals. Its
+required ids are also compiled into `n6-diagnostic-observations`, so deleting
+both an entry and its JSON-side required id cannot silently erase it. A
+resolved entry remains present and must name `resolved_by` evidence.
+
+The initial open entry records repeated unanswered lite-server queries in the
+co-located four-validator PQ functional run. The client deadline is 10 seconds
+at `toslib/toslib/ExtClient.cpp:69`; observed retries include both
+`get_masterchain_info` and `lookup_block`, on node-1 and node-2 across runs.
+The entry deliberately makes no claim about which endpoint or code change is
+responsible. Closure requires one query identity traced through client send,
+server receipt, response send and client completion, followed by a regression
+gate for the demonstrated cause. A longer timeout or a successful retry does
+not close it.
+
 ## N6.1 acceptance criteria scaffolding
 
 Implementation commit:
