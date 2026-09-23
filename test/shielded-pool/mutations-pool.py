@@ -102,7 +102,7 @@ CASES = [
          '    msg_value >= deposit_amount + get_compute_fee(0, deposit_gas_ceiling()));',
          '    msg_value >= get_compute_fee(0, deposit_gas_ceiling()));', FUNDING_TEST),
     Case('gas-ceiling-live', 'the ceiling is below what the path needs', POOL,
-         'int deposit_gas_ceiling() asm "220000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "230000 PUSHINT";',
          'int deposit_gas_ceiling() asm "5000 PUSHINT";', LEDGER_TEST),
     # A ceiling that covers a pool with empty anchor rings and refuses one
     # whose rings are full. The rings are worth about 14,000 gas a mutation
@@ -111,34 +111,37 @@ CASES = [
     # second such age; it is not any more, because the store is no longer a
     # dictionary whose reads grow with the leaf index.
     Case('gas-ceiling-fresh-pool', 'the deposit ceiling covers only a new pool', POOL,
-         'int deposit_gas_ceiling() asm "220000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "230000 PUSHINT";',
          'int deposit_gas_ceiling() asm "160000 PUSHINT";',
          MATURE_DEPOSIT_TEST, MATURE_DEPOSIT_SUITE, CROSSCHECK),
     Case('bounce-ceiling-fresh-pool', 'the bounce ceiling covers only a new pool', POOL,
-         'int bounce_gas_ceiling() asm "220000 PUSHINT";',
+         'int bounce_gas_ceiling() asm "240000 PUSHINT";',
          'int bounce_gas_ceiling() asm "170000 PUSHINT";',
          MATURE_TRANSACT_TEST, MATURE_TRANSACT_SUITE, CROSSCHECK),
     # The corner the two ends of a pool's life do not contain. Full anchor
     # rings make a transact dearer and a higher leaf index makes it slightly
-    # cheaper, so the maximum is at full rings on the youngest tree that can
-    # have them. 1,465,000 clears the rule against a fresh pool (1,171,462)
-    # and against the worst leaf index (1,169,973) and fails it only there --
-    # so only the measurement taken at that corner can kill it.
+    # cheaper, so the dearest *reachable* state is full rings on the youngest
+    # tree that can have them. 1,465,000 clears the rule against a fresh pool
+    # and against the worst leaf index, and fails it only there -- so only the
+    # measurement taken at that corner can kill it. The ceiling itself no
+    # longer comes from that corner, or from any other reachable one:
+    # `gas_ceiling_bound` derives it. This case stays because the corner is
+    # still what a sampled maximum misses.
     Case('transact-ceiling-misses-the-corner',
          'the transact ceiling is set from the two ends of a pool\'s life', POOL,
-         'int transact_gas_ceiling() asm "1470000 PUSHINT";',
+         'int transact_gas_ceiling() asm "1510000 PUSHINT";',
          'int transact_gas_ceiling() asm "1465000 PUSHINT";',
          MATURE_TRANSACT_TEST, MATURE_TRANSACT_SUITE, CROSSCHECK),
     # A ceiling that is not the rule's, but is still above the path at every
     # age, so nothing stops working and no cost test notices. The only thing
-    # wrong with 180,000 is that the rule gives 220,000, and a sender under it
+    # wrong with 180,000 is that the rule gives 230,000, and a sender under it
     # would be charged for a budget nobody derived. This is what a suite
     # holding its own copy of the ceiling could never catch: until 2026-09-21
-    # the check compared 220,000 written in the test against 220,000 computed
-    # in the test, and passed whatever the contract said.
+    # the check compared the ceiling written in the test against the same
+    # number computed in the test, and passed whatever the contract said.
     Case('gas-ceiling-off-the-rule',
          'the deposit ceiling is not the one the production rule gives', POOL,
-         'int deposit_gas_ceiling() asm "220000 PUSHINT";',
+         'int deposit_gas_ceiling() asm "230000 PUSHINT";',
          'int deposit_gas_ceiling() asm "180000 PUSHINT";',
          'the_gas_ceiling_does_not_depend_on_how_much_money_arrived', SUITE, CONTRACTS),
 
@@ -278,7 +281,7 @@ CASES = [
          '  groth16_require_valid(vk, proof_a, proof_b, proof_c, inputs);\n', '',
          PROOF_TEST, TRANSACT_SUITE),
     Case('transact-gas-ceiling', 'the ceiling is below what the path needs', POOL,
-         'int transact_gas_ceiling() asm "1470000 PUSHINT";',
+         'int transact_gas_ceiling() asm "1510000 PUSHINT";',
          'int transact_gas_ceiling() asm "5000 PUSHINT";', ORDER_TEST, TRANSACT_SUITE),
 
     # A message with no operation must not be mistaken for one.

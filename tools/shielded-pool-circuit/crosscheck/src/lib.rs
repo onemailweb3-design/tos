@@ -32,6 +32,8 @@ pub const ACTIVE_VERSION: u32 = 18;
 
 pub mod acceptance;
 pub mod anchor_probe;
+pub mod ceiling;
+pub mod components;
 pub mod frontier_probe;
 pub mod imt_probe;
 pub mod pool;

@@ -32,21 +32,55 @@ const DENOMINATION: u64 = TOS;
 /// The deposit ceiling's fee, which the funding rule already makes the sender
 /// pay and which the executor takes after this contract returns.
 ///
-/// Read out of the contract rather than recomputed here. A first version of
-/// this test worked the formula out by hand and landed 126 nanotos low, so
-/// every case died on the *funding* check at exit 203 and never reached the
-/// backing one -- a test that was red for a reason that had nothing to do
-/// with what it was testing. The bounce ceiling and the deposit ceiling are
-/// both 220,000, so `recovery_charge` is the same number.
-fn deposit_fee(pool: &Pool) -> u64 {
-    pool.get("recovery_charge").expect("the charge").parse().expect("a number")
+/// Measured against the contract, twice over now. A first version worked the
+/// formula out by hand and landed 126 nanotos low, so every case died on the
+/// *funding* check at exit 203 and never reached the backing one -- a test
+/// red for a reason that had nothing to do with what it was testing. The
+/// second borrowed `recovery_charge`, which is the *bounce* ceiling's fee and
+/// was the same number only while the two ceilings happened to agree; they
+/// were re-derived separately and do not.
+///
+/// So it is found rather than computed. The funding rule refuses below
+/// `deposit_amount + get_compute_fee(0, deposit_gas_ceiling())` and accepts
+/// at it, so a bisection on the value returns that term exactly, whatever the
+/// ceiling is and whatever the chain charges for gas.
+fn deposit_fee(amount: u64) -> u64 {
+    let mut pool =
+        Pool::deploy_with_balance(&[amount], 1_000 * TOS).expect("a well funded probe pool");
+    let payload = shielded_pool_circuit_crosscheck::wire::byte_chain(&vec![
+        0x11u8;
+        shielded_pool_circuit::wire::OUTPUT_DATA_BYTES
+    ])
+    .expect("a payload");
+    let mut probe = |over: u64| -> i32 {
+        let body = Pool::deposit_body(amount, Fr::from(0x4242u64), payload.clone())
+            .expect("a deposit body");
+        pool.run(amount + over, body).expect("a probe deposit").0
+    };
+
+    // The ends have to be what they claim before a bisection between them
+    // means anything.
+    let mut refused = 0u64;
+    let mut accepted = 100 * TOS;
+    assert_eq!(probe(refused), 203, "a deposit with nothing for gas was not refused for funding");
+    assert_eq!(probe(accepted), 0, "a generously funded deposit was refused");
+
+    while accepted - refused > 1 {
+        let middle = refused + (accepted - refused) / 2;
+        match probe(middle) {
+            203 => refused = middle,
+            0 => accepted = middle,
+            other => panic!("a deposit funded {middle} over its principal exited {other}"),
+        }
+    }
+    accepted
 }
 
 #[test]
 fn a_pool_just_under_its_floor_refuses_a_deposit_it_could_not_back() {
     // The fee is read from a pool before the one under test is built, because
     // the pool under test is deliberately too poor to answer anything.
-    let fee = deposit_fee(&Pool::deploy_with_balance(&[DENOMINATION], 50 * TOS).expect("a probe"));
+    let fee = deposit_fee(DENOMINATION);
 
     // A pool that starts below its own floor. Storage does this without
     // anybody doing anything; here it is arranged directly so the case is
@@ -89,7 +123,7 @@ fn a_pool_just_under_its_floor_refuses_a_deposit_it_could_not_back() {
 /// deposit must be accepted.
 #[test]
 fn a_pool_above_its_floor_still_takes_deposits() {
-    let fee = deposit_fee(&Pool::deploy_with_balance(&[DENOMINATION], 50 * TOS).expect("a probe"));
+    let fee = deposit_fee(DENOMINATION);
     let floor: u64 = 5 * TOS;
     let mut pool = Pool::deploy_with_balance(&[DENOMINATION], floor + 2 * fee)
         .expect("deploy a pool above its floor");

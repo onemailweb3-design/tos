@@ -66,7 +66,13 @@ const OP_UNKNOWN: u32 = 0x5348_50ff;
 fn deposit_gas_ceiling() -> i64 {
     shielded_pool_library::gas_ceiling("deposit_gas_ceiling")
 }
-const DEPOSIT_MEASURED_MAX_GAS: i64 = 171_280;
+/// The upper bound `gas_ceiling_bound.rs` derives for the deposit path, not
+/// the largest deposit anybody built. A maximum over a product space cannot
+/// be measured, and this number used to be the best of a handful of points
+/// with the word maximum attached; it is now the measured cost of one
+/// deposit plus, for each variable call the path makes, the span of that call
+/// over the whole of its own domain.
+const DEPOSIT_DERIVED_BOUND_GAS: i64 = 176_694;
 /// ConfigParam 21 of this chain's zero state, which
 /// `chain_gas_envelope_sandbox.rs` generates and holds against the
 /// executor's table.
@@ -87,7 +93,11 @@ fn topup_gas_ceiling() -> i64 {
 // through. The D6 ceiling does not move -- 2,480 x 5/4 still rounds to the
 // 10,000 floor -- but the measurement it was ruled from does, and a pinned
 // number that is no longer what the path costs is a number nobody can check.
-const TOPUP_MEASURED_MAX_GAS: i64 = 2_480;
+/// A top-up never parses the state cell, touches no dictionary and moves no
+/// tree, so its domain is the query id and that is a fixed sixty-four bits.
+/// Its bound and its measurement are the same number, which is true of no
+/// other path here.
+const TOPUP_DERIVED_BOUND_GAS: i64 = 2_480;
 /// ConfigParam 21 of this chain's zero state, beyond the flat segment.
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
 /// flat 667 for the first hundred gas, then 436,907 per 65,536 gas with the
@@ -583,12 +593,12 @@ fn the_gas_ceiling_does_not_depend_on_how_much_money_arrived() {
     };
     assert_eq!(
         topup_ceiling,
-        by_rule(TOPUP_MEASURED_MAX_GAS),
+        by_rule(TOPUP_DERIVED_BOUND_GAS),
         "the top-up ceiling is no longer the one the production rule gives"
     );
     assert_eq!(
         deposit_ceiling,
-        by_rule(DEPOSIT_MEASURED_MAX_GAS),
+        by_rule(DEPOSIT_DERIVED_BOUND_GAS),
         "the deposit ceiling is no longer the one the production rule gives"
     );
 
@@ -740,8 +750,8 @@ fn a_reserve_top_up_adds_balance_and_nothing_else() {
     );
 
     assert_eq!(
-        used, TOPUP_MEASURED_MAX_GAS,
-        "a top-up costs {used} gas, not the {TOPUP_MEASURED_MAX_GAS} the ceiling was ruled from"
+        used, TOPUP_DERIVED_BOUND_GAS,
+        "a top-up costs {used} gas, not the {TOPUP_DERIVED_BOUND_GAS} the ceiling was ruled from"
     );
 
     assert!(pool.balance() > before + 3 * TOS, "the top-up did not become balance");

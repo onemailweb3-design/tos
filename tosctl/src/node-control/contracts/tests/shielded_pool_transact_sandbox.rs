@@ -63,7 +63,13 @@ const RESERVE_FLOOR: u64 = 5 * TOS;
 fn transact_gas_ceiling() -> i64 {
     shielded_pool_library::gas_ceiling("transact_gas_ceiling")
 }
-const TRANSACT_MEASURED_MAX_GAS: i64 = 1_175_034;
+/// The upper bound `gas_ceiling_bound.rs` derives for a withdrawal, which is
+/// the dearer of the two transact modes. It is not a measurement: no
+/// transaction anybody can build sits at the dearest denomination, the
+/// dearest anchor kind, full rings, a turning epoch, the leaf index whose
+/// base-seven digits are all zero and the more expensive nullifier order at
+/// once. The bound adds each of those spans to one real withdrawal.
+const TRANSACT_DERIVED_BOUND_GAS: i64 = 1_204_845;
 /// The basechain compute fee for `gas`, priced as ConfigParam21 prices it: a
 /// flat 667 for the first hundred gas, then 436,907 per 65,536 gas with the
 /// division rounded up.
@@ -1149,11 +1155,11 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
     );
 
     // And the middle term is the one the production rule gives, applied to the
-    // maximum that was actually measured:
+    // derived bound rather than to a measurement:
     //
     //     C = max(10,000, round_up_10,000(ceil(M * 5 / 4)))
     //
-    // `TRANSACT_MEASURED_MAX_GAS` carried that measurement and nothing read
+    // `TRANSACT_DERIVED_BOUND_GAS` carried that measurement and nothing read
     // it -- a number written down, never compared to anything, free to drift
     // away from both the contract and the measurement it came from. The
     // crosscheck crate holds the same rule against a pool it has aged, which
@@ -1165,10 +1171,10 @@ fn a_transact_fits_its_ceiling_and_the_gas_this_chain_grants() {
     };
     assert_eq!(
         ceiling,
-        by_rule(TRANSACT_MEASURED_MAX_GAS),
+        by_rule(TRANSACT_DERIVED_BOUND_GAS),
         "the transact ceiling is {ceiling}, not the {} the production rule gives for a \
-         measured maximum of {TRANSACT_MEASURED_MAX_GAS}",
-        by_rule(TRANSACT_MEASURED_MAX_GAS)
+         derived bound of {TRANSACT_DERIVED_BOUND_GAS}",
+        by_rule(TRANSACT_DERIVED_BOUND_GAS)
     );
 
     // And a network that grants less than the path needs stops it, which is

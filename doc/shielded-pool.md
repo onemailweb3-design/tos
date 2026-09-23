@@ -159,9 +159,9 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   pre-pays the ceiling and a ceiling has to cover the worst age the pool can
   reach, so under the dictionary every sender paid for a maturity most pools
   will never have. The transact ceiling fell from 1,620,000 to 1,460,000 on
-  that change alone, and went back to its present 1,470,000 when the maximum
-  behind it was re-measured on the four denominations a pool is really
-  deployed with rather than the one a fixture found convenient.
+  that change alone. It is 1,510,000 now, and the rise is not the path
+  getting dearer: the figure behind it stopped being a measured maximum and
+  became a derived bound.
 
   `frontier_store_shape.rs` keeps both containers and fails if they stop
   differing that way; `frontier_cost_is_flat.rs` holds the property the
@@ -410,6 +410,13 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   and no cost test notices -- left the test whose only job is that ceiling
   green.
 
+  The on-chain fixture generator was still keeping copies, and re-deriving the
+  ceilings is what surfaced them. It funds each message at exactly the
+  contract's own `get_compute_fee(ceiling)`, so a stale copy would have funded
+  every message at the old figure, the chain would have refused all three at
+  exit 203, and nothing in the generator would have said why. It reads them
+  now.
+
   A transact is written in the profile's order and the suite requires each step
   to fail with its own code **in its own place**: funding before anything else
   even when everything else is also wrong, then the unbuilt withdrawal path,
@@ -443,23 +450,67 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   measured on its own.
 
   A whole successful withdrawal — which this table does not reach, because
-  every row is a *refusal* — measures 1,175,034 at the dearest state a pool
-  can be in, and the frozen `TRANSACT_GAS_CEILING` is 1,470,000 by the
-  production rule C = max(10,000, round_up_10,000(ceil(M × 5 / 4))).
+  every row is a *refusal* — measures 1,171,516, and the frozen
+  `TRANSACT_GAS_CEILING` is 1,510,000 by the production rule
+  C = max(10,000, round_up_10,000(ceil(B × 5 / 4))).
 
-  That state is neither end of a pool's life. Full anchor rings make a
-  transact dearer and a higher leaf index makes it slightly cheaper, so the
-  maximum sits at full rings on the **youngest** tree that can have them —
+  **B is a bound, not a measurement, and that is the whole of the change.** A
+  transact ranges over a leaf index with four billion values, two ring
+  occupancies, three anchor kinds, four denominations and two nullifier
+  orders. Nothing anybody builds visits enough of that product to establish a
+  maximum over it, and the figure here was a sample with the word maximum in
+  front of it three times running: the first ceilings came from a
+  freshly-deployed pool and a pool refused its thirty-fifth deposit; the next
+  came from a one-denomination fixture and were 4,305 low; the next came from
+  the two ends of a pool's life, and the dearest reachable state turned out to
+  be neither end — full rings on the **youngest** tree that can have them,
   4,096 mutations in, since the recent ring is keyed by the leaf counter
-  modulo its 4,096 slots. A fresh pool measures 1,171,462 and the worst leaf
-  index 1,169,973, so a ceiling taken from either end alone is short. The
-  measurement is also on the deployed configuration's four denominations: the
-  contract walks the list to validate an amount, and the figure was 4,305 low
-  while it was taken against one. The basechain grants a
-  transaction 30,000,000, so the contract's own ceiling is the binding one,
-  which is the point of having it. Both halves of
-  `MEASURED_MAX < ceiling <= chain limit` are asserted by tests rather than
-  left in a comment.
+  modulo its 4,096 slots.
+
+  What is derived instead is an upper bound, and it does not need the corner
+  to be reachable. Each handler is a straight line whose variable calls read
+  only their own arguments, so its cost is a constant plus one term per call:
+
+  ```
+  cost(any legal path) <= cost(one measured transaction)
+                          + sum over calls of (that call's worst - its best)
+  ```
+
+  Every span on the right is one function over one domain small enough to
+  walk end to end — four denominations, three anchor kinds, every slot of the
+  4,096-entry and 2,880-entry rings at every occupancy either passes through,
+  twelve tree levels of seven digits each, both nullifier orders, both ends of
+  the `Coins` range the state cell stores. The bounds that come out are 2,480
+  for a top-up, 176,694 for a deposit, 186,991 for a recovery and 1,205,003
+  for a withdrawal, against measurements of 2,480, 155,679, 167,272 and
+  1,171,516.
+
+  | path | measured | bound | ceiling |
+  |---|---:|---:|---:|
+  | reserve top-up | 2,480 | 2,480 | 10,000 |
+  | deposit | 155,679 | 176,694 | 230,000 |
+  | recovery | 167,272 | 186,991 | 240,000 |
+  | withdrawal | 1,171,516 | 1,205,003 | 1,510,000 |
+
+  Two of the bound's premises are instruments rather than claims.
+  `gas_ceiling_bound.rs` composes the twelve-level append from its per-level
+  terms and holds the composition against real appends at indices whose
+  digits differ — it predicted all eight to the gas — and it requires two
+  whole withdrawals at opposite ends of a pool's life to differ by no more
+  than the spans allow. It also reads section 14.1's rule as the equality the
+  profile states, so a ceiling padded above the rule fails there as surely as
+  one set below it: a ceiling is the sender's cost cap as well as the
+  contract's budget, and everything above what the rule gives is charged to
+  every message on the path for compute nobody spends.
+
+  The basechain grants a transaction 30,000,000, so the contract's own
+  ceiling is the binding one, which is the point of having it. Both halves of
+  `bound < ceiling <= chain limit` are asserted by tests rather than left in a
+  comment. Nine mutations (`test/shielded-pool/mutations-ceiling.py`) — a
+  ceiling moved either way, the spans dropped from the sum, the append
+  composed from the wrong end, a ring priced before it fills, and a tree level
+  made to read more than its own digit — each killed by the test it was aimed
+  at.
 
   These figures are three reductions below where they started: 342,976 when
   the nullifier inserts stopped walking their paths in FunC and started
@@ -467,10 +518,15 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
   3,500 to 2,800, and 120,859 when the frontier changed container.
 
   **The recovery now pays for itself.** Section 15.4 charges a bounce the cost
-  of putting the money back -- `get_compute_fee(0, 220000)`, 1,466,669 nanotos
+  of putting the money back -- `get_compute_fee(0, 240000)`, 1,600,002 nanotos
   at today's price -- out of the value it is returning, the way the
-  recipient's compute and the forwarding were already charged. A bounce of a
-  whole denomination returns 999,094,425 and mints 997,627,756.
+  recipient's compute and the forwarding were already charged.
+
+  That charge is the bounce ceiling priced at the chain's live rate, so
+  re-deriving the ceiling moved it: at the old 220,000 it was 1,466,669. The
+  smallest bounce worth minting a note for rose with it, which is the cost of
+  erring high on a ceiling and is paid only by bounces that are already
+  close to worthless.
 
   That moves two things, and the second is the reason for it.
 
@@ -565,20 +621,20 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
 
   | | before | after |
   |---|---:|---:|
-  | a transact, what the sender attaches — the ceiling, whatever it spends | 0.098000 | **0.009800** |
+  | a transact, what the sender attaches — the ceiling, whatever it spends | 0.098000 | **0.010067** |
   | a withdrawal, the whole fee the chain charged | 0.078382 | **0.008104** |
 
   Those two are the gas cut alone, before the withdrawal fee was re-derived.
   On top of the second a withdrawal also pays `config.withdrawal_fee`, which
   is now 0.020 rather than 0.050.
-  | deposit, ceiling | 0.014667 | 0.001467 |
+  | deposit, ceiling | 0.014667 | 0.001533 |
   | ordinary payment | 0.000356 | 0.000202 |
 
   Both middle figures are a withdrawal, which is the transact the harness
   runs; its charge includes the payout message's forward fee, so it is 295,368
   nanotos above what its 1,171,374 gas costs on its own. A transact that pays
   nobody out is cheaper — 1,144,235 gas, 0.007628 in compute — but it attaches
-  the same 0.009800, because the ceiling is one number for both branches. A
+  the same 0.010067, because the ceiling is one number for both branches. A
   ceiling of its own would save a transfer about 2.5%; it was offered and not
   taken.
 
@@ -599,7 +655,11 @@ named `build` — the `build-clang21` that `BUILD.md` suggests is not found.
 
   Four paths have been through it: a deposit, a withdrawal whose payout is
   taken, a payout the recipient refuses, and the recovery note that refusal
-  mints. **The chain charged the same gas as the sandbox on every message.**
+  mints. **The figures in this section predate the re-derived ceilings**: the
+  gas counts are counts of work and do not move, but what a sender attaches,
+  what a recovery is charged and the deployment address all follow the
+  ceilings, and the run is repeated against the final artifacts when the
+  profile and the address are reconciled to them. **The chain charged the same gas as the sandbox on every message.**
   The harness attaches section 14.1's minimum to the nanoton rather than a
   padded value, because a run that carries more than the funding rule demands
   is not testing the funding rule.

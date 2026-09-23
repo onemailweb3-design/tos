@@ -79,8 +79,9 @@ fn a_withdrawal_that_is_refused_comes_back_as_a_note() {
 
     // Section 14.1. The recovery runs under this, bought by an ACCEPT that the
     // withdrawal fee already paid for. Read out of the contract, because this
-    // file used to carry its own copy saying 280,000 where the contract grants
-    // 220,000. A recovery that outgrew the real ceiling would still have been
+    // file used to carry its own copy saying 280,000 where the contract at the
+    // time granted 220,000. A recovery that outgrew the real ceiling would
+    // still have been
     // caught -- by the exit code above, since it would run out of gas -- but
     // the line this test prints reported this recovery at 59% of its budget
     // where it is really at 75%, and the worst recovery the contract records,

@@ -21,6 +21,7 @@ use crate::{library_dir, stdlib_path, CrossCheckError, Result, ACTIVE_VERSION, T
 
 pub const OP_DEPOSIT: u32 = 0x5348_5001;
 pub const OP_TRANSACT: u32 = 0x5348_5002;
+pub const OP_RESERVE_TOPUP: u32 = 0x5348_5003;
 
 /// Section 13.2.
 const MAGIC: u32 = 0x5350_5631;
@@ -370,6 +371,32 @@ impl Pool {
         }
     }
 
+    /// The configuration cell section 13 keeps at reference two.
+    ///
+    /// The denomination walk's cost is a property of the list a pool was
+    /// deployed with, so pricing it against a list assembled in a test would
+    /// price a pool nobody deploys. This hands the real one to the probe.
+    pub fn config_cell(&self) -> Result<Cell> {
+        self.bc
+            .get_account(&self.addr)
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no account".to_string()))?
+            .get_data()
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no data".to_string()))?
+            .reference(2)
+            .map_err(|error| CrossCheckError::Sandbox(format!("config ref: {error}")))
+    }
+
+    /// The verifying key cell section 13 keeps at reference three.
+    pub fn vk_cell(&self) -> Result<Cell> {
+        self.bc
+            .get_account(&self.addr)
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no account".to_string()))?
+            .get_data()
+            .ok_or_else(|| CrossCheckError::Sandbox("the pool has no data".to_string()))?
+            .reference(3)
+            .map_err(|error| CrossCheckError::Sandbox(format!("vk ref: {error}")))
+    }
+
     /// The two anchor rings as the pool actually holds them, each entry the
     /// slot it sits in, the version recorded there and the root.
     ///
@@ -678,6 +705,17 @@ impl Pool {
             failed_action: description.action.as_ref().and_then(|phase| phase.result_arg),
             aborted: description.aborted,
         })
+    }
+
+    /// Section 12.3's top-up body: the operation and a query id, and nothing
+    /// else at all.
+    pub fn topup_body(query_id: u64) -> Result<Cell> {
+        let mut builder = BuilderData::new();
+        builder
+            .append_u32(OP_RESERVE_TOPUP)
+            .and_then(|b| b.append_u64(query_id))
+            .map_err(|error| CrossCheckError::Sandbox(format!("top-up body: {error}")))?;
+        cell_of(builder)
     }
 
     /// Section 12.1's deposit body.

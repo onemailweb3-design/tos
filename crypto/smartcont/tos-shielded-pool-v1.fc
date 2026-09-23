@@ -42,77 +42,92 @@ int op_reserve_topup() asm "1397248003 PUSHINT";    ;; 0x53485003
 ;; get_compute_fee(ceiling) rather than what the path costs, and what is not
 ;; spent stays as the pool's unencumbered reserve. A ceiling far above what a
 ;; legal path needs is therefore not spare safety, it is a charge on the
-;; sender unrelated to the compute they bought.
+;; sender unrelated to the compute they bought. A ceiling below what a legal
+;; path needs cuts that path off inside a contract whose code hash is its
+;; address, which is not a thing that can be patched afterwards.
 ;;
 ;; Production values come from one rule, so that nobody picks a margin:
 ;;
-;;   M = the measured maximum gas of the worst legal successful path, under
+;;   B = an upper bound on the gas of the worst legal successful path, under
 ;;       the final Poseidon2 tariff, on the exact candidate code and config
-;;   C = max(10000, round_up_10000(ceil(M * 5 / 4)))
+;;   C = max(10000, round_up_10000(ceil(B * 5 / 4)))
 ;;
-;; M is the maximum over the pool's whole life, not over a pool that has just
-;; been deployed. What grows with history, and what does not:
+;; B is a BOUND and not a measurement, and the difference is the whole of it.
+;; A transact ranges over a leaf index with four billion values, two ring
+;; occupancies, three anchor kinds, four denominations and two nullifier
+;; orders; nothing built by hand visits enough of that product to establish a
+;; maximum over it, and every figure this comment carried before was the
+;; largest of a handful of reachable points with the word maximum attached.
+;; Three times that was wrong and cost something: a pool refused its
+;; thirty-fifth deposit, a withdrawal figure was 4,305 low because it was
+;; measured against a denomination list nobody deploys, and the dearest state
+;; a pool can be in turned out to be neither end of its life.
+;;
+;; The bound is derived instead, from the structure of the handlers rather
+;; than from a search. Each is a straight line whose variable calls read only
+;; their own arguments, so
+;;
+;;   cost(any legal path) <= cost(one measured transaction)
+;;                           + sum over calls of (that call's worst - its best)
+;;
+;; and every span on the right is one function over one domain small enough
+;; to walk end to end: four denominations, three anchor kinds, every slot of
+;; the 4,096-entry and 2,880-entry rings at every occupancy either passes
+;; through, twelve tree levels of seven digits each, both nullifier orders,
+;; and both ends of the Coins range the state cell stores. The corner that
+;; sum describes is reachable by nobody. That is what an upper bound is, and
+;; erring on that side is the whole argument.
+;;
+;;   path             measured      bound   ceiling   Poseidon2 operations
+;;   reserve top-up      2,480      2,480    10,000    0
+;;   deposit           155,679    176,694   230,000   14
+;;   recovery          167,272    186,991   240,000   15
+;;   withdrawal      1,171,516  1,205,003 1,510,000  142   -- the worst transact
+;;
+;; Derived and checked by `gas_ceiling_bound.rs` in the cross-check crate,
+;; which re-measures every span from this source and fails if a ceiling is
+;; not exactly what the rule above gives. Two of the bound's assumptions are
+;; instruments there rather than claims: the twelve-level append is composed
+;; from its levels and the composition is held against real appends at
+;; indices whose digits differ, and two whole withdrawals at opposite ends of
+;; a pool's life must not differ by more than the spans allow.
+;;
+;; A withdrawal is what sets the transact ceiling; a transfer is the same
+;; code without the bodies of two `if (public_amount_out > 0)` blocks, so it
+;; cannot cost more.
+;;
+;; What moves with a pool's history, and what does not:
 ;;
 ;;   * the 4,096-slot recent-root ring and the 2,880-slot epoch ring are
-;;     empty at genesis and stay full for the rest of the pool's life, which
-;;     is worth about 14,000 gas per mutation;
-;;   * a proof against a recent or epoch root reads the ring, which a proof
-;;     against the current root does not;
+;;     empty at genesis and stay full for the rest of the pool's life. Full
+;;     rings with the epoch turning over cost 15,396 gas more per mutation
+;;     than empty rings with it not;
+;;   * a proof against a recent or epoch root reads a ring, which a proof
+;;     against the current root does not: 3,226 gas between the two;
 ;;   * the frontier does not. It did until 2026-09-21, when the store stopped
 ;;     being a dictionary read `digit + 1` slots deep: a level chain reads and
 ;;     rebuilds all seven slots of every level whatever the leaf index is, and
 ;;     costs a little *less* as the index grows, because a high digit takes a
 ;;     stored slot where a low one takes an empty root. The dearest append a
-;;     pool can do is now its first.
+;;     pool can do is its first, and that is now a measured fact about all
+;;     4.29 billion indices rather than about the ones somebody tried: the
+;;     cost is a sum of twelve independent per-digit terms and digit zero is
+;;     the dearest of the seven at every level.
 ;;
-;; The maxima below are measured with both rings full, at whichever leaf index
-;; is worst for each path. A withdrawal and its bounce cannot both be at their
-;; worst in the same transaction -- the recovery note is appended after the
-;; three outputs -- so the two were measured separately.
-;;
-;;   reserve top-up     2,380    0 Poseidon2 operations
-;;   deposit          171,280   14
-;;   recovery         173,435   15
-;;   withdrawal     1,175,034  142   -- the worst legal transact
-;;
-;; A withdrawal is what sets the transact ceiling; a transfer is cheaper.
 ;; The withdrawal figure fell by 342,976 at global version 18, when the two
 ;; nullifier inserts stopped walking their paths in FunC and started calling
 ;; POSEIDON2_PATH7, by a further 99,950 when the Poseidon2 tariff came down
 ;; from 3,500 to 2,800, and by 120,859 when the frontier changed container.
-;; The first removed bookkeeping around the hashing, 52% of an insert down to
-;; 10%; the second was the Rust VM's permutation becoming proportionate to the
-;; C++ one, which moved the bracket the tariff is the top of; the third is
-;; three appends no longer paying for an age they might reach.
-;; The withdrawal figure varies by 282 gas between runs: a transact inserts
-;; two nullifiers, and whether the second one's predecessor is the head
-;; sentinel or the leaf just inserted depends on their order, which is the
-;; owner's to choose. The figure above is the more expensive branch.
-;; The top-up's ceiling is the rule's floor rather than its measurement: that
-;; path reads no state, so its cost does not move with the pool's age.
 ;;
-;; Measured on the DEPLOYED configuration -- four denominations, not the one
-;; most tests use. The contract walks the list to validate an amount, so a
-;; maximum taken against a shorter list is a maximum for a pool nobody
-;; deploys; the withdrawal figure was 4,305 low for exactly that reason until
-;; it was re-measured on 2026-09-21.
-;;
-;; And at the dearest state a pool can be in, which is no longer either end of
-;; its life. The two remaining growing costs pull in opposite directions: full
-;; anchor rings make a transact dearer, a higher leaf index makes it slightly
-;; cheaper. So the maximum sits at full rings on the youngest tree that can
-;; have them -- 4,096 mutations in, since the recent ring is keyed by the leaf
-;; counter modulo its 4,096 slots. Measured there a withdrawal is 1,175,034,
-;; against 1,171,462 in a pool with nothing in it and 1,169,973 at the worst
-;; leaf index.
-;;
-;; The recovery ceiling is bounded above as well as below. The withdrawal fee
-;; has to cover the payout message plus a recovery at this ceiling, so raising
-;; it past what the fee affords fails every withdrawal at exit 243.
+;; Raising the recovery ceiling raises what a bounce is charged for putting
+;; the money back -- `recovery_charge_at` is `get_compute_fee(0, ceiling)` --
+;; and so raises the smallest bounce worth minting a note for. It no longer
+;; interacts with the withdrawal fee: the fee's floor is the payout's forward
+;; fee alone, and has been since a whole bounded recovery came out of it.
 int topup_gas_ceiling() asm "10000 PUSHINT";
-int deposit_gas_ceiling() asm "220000 PUSHINT";
-int transact_gas_ceiling() asm "1470000 PUSHINT";
-int bounce_gas_ceiling() asm "220000 PUSHINT";
+int deposit_gas_ceiling() asm "230000 PUSHINT";
+int transact_gas_ceiling() asm "1510000 PUSHINT";
+int bounce_gas_ceiling() asm "240000 PUSHINT";
 
 ;; Section 16.1, in its order.
 () handle_deposit(int msg_value, slice body) impure {

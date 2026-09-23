@@ -52,11 +52,18 @@ use shielded_pool_circuit_crosscheck::{stdlib_path, ACTIVE_VERSION};
 use tos_sandbox::{compile_func, Blockchain, MessageBuilder};
 
 /// Section 14.1's ceilings, which are what a sender funds -- not what the path
-/// will use. `shielded_pool_sandbox.rs` fails if these stop agreeing with the
-/// contract's own constants.
-const DEPOSIT_GAS_CEILING: u64 = 220_000;
-const TRANSACT_GAS_CEILING: u64 = 1_470_000;
-const BOUNCE_GAS_CEILING: u64 = 220_000;
+/// will use.
+///
+/// Read out of the contract rather than written down here. They were copies
+/// until the ceilings were re-derived, and a copy is a number that agrees
+/// with itself: this fixture would have gone on funding messages at the old
+/// ceiling, the chain would have refused them at exit 203, and nothing in
+/// this file would have said why.
+fn gas_ceiling(name: &str) -> u64 {
+    let value = shielded_pool_circuit_crosscheck::pool::contract_gas_ceiling(name)
+        .unwrap_or_else(|error| panic!("the contract's {name}: {error}"));
+    u64::try_from(value).unwrap_or_else(|_| panic!("{name} is not a positive gas figure"))
+}
 
 /// Section 9's intent window is an hour. Half of it leaves room for a build,
 /// a chain to come up and three messages to land.
@@ -444,9 +451,9 @@ fn sandbox_gas(
     let mut gas = [0i64; 3];
     let mut bounce: Option<BounceRun> = None;
     let steps: [(&Cell, u64); 3] = [
-        (&scenario.deposits[0], DENOMINATION + compute_fee(DEPOSIT_GAS_CEILING)),
-        (&scenario.deposits[1], DENOMINATION + compute_fee(DEPOSIT_GAS_CEILING)),
-        (&scenario.transact, compute_fee(TRANSACT_GAS_CEILING)),
+        (&scenario.deposits[0], DENOMINATION + compute_fee(gas_ceiling("deposit_gas_ceiling"))),
+        (&scenario.deposits[1], DENOMINATION + compute_fee(gas_ceiling("deposit_gas_ceiling"))),
+        (&scenario.transact, compute_fee(gas_ceiling("transact_gas_ceiling"))),
     ];
     for (index, (body, value)) in steps.into_iter().enumerate() {
         let result = bc.send_message(
@@ -591,7 +598,7 @@ fn predict_recovery(
     // predictor did not. Nothing failed, because no CI runs a localnet.
     delivered: u128,
 ) -> Result<(u64, Fr, u128), Box<dyn std::error::Error>> {
-    let recovered = delivered.saturating_sub(u128::from(compute_fee(BOUNCE_GAS_CEILING)));
+    let recovered = delivered.saturating_sub(u128::from(compute_fee(gas_ceiling("bounce_gas_ceiling"))));
     let mut frontier = tree::Frontier::new();
     for leaf in leaves {
         frontier.append(*leaf)?;
@@ -740,8 +747,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     write_cell(&out.join("deposit-1.boc"), &scenario.deposits[1])?;
     write_cell(&out.join("transact.boc"), &scenario.transact)?;
 
-    let deposit_value = DENOMINATION + compute_fee(DEPOSIT_GAS_CEILING);
-    let transact_value = compute_fee(TRANSACT_GAS_CEILING);
+    let deposit_value = DENOMINATION + compute_fee(gas_ceiling("deposit_gas_ceiling"));
+    let transact_value = compute_fee(gas_ceiling("transact_gas_ceiling"));
     let fixture = format!(
         concat!(
             "{{\n",
@@ -847,9 +854,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         empty_root = dec(genesis.commitment_root),
         nullifier_root = dec(genesis.nullifier_root),
         deposit_value = deposit_value,
-        deposit_ceiling = DEPOSIT_GAS_CEILING,
+        deposit_ceiling = gas_ceiling("deposit_gas_ceiling"),
         transact_value = transact_value,
-        transact_ceiling = TRANSACT_GAS_CEILING,
+        transact_ceiling = gas_ceiling("transact_gas_ceiling"),
         gas0 = gas[0],
         gas1 = gas[1],
         gas2 = gas[2],
@@ -883,7 +890,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bounce_step = if refuses {
             format!(
                 ",\n    {{\n      \"name\": \"the bounce and its recovery note\",\n      \"body\": null,\n      \"gas_ceiling\": {},\n      \"expect\": {{\n        \"commitment_next_index\": {},\n        \"nullifier_next_index\": 3,\n        \"liability_before_recovery\": {}\n      }}\n    }}",
-                BOUNCE_GAS_CEILING,
+                gas_ceiling("bounce_gas_ceiling"),
                 scenario.recovery.leaf_index + 1,
                 2 * DENOMINATION - DENOMINATION - WITHDRAWAL_FEE
             )

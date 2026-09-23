@@ -22,6 +22,8 @@ use tos_sandbox::{Blockchain, MessageBuilder, compile_func_with_stdlib};
 use tos_vm::stack::StackItem;
 use tos_vm::stack::integer::IntegerData;
 
+mod shielded_pool_library;
+
 const TOS: u64 = 1_000_000_000;
 const ACTIVE_VERSION: u32 = 18;
 /// Section 3: the canonical outer payload is exactly this many bytes.
@@ -367,9 +369,12 @@ fn the_fee_must_cover_the_message_and_not_the_recovery() {
     let digest = small(0x31337);
     let record = record_of(&probe, &digest, &data);
     let body = probe.cell("p_body", vec![int(&digest), StackItem::cell(record)]);
-    // The frozen bounce ceiling. It is no longer part of the floor; it is
-    // measured below so the test can say how much was taken out of it.
-    let ceiling = 220_000u32;
+    // The frozen bounce ceiling, read out of the contract rather than copied:
+    // it is no longer part of the floor, and it is priced below only so the
+    // test can say how much was taken out of it. A copy here would go stale
+    // the next time the ceiling is re-derived, and say nothing when it did.
+    let ceiling = u32::try_from(shielded_pool_library::gas_ceiling("bounce_gas_ceiling"))
+        .expect("the bounce ceiling fits a uint32");
 
     let forward = probe.int("p_forward_fee", vec![StackItem::cell(body.clone())]);
     assert!(forward > 0, "the forward fee of a real message is zero");
