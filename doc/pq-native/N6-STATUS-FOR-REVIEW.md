@@ -164,7 +164,7 @@ budget.
 | `scripts/dispute-e2e.py` | PASS | no PQ regression |
 | `scripts/service-actor-e2e.py` | same sole-endpoint `service_show` chain-RPC failure after HTTP readiness | pre-existing |
 | `scripts/wc0-token-index-e2e.py` | PASS | no PQ regression |
-| `scripts/dns-e2e.py` | PASS, including proposal registration, ConfigParam 4 activation and resolution | **PQ regression:** the PQ governance network stops before the proposal registers or activates |
+| `scripts/dns-e2e.py` | PASS, including proposal registration, ConfigParam 4 activation and resolution | **PQ regression before contract execution:** a governance-only rerun at `cb108a840` recorded the faucet's 10 TOS outgoing message to the config address, but the config transaction dump contained neither that inbound message nor any response tag; proposal registration logic was never entered |
 | `scripts/nominator-pool-lifecycle-e2e.py` | progressed through positive funding of every validator and pool obligation checks; later hit the 600-second control budget while waiting for the election | **PQ regression at the named step:** only the PQ run leaves validator wallet 0 unfunded |
 | `scripts/validator-election-stage-a.py` | all negative cases passed and four classical candidates were accepted; later hit the 600-second control budget after the first election | **PQ regression at the named step:** only the PQ run cannot place the validator stake; this is the separately registered stake-shape conversion |
 
@@ -173,6 +173,17 @@ failures (with the two quorum rows owned as one item) and four PQ regressions:
 observer groups, DNS governance activation, nominator validator funding and
 validator stake authorization. The control does not convert a bounded later
 timeout into a PASS; it records only the exact boundary it demonstrated.
+
+The DNS rerun distinguishes this boundary without attributing a cause. An
+`0xee565052` answer would have meant successful registration and a later
+activation failure; another answer tag would have identified the negated
+required price. Neither appeared. The config account had six transactions in
+the queried window, but none carried the proposal inbound message or any
+response, while the faucet transaction did carry the correctly valued outgoing
+message. This places the failure in masterchain message inclusion/exposure
+before ConfigParam 11 or `register_voting_proposal`. It has the same observed
+shape as the nominator route's very slow masterchain, but this run does not
+establish that they share a cause.
 
 The observer regression was then localised and fixed. Before the fix, a PQ
 rerun recorded `enable_block_sync=false`,
