@@ -35,6 +35,20 @@
         "principal": "tosdev3",
         "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIGO+tG+3hWO0eGRtT3D8wR4TLMET35jRWpF8ZSXZiZT tosdev3"
       }
+    },
+    {
+      "name": "BmswapProtocol",
+      "affiliation": "Not part of the TOS operating team (participant declaration)",
+      "independent_of_operator": true,
+      "key": {
+        "type": "ssh",
+        "principal": "BmswapProtocol",
+        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHn0KYU+28Z6tiiCmr9++RLabZ6j+UfbqepL1910dSHy BmswapProtocol"
+      },
+      "published_at": [
+        "https://gist.github.com/BmswapProtocol/60bcbe525d52446fee3775790baa7903"
+      ],
+      "declaration_notes": "Participant states they are not part of the TOS operating team. Account has repository administrator access. Execution is delegated to an automated agent over SSH on the participant-designated VPS. Independence is self-declared, not externally verified."
     }
   ]
 }
