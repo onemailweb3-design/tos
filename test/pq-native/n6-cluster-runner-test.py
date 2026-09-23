@@ -578,6 +578,37 @@ def check_simplex_skip_run_correlation(directory: Path) -> None:
         "a skip run without a flagged slow interval was not retained",
     )
 
+    blind_logs: dict[str, Path] = {}
+    for node_name, path in logs.items():
+        batches = [json.loads(line) for line in path.read_text().splitlines()]
+        for batch in batches:
+            batch["events"] = [
+                timestamped_event
+                for timestamped_event in batch["events"]
+                if timestamped_event.get("event", {}).get("vote", {}).get("@type")
+                != "consensus.simplex.skipVote"
+            ]
+        blind_path = directory / f"blind-{node_name}-session.jsonl"
+        blind_path.write_text(
+            "\n".join(json.dumps(batch) for batch in batches) + "\n", encoding="utf-8"
+        )
+        blind_logs[node_name] = blind_path
+    unavailable = analyze_simplex_skip_runs(blind_logs, intervals, validator_names)
+    require(
+        unavailable["analysis_available"] is False
+        and unavailable["run_count"] is None
+        and unavailable["skip_votes_per_node"] is None,
+        "a skip-blind structured channel reported a measured zero",
+    )
+    require(
+        "consensus.simplex.stats.skipRequested" in unavailable["reason"]
+        and "consensus.simplex.stats.voted(skipVote)" in unavailable["reason"]
+        and all(
+            item["coincides_with_skip_run"] is None for item in unavailable["interval_correlations"]
+        ),
+        "skip telemetry blind spot did not name its missing event types",
+    )
+
 
 def check_latency_profile_binding() -> None:
     launch = load_latency_profile(ROOT / "test/pq-native/n6-scale-profiles/launch-default.json")

@@ -31,7 +31,7 @@
     },
     "colocated-launch-committee-skip-runs": {
       "status": "OPEN",
-      "observation": "The first five-minute steady-state PQ Simplex observation at the enforced 21-validator launch committee size produced 733 masterchain blocks, from height 13 through 746, in 314 seconds on one co-located host. All 22 queried nodes ended at height 746 and agreed the same full block id at every height 0 through 746, so safety remained intact. Cadence p50 was 399.1 ms against the configured 400 ms target and p95 was 500.2 ms, with zero lite transport retries. Seven observation intervals lasted 1.3 to 2.3 seconds. Every validator log contained 45 to 65 SkipVote events while the DHT and non-validating verifier contained none. Node2's 53 votes formed four bursts of 11 to 14 slots. Timestamp comparison on node2 alone placed three of the seven slow intervals within one to two seconds of a burst; four slow intervals had no node2 burst, and one node2 burst had no flagged slow interval. This is correlation from one incomplete node view, not a cause attribution. Co-location is a caveat, not a diagnosis.",
+      "observation": "The first five-minute steady-state PQ Simplex observation at the enforced 21-validator launch committee size produced 733 masterchain blocks, from height 13 through 746, in 314 seconds on one co-located host. All 22 queried nodes ended at height 746 and agreed the same full block id at every height 0 through 746, so safety remained intact. Cadence p50 was 399.1 ms against the configured 400 ms target and p95 was 500.2 ms, with zero lite transport retries. Seven observation intervals lasted 1.3 to 2.3 seconds. The earlier claim that three of those seven were near node2 skip bursts is withdrawn: the text-log count mixed 951 basechain SkipVote lines with 187 masterchain lines, so it correlated different chains. A follow-up at 82f2e8134 produced 746 blocks with two approximately 1.4-second intervals and 576 masterchain SkipVote text lines, but its structured stats contained no skip-class event and incorrectly reported a measured zero. The relationship between slow intervals and committee skip runs is therefore unmeasured, not zero. Co-location is a caveat, not a diagnosis.",
       "observed_at": {
         "evidence_class": "COLOCATED_DIAGNOSTIC_ONLY",
         "cluster_shape": "21 PQ validators plus one non-validating verifier and one DHT process on one host",
@@ -54,20 +54,26 @@
           2291.7,
           2069.3
         ],
-        "validator_skip_vote_count_range": [
-          45,
-          65
-        ],
-        "node2_skip_votes": 53,
-        "node2_skip_burst_lengths": [
-          11,
-          14,
-          14,
-          14
-        ],
-        "node2_slow_intervals_near_skip_burst": 3,
-        "node2_slow_intervals_without_nearby_skip_burst": 4,
-        "node2_skip_bursts_without_flagged_slow_interval": 1
+        "withdrawn_single_node_correlation": {
+          "status": "WITHDRAWN_CROSS_CHAIN_COUNT",
+          "basechain_skip_vote_text_lines": 951,
+          "masterchain_skip_vote_text_lines": 187,
+          "previously_claimed_slow_intervals_near_burst": 3,
+          "reason": "the manual text-log count did not separate basechain from masterchain while the sustained observer measures masterchain intervals"
+        },
+        "structured_channel_blind_follow_up": {
+          "exact_commit": "82f2e813473e9d18a9429d06db65c11c564330a1",
+          "masterchain_blocks_produced": 746,
+          "start_height": 13,
+          "final_height": 759,
+          "agreed_full_block_ids_checked_through_height": 759,
+          "observation_interval_p50_ms": 401.4,
+          "observation_interval_p95_ms": 478.5,
+          "slow_observation_intervals": 2,
+          "masterchain_skip_vote_text_lines": 576,
+          "structured_skip_class_events": 0,
+          "measurement_status": "UNMEASURED_SOURCE_BLIND"
+        }
       },
       "diagnostic_question": "Across the whole committee, which slow block-observation intervals coincide with an agreed Simplex skip run, which slots and scheduled leaders are skipped, and what measured resource, scheduling or protocol condition distinguishes the coincident and non-coincident intervals?",
       "closure_condition": "Use structured session logs from every validator to correlate accepted masterchain candidate slots, per-node skip votes, skip-run lengths and scheduled leaders with every slow interval. Then reproduce on co-located and one-validator-per-host topologies or otherwise identify the concrete cause class, and add a regression gate for the demonstrated cause. A single-node log, an assumption that co-location is responsible, or preserved safety despite the liveness stalls is not closure."

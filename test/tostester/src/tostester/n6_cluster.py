@@ -594,6 +594,36 @@ def analyze_simplex_skip_runs(
         node_name: {item for item in slots if item[0] in session_metadata}
         for node_name, slots in per_node_slots.items()
     }
+    if not any(per_node_slots.values()):
+        interval_correlations = [
+            {
+                "from_height": interval["from_height"],
+                "to_height": interval["to_height"],
+                "correlation_available": False,
+                "coincides_with_skip_run": None,
+                "skip_run_indices": [],
+                "from_candidate_slot": (
+                    accepted_height_slots.get(interval["from_height"], (None, None))[1]
+                ),
+                "to_candidate_slot": (
+                    accepted_height_slots.get(interval["to_height"], (None, None))[1]
+                ),
+            }
+            for interval in observation_intervals
+        ]
+        return {
+            "analysis_available": False,
+            "reason": (
+                "structured session logs contain neither "
+                "consensus.simplex.stats.skipRequested nor "
+                "consensus.simplex.stats.voted(skipVote); zero skip runs is unmeasured"
+            ),
+            "run_count": None,
+            "runs": [],
+            "skip_votes_per_node": None,
+            "skip_slots_per_node": None,
+            "interval_correlations": interval_correlations,
+        }
     all_skip_slots = sorted({slot for slots in per_node_slots.values() for slot in slots})
     grouped: list[list[tuple[str, int]]] = []
     for session_slot in all_skip_slots:
@@ -732,10 +762,10 @@ def summarize_sustained_observation(
     skip_evidence = simplex_skip_evidence or {
         "analysis_available": False,
         "reason": "structured Simplex session logs were not requested by this caller",
-        "run_count": 0,
+        "run_count": None,
         "runs": [],
-        "skip_votes_per_node": {},
-        "skip_slots_per_node": {},
+        "skip_votes_per_node": None,
+        "skip_slots_per_node": None,
         "interval_correlations": [],
     }
     correlations = {

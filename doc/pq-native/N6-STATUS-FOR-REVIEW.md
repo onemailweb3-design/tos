@@ -156,13 +156,20 @@ co-located host it produced 733 blocks in 314 seconds, all 22 queried nodes
 agreed full block ids through height 746, cadence p50 was 399.1 ms against the
 400 ms target, p95 was 500.2 ms, and no lite query retried. Safety held, but
 seven observation intervals lasted 1.3--2.3 seconds. Validator logs contained
-45--65 `SkipVote` events each, while the DHT and non-validating verifier had
-none. Node2's 53 votes appeared in four 11--14-slot bursts; only three of the
-seven slow intervals were within one to two seconds of those bursts, four slow
-intervals had no node2 burst, and one burst had no flagged slow interval.
-Those facts are recorded as an unattributed liveness observation, not as a
-claim that skip runs caused every slow interval or that co-location caused the
-skip runs.
+`SkipVote` text, but the earlier claim that three of seven intervals were near
+node2 skip bursts is withdrawn. That count mixed 951 basechain lines with 187
+masterchain lines while the sustained observer measures masterchain cadence;
+it correlated different chains.
+
+A follow-up at `82f2e8134` produced 746 blocks, two roughly 1.4-second slow
+intervals, unanimous full block ids through height 759, and 576 masterchain
+`SkipVote` text lines. Its structured event stream contained no skip-class
+event and the first analyser incorrectly returned `analysis_available=true`
+with zero runs. Absence from a channel that has not demonstrated the event is
+not evidence of zero. The analyser now reports this state as unavailable and
+names the missing structured event types. The slow-interval/skip-run relation
+remains unattributed and unmeasured; co-location remains a caveat rather than
+a diagnosis.
 
 This observation is relevant to the release criteria's tail-latency bounds,
 even though the sustained-finality measurement gap was closed separately by
@@ -558,6 +565,12 @@ the intervening slots contain a skip run. The source-only gate includes a slow
 interval with a run, a slow interval without one, and a run during a non-slow
 interval, preventing either an always-true correlation or an explanation that
 silently assigns every tail event to skipping.
+
+If no skip-class event appears anywhere in the validator batches, the result
+sets `analysis_available=false`, `run_count=null`, per-node counts to null and
+every interval's coincidence value to null. It does not report a measured
+zero. This is necessary because a run without skips and a telemetry path that
+drops skips are otherwise observationally identical.
 
 This is `COLOCATED_DIAGNOSTIC_ONLY` evidence with
 `release_evidence_eligible=false`. Its observation intervals measure when all colocated
