@@ -205,6 +205,15 @@ the contract's tock path fail before they can inspect a proposal. The retained
 `send_answer` branch. The fixture layout needs conversion; the proposal-cell
 hash has not been implicated by this run.
 
+The harness now emits the same two-field data cell as production Genesis.
+`config-genesis-data-layout-source` compares both Genesis definitions with the
+contract's `load_data()` shape, and is selected by the branch `source-guard`
+job. Reintroducing the obsolete 32-bit seqno in either the harness or
+production Genesis made the gate fail naming that file and the changed cell.
+This repairs a fixture that had been broken since `cccfec9d6` on 2026-09-19;
+the later classical-descriptor refusal at `075122183` on 2026-09-20 hid it by
+stopping old E2E scripts before their config contract could run.
+
 The same poll sampled masterchain height every two seconds: height 24 at its
 start and 244 at 88.259 seconds, with every sample advancing by five blocks.
 That is approximately one block per 401 ms, consistent with the configured

@@ -421,9 +421,6 @@ config.new_consensus_params_all!
  */
 "auto/config-code.fif" include   // code in separate source file
 <b configdict ref,  // initial configuration
-   0 32 u,          // seqno
-   "config-master" +".pk" load-generate-keypair drop
-   B,
    dictnew dict,   // vote dict
 b> // data
 empty_cell  // libraries
