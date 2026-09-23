@@ -109,8 +109,10 @@ affected inventory is:
 - `scripts/validator-election-stage-a.py`, `dns-e2e.py`, and
   `nominator-pool-lifecycle-e2e.py`.
 
-The first execution pass on the converted tree produced this route-level
-inventory. `localnet-jsonrpc.py` is a resident service, so its PASS means its
+The first execution pass on the converted tree, before the config-contract
+Genesis fixture repair, produced this historical route-level inventory.
+The post-repair results below supersede its stopping points.
+`localnet-jsonrpc.py` is a resident service, so its PASS means its
 demo transfer completed and it handled an external bounded-run interrupt; the
 other PASS rows exited zero themselves.
 
@@ -214,12 +216,53 @@ This repairs a fixture that had been broken since `cccfec9d6` on 2026-09-19;
 the later classical-descriptor refusal at `075122183` on 2026-09-20 hid it by
 stopping old E2E scripts before their config contract could run.
 
-The same poll sampled masterchain height every two seconds: height 24 at its
-start and 244 at 88.259 seconds, with every sample advancing by five blocks.
-That is approximately one block per 401 ms, consistent with the configured
-400 ms target. The DNS governance chain therefore did not show the
-nominator-pool route's observed height 5 after 60 seconds. Their symptoms
-cannot be attributed to one masterchain-wide stall on this evidence.
+All fifteen retained entry points were rerun from the clean `7533ab5d9`
+fixture-repair commit (DNS owns two networks, for sixteen helper calls).
+Eight advertised routes passed and seven reached the named boundary below.
+The first pass used an obsolete local build-directory default for several
+scripts; those routes were rerun with `TOS_BUILD_DIR` pointing to the freshly
+built tree and the setup failures are not counted. A concurrent disk-full
+error invalidated the first composed-economy result, which was rerun alone;
+the first pool report was also contaminated during teardown, so the pool was
+rerun alone to obtain its own clean `exit=1` report. Neither environment error
+is attributed to a route.
+
+| Entry point | Post-repair result | Furthest demonstrated step or named failure |
+|---|---|---|
+| `test/integration/test_simplex2_release.py` | PASS | 27 observer groups created, 27 started, 24 destroyed, 27 distinct sessions; no refusals |
+| `scripts/localnet-jsonrpc.py` | PASS | resident demo transfer changed balance from zero to 4.999999000 TOS; stopped after the demo |
+| `scripts/agent-wallet-account-e2e.py` | FAIL | native Gift preparation still refuses ambiguous broadcast without finalized-state resolution |
+| `scripts/agent-query-api-e2e.py` | PASS | all advertised query routes |
+| `scripts/agent-chain-index-e2e.py` | PASS | all advertised indexing routes |
+| `scripts/agent-task-escrow-e2e.py` | FAIL | controller accept still requires two `--quorum-config` values |
+| `scripts/proof-attestation-e2e.py` | PASS | all advertised proof-attestation routes |
+| `scripts/capability-registry-e2e.py` | PASS | all advertised registry routes |
+| `scripts/agent-economy-composed-e2e.py` | FAIL | isolated rerun again reached controller accept and required two `--quorum-config` values |
+| `scripts/validator-election-stage-a.py` | FAIL | wallets funded and negative cases passed; validator 1's classical stake was not accepted |
+| `scripts/dispute-e2e.py` | PASS | all advertised dispute routes |
+| `scripts/service-actor-e2e.py` | FAIL | HTTP checks passed; `service_show` still failed through its sole chain-RPC endpoint |
+| `scripts/wc0-token-index-e2e.py` | PASS | all advertised workchain-zero token-index routes |
+| `scripts/dns-e2e.py` | FAIL | proposal **registered**; ConfigParam 4 did not appear after the validator vote, so resolution after activation failed |
+| `scripts/nominator-pool-lifecycle-e2e.py` | FAIL | validator wallets funded, pool obligations passed and the election opened; local refusal names the missing PQ Validator Controller, pool-owned authorization and ConfigParam 47 admission |
+
+The old nominator “validator wallet 0 unfunded” boundary was an artifact of
+the bricked harness config contract, not the route's current state. The clean
+pool rerun exited through its explicit PQ-controller refusal; its report is
+diagnostic and does not claim the seventeen later lifecycle checks were run.
+DNS registration likewise now works, refuting the earlier proposal-hash
+hypothesis, but the validator-vote/activation boundary remains open. The old
+observation that DNS advanced while the pool network crawled did not prove
+independent root causes: both networks used the same invalid config data.
+The four failures also seen on `main` remain classified as pre-existing; the
+three remaining PQ-side failing rows are DNS activation and the two staking
+routes, whose distinct stopping points are stated rather than merged.
+
+The earlier DNS poll sampled masterchain height every two seconds: height 24
+at its start and 244 at 88.259 seconds, with every sample advancing by five
+blocks. That is approximately one block per 401 ms, consistent with the
+configured 400 ms target. It ruled out a shared masterchain-wide stall in
+that DNS run, but not a shared fixture defect; the post-repair pool rerun
+demonstrates why those are different claims.
 
 The observer regression was then localised and fixed. Before the fix, a PQ
 rerun recorded `enable_block_sync=false`,
