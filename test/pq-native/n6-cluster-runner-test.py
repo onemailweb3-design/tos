@@ -23,6 +23,7 @@ from tostester.n6_cluster import (  # noqa: E402
     analyze_consensus_milestones,
     analyze_live_finality,
     load_latency_profile,
+    observe_sustained_consensus,
     require_agreed_masterchain_block,
     summarize_sustained_observation,
     validate_latency_backend,
@@ -142,6 +143,28 @@ class FakeBlockClient:
         )
 
 
+class ScriptedBlockClient(FakeBlockClient):
+    def __init__(self, root_hash: bytes, height_outcomes: list[int | None]):
+        super().__init__(root_hash)
+        self.height_outcomes = iter(height_outcomes)
+
+    async def get_masterchain_info(self):
+        self.info_calls += 1
+        outcome = next(self.height_outcomes)
+        if outcome is None:
+            raise self._transport_failure()
+        return SimpleNamespace(last=SimpleNamespace(seqno=outcome))
+
+
+class FakeNode:
+    def __init__(self, name: str, client: FakeBlockClient):
+        self.name = name
+        self.client = client
+
+    async def toslib_client(self):
+        return self.client
+
+
 async def check_sustained_agreement() -> None:
     canonical = bytes.fromhex("11" * 32)
     clients = {name: FakeBlockClient(canonical) for name in ("node-a", "node-b", "node-c")}
@@ -239,16 +262,9 @@ async def check_sustained_transport_retry() -> None:
 
 async def check_startup_transport_retry() -> None:
     client = FakeBlockClient(bytes.fromhex("11" * 32), info_transport_failures=1)
-
-    class FakeNode:
-        name = "startup-node"
-
-        async def toslib_client(self):
-            return client
-
     retry_counts = {"startup-node": {"get_masterchain_info": 0}}
     heights = await _wait_all_heights(
-        [FakeNode()],
+        [FakeNode("startup-node", client)],
         minimum=7,
         timeout=1.0,
         transport_retry_counts=retry_counts,
@@ -259,6 +275,45 @@ async def check_startup_transport_retry() -> None:
     require(
         retry_counts == {"startup-node": {"get_masterchain_info": 1}},
         "startup height wait did not expose its transport retry",
+    )
+
+
+async def check_observer_retry_window_composition() -> None:
+    config = SustainedObservationConfig(
+        blocks=2,
+        seconds=None,
+        target_block_rate_ms=400,
+        slow_interval_factor=3.0,
+    )
+
+    async def observe(outcomes: list[int | None]):
+        client = ScriptedBlockClient(bytes.fromhex("11" * 32), outcomes)
+        return await observe_sustained_consensus(
+            [FakeNode("observer-node", client)], config, "zerostate-block-id"
+        )
+
+    pre_window = await observe([None, 5, 6, 7])
+    require(
+        pre_window["lite_transport_retries"]["total"] == 1,
+        "pre-window observer retry was not retained in the total",
+    )
+    require(
+        not pre_window["observation_interval_distribution_ms"][
+            "includes_catch_up_after_transport_retry"
+        ],
+        "pre-window observer retry leaked into the interval catch-up flag",
+    )
+
+    in_window = await observe([5, None, 6, 7])
+    require(
+        in_window["lite_transport_retries"]["total"] == 1,
+        "in-window observer retry was not retained in the total",
+    )
+    require(
+        in_window["observation_interval_distribution_ms"][
+            "includes_catch_up_after_transport_retry"
+        ],
+        "in-window observer retry did not set the interval catch-up flag",
     )
 
 
@@ -447,6 +502,7 @@ def main() -> int:
         asyncio.run(check_sustained_agreement())
         asyncio.run(check_sustained_transport_retry())
         asyncio.run(check_startup_transport_retry())
+        asyncio.run(check_observer_retry_window_composition())
         check_sustained_summary()
         check_latency_profile_binding()
         no_latency = load_latency_profile(
