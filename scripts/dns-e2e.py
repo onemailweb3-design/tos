@@ -375,6 +375,13 @@ async def run_governance_checks(faucet, artifacts: dict, global_config: Path,
     print(f"  proposal poll masterchain heights: {height_samples}")
     if not registered:
         try:
+            proposals = rpc_call(
+                "runGetMethodStd", address=config_addr, method="list_proposals", stack=[]
+            ).get("result")
+            print(f"  list_proposals -> {proposals!r}")
+        except Exception as exc:
+            print(f"  list_proposals error: {exc}")
+        try:
             entries = run_get_method(
                 config_addr, "get_proposal",
                 [stack_num(int.from_bytes(phash_bytes, "big"))])

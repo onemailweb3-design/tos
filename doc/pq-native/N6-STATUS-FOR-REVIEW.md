@@ -164,7 +164,7 @@ budget.
 | `scripts/dispute-e2e.py` | PASS | no PQ regression |
 | `scripts/service-actor-e2e.py` | same sole-endpoint `service_show` chain-RPC failure after HTTP readiness | pre-existing |
 | `scripts/wc0-token-index-e2e.py` | PASS | no PQ regression |
-| `scripts/dns-e2e.py` | PASS, including proposal registration, ConfigParam 4 activation and resolution | **PQ regression at proposal registration:** a governance-only rerun saw the faucet's 10 TOS outgoing message and a corresponding 10 TOS config-account balance increase; `get_proposal` still failed to find the proposal |
+| `scripts/dns-e2e.py` | PASS, including proposal registration, ConfigParam 4 activation and resolution | **PQ zerostate layout regression:** the governance fixture initializes obsolete config-contract data; the current getters and every observed tock abort with TVM exit code 9 |
 | `scripts/nominator-pool-lifecycle-e2e.py` | progressed through positive funding of every validator and pool obligation checks; later hit the 600-second control budget while waiting for the election | **PQ regression at the named step:** only the PQ run leaves validator wallet 0 unfunded |
 | `scripts/validator-election-stage-a.py` | all negative cases passed and four classical candidates were accepted; later hit the 600-second control budget after the first election | **PQ regression at the named step:** only the PQ run cannot place the validator stake; this is the separately registered stake-shape conversion |
 
@@ -183,8 +183,27 @@ governance-only run measured the config balance before the proposal at
 20,000,000,000 nanotos. The 10 TOS increase matches the emitted message, so
 the earlier claim that delivery never happened is withdrawn. ConfigParam 0 was
 read from the live chain to select the destination. `get_proposal` still failed
-to find the proposal; the remaining question is how the delivered message was
-processed and why registration did not persist.
+to find the proposal. This did not establish a proposal-hash mismatch.
+
+The next governance-only run called `list_proposals()` before reading any
+transaction. It returned no list: the get-method result had `exit_code=9`,
+`gas_used=0`, and a zero stack value. `get_proposal` returned the same exit
+code. The config account was active, so this was a contract execution failure,
+not an uninitialized account. The first sixteen recent config transactions
+were tocks with no inbound message; all sixteen aborted at TVM exit code 9
+after ten VM steps. That also explains why the original six-transaction window
+contained no proposal inbound message: routine tocks displaced it.
+
+The source pins the cause. The tostester zerostate generator still initializes
+the config-contract data as `configdict ref | seqno(32) | config-master public
+key | vote dict` (`test/tostester/src/tostester/zerostate.py`), while the
+current `config-code.fc::load_data()` reads exactly `configdict ref | vote dict`
+and calls `end_parse()`. The production `gen-zerostate.fif` already uses that
+new two-field layout. The obsolete fixture fields make both get methods and
+the contract's tock path fail before they can inspect a proposal. The retained
+10 TOS is consistent with the proposal transaction aborting before its
+`send_answer` branch. The fixture layout needs conversion; the proposal-cell
+hash has not been implicated by this run.
 
 The same poll sampled masterchain height every two seconds: height 24 at its
 start and 244 at 88.259 seconds, with every sample advancing by five blocks.
