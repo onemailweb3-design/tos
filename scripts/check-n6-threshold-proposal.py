@@ -55,8 +55,16 @@ if hardware.get("required_host_count") != 21 or hardware.get("topology") != (
     "one validator per bare-metal host"
 ):
     fail("release hardware proposal does not require 21 one-validator bare-metal hosts")
-if requirements != expected_requirements:
-    fail("release hardware provisioning minimums changed or became virtualized")
+for field, expected in expected_requirements.items():
+    actual = requirements.get(field)
+    if actual != expected:
+        fail(
+            f"release hardware provisioning field {field} changed: "
+            f"expected={expected!r} actual={actual!r}"
+        )
+extra_requirement_fields = sorted(set(requirements) - set(expected_requirements))
+if extra_requirement_fields:
+    fail(f"release hardware provisioning has unexpected fields: {extra_requirement_fields}")
 if "throttling" not in hardware.get("rationale", "") or "thermals" not in hardware.get(
     "rationale", ""
 ):

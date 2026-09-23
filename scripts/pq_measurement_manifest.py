@@ -341,8 +341,16 @@ def validate_open_correctness_questions(path: Path, *, release: bool) -> None:
                 raise ManifestError(f"open correctness question {question_id} already names resolved_by")
             open_questions.append(question_id)
         elif status == "RESOLVED":
-            if not isinstance(question.get("resolved_by"), str) or not question["resolved_by"]:
-                raise ManifestError(f"resolved correctness question {question_id} lacks resolved_by evidence")
+            resolved_by = question.get("resolved_by")
+            if (
+                not isinstance(resolved_by, str)
+                or len(resolved_by) < 9
+                or len(resolved_by) > 40
+                or any(ch not in "0123456789abcdef" for ch in resolved_by)
+            ):
+                raise ManifestError(
+                    f"resolved correctness question {question_id} has invalid resolved_by commit"
+                )
         else:
             raise ManifestError(f"correctness question {question_id} has unknown status {status}")
     if release and open_questions:

@@ -204,7 +204,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                         "location": "fixture.py:1",
                         "closure_condition": "fixture PQ E2E closure condition",
                         "status": "RESOLVED",
-                        "resolved_by": "fixture PQ chain run evidence",
+                        "resolved_by": "111111111",
                     },
                     "classical-stake-producers-incompatible-with-pq-elector": {
                         "observation": "fixture classical stake producer observation",
@@ -212,7 +212,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                         "location": "fixture-stake.py:1",
                         "closure_condition": "fixture PQ stake producer closure condition",
                         "status": "RESOLVED",
-                        "resolved_by": "fixture PQ stake conversion evidence",
+                        "resolved_by": "222222222",
                     },
                     "merkle-base-state-mismatch": {
                         "observation": "fixture observation",
@@ -220,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
                         "location": "fixture.cpp:1",
                         "closure_condition": "fixture closure condition",
                         "status": "RESOLVED",
-                        "resolved_by": "fixture run evidence",
+                        "resolved_by": "333333333",
                     },
                 },
             }
@@ -230,6 +230,23 @@ with tempfile.TemporaryDirectory(prefix="measurement-manifest-") as raw:
     resolved_gaps = Path(raw).parent / f"measurement-gaps-{Path(raw).name}.json"
     open_gaps = Path(raw).parent / f"open-measurement-gaps-{Path(raw).name}.json"
     scale_result = Path(raw).parent / f"scale-result-{Path(raw).name}.json"
+
+    invalid_resolution = Path(raw).parent / f"invalid-resolution-{Path(raw).name}.json"
+    invalid_resolution_registry = json.loads(resolved_questions.read_text(encoding="utf-8"))
+    invalid_resolution_registry["questions"][
+        "classical-e2e-fixtures-incompatible-with-pq-consensus"
+    ]["resolved_by"] = "trust me"
+    invalid_resolution.write_text(json.dumps(invalid_resolution_registry), encoding="utf-8")
+    try:
+        module.validate_open_correctness_questions(invalid_resolution, release=True)
+        fail("a correctness question was resolved without a commit-backed evidence identity")
+    except module.ManifestError as exc:
+        expected = (
+            "resolved correctness question "
+            "classical-e2e-fixtures-incompatible-with-pq-consensus has invalid resolved_by commit"
+        )
+        if expected not in str(exc):
+            fail(f"invalid correctness resolution reported the wrong refusal: {exc}")
 
     open_gaps.write_text(
         json.dumps(
