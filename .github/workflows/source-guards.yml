@@ -34,6 +34,11 @@ jobs:
       - name: Configure the CTest registry
         run: cmake -S . -B build-source-guards -G Ninja -DCMAKE_BUILD_TYPE=Release
 
+      - name: Verify the complete source-guard inventory
+        run: >-
+          python3 scripts/check-source-guard-inventory.py
+          --build-dir build-source-guards
+
       - name: Run every registered source guard
         working-directory: build-source-guards
         run: ctest -L source-guard --no-tests=error --output-on-failure

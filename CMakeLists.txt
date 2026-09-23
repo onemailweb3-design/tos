@@ -1267,7 +1267,8 @@ set_tests_properties(n6-microbench-smoke PROPERTIES LABELS "n6-microbench-smoke"
 add_test(NAME n6-cluster-runner
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-cluster-runner-test.py)
 set_tests_properties(n6-cluster-runner PROPERTIES
-  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/test/tostester/src")
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/test/tostester/src"
+  LABELS "source-guard")
 add_test(NAME n6-scale-sweep-cardinality
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/pq-native/n6-scale-sweep-cardinality-test.py)
 set_tests_properties(n6-scale-sweep-cardinality PROPERTIES

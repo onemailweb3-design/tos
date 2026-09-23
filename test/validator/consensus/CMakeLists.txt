@@ -349,6 +349,7 @@ add_test(
 if(Python3_Interpreter_FOUND)
     add_test(NAME consensus-no-fallback
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check-no-fallback.py)
+    set_tests_properties(consensus-no-fallback PROPERTIES LABELS "source-guard")
 endif()
 
 # The two-phase own-vote journal: signed records replay byte for byte, an

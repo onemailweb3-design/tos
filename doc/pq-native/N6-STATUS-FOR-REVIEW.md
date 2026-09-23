@@ -22,6 +22,16 @@ Registered gates:
 - `n6-size-accounting`
 - `n6-instrumentation-byte-equivalence`
 
+Branch CI also configures, but does not build, the repository and runs the
+complete `source-guard` label. The inventory checker requires the exact 19
+guard ids before CTest runs; `--no-tests=error` remains as the independent
+empty-selection check. Labels live beside each test registration. This now
+includes `n6-cluster-runner`, `pq-finality-boundary-source`, and
+`consensus-no-fallback`, which are configure-only checks that previously ran
+only as part of the main-only full CTest workflow. Removing one label makes
+the inventory fail naming the missing guard, rather than allowing the other
+18 to hide its absence.
+
 Mutation evidence, run individually and restored before the next mutation:
 
 | Mutation | Gate that went red | Exact named failure |
